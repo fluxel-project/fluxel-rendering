@@ -1,7 +1,7 @@
 //! Transaction-scoped Deferred phase capabilities.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use crate::graph::{DrawReads, ForwardReadScope, ForwardReadState};
 
 const UPLOAD: u8 = 1;
@@ -40,7 +40,7 @@ pub(super) struct DeferredDeformationGraph {
 pub(super) struct DeferredGraphDraw {
     pub(super) streams: Vec<usize>,
     pub(super) accesses: Vec<Option<std::ops::Range<u64>>>,
-    pub(super) tint: std::ops::Range<u64>,
+    pub(super) material_uniforms: Vec<std::ops::Range<u64>>,
     pub(super) transform: std::ops::Range<u64>,
     pub(super) textures: Vec<usize>,
 }
@@ -49,7 +49,11 @@ impl DeferredGraphDraw {
     fn into_draw_reads(self) -> DrawReads {
         DrawReads {
             vertex_streams: self.streams,
-            uniform_ranges: vec![self.tint, self.transform],
+            uniform_ranges: self
+                .material_uniforms
+                .into_iter()
+                .chain(std::iter::once(self.transform))
+                .collect(),
             textures: self.textures,
             accesses: self.accesses,
         }

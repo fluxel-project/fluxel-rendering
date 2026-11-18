@@ -106,7 +106,11 @@ where
             nonuniform_indexing: false,
         };
         let schema = prepared.binding_schema().ok_or(Error::InvalidState)?;
-        let mut material_entries = vec![uniform_entry(schema.tint, 16, ShaderStage::Fragment)];
+        let mut material_entries: Vec<_> = schema
+            .uniforms
+            .iter()
+            .map(|uniform| uniform_entry(uniform.binding, uniform.size, ShaderStage::Fragment))
+            .collect();
         material_entries.extend(schema.textures.iter().map(|texture| BindGroupLayoutEntry {
             binding: texture.binding,
             visibility: vec![ShaderStage::Fragment],

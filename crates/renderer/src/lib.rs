@@ -42,7 +42,7 @@ pub use preparation::{
     GeometryStreamBinding, LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver,
     PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip,
     TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
-    prepare_forward_scene_refraction_receiver, prepare_material,
+    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirectionalLight, DirtyRange, FrameSnapshot, RenderBounds, RenderChange,

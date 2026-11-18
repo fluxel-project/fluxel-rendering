@@ -7,10 +7,18 @@ use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaterialBindingSchema {
-    pub(crate) tint: u32,
+    pub(crate) uniforms: Vec<MaterialUniformBinding>,
     pub(crate) textures: Vec<MaterialTextureBinding>,
     pub(crate) sampler: Option<u32>,
     pub(crate) sampler_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MaterialUniformBinding {
+    pub(crate) binding: u32,
+    pub(crate) parameter: String,
+    pub(crate) ty: MaterialType,
+    pub(crate) size: u64,
 }
 
 /// One material-declared texture location, ordered by its actual binding.
@@ -26,104 +34,94 @@ pub(crate) fn material_binding_schema(
     prepared: &PreparedMaterial,
     source: ForwardDrawSource,
 ) -> Result<MaterialBindingSchema, ForwardPreparationError> {
+    let invalid = || ForwardPreparationError::MaterialBindingSchema { source };
     let contribution = prepared.material().contribution();
-    let bindings: Vec<_> = contribution
-        .bindings
+    let reflected = prepared.shader().interface().bindings();
+    let mut schema = MaterialBindingSchema {
+        uniforms: Vec::new(),
+        textures: Vec::new(),
+        sampler: None,
+        sampler_name: None,
+    };
+    if reflected
         .iter()
-        .filter(|binding| binding.location.group == 0)
-        .collect();
-    let tint: Vec<_> = bindings
-        .iter()
-        .filter(|binding| binding.kind == MaterialResourceKind::UniformVec4)
-        .collect();
-    let texture: Vec<_> = bindings
-        .iter()
-        .filter(|binding| binding.kind == MaterialResourceKind::Texture2dF32)
-        .collect();
-    let sampler: Vec<_> = bindings
-        .iter()
-        .filter(|binding| binding.kind == MaterialResourceKind::Sampler { comparison: false })
-        .collect();
-    let valid_parameter = tint.len() == 1
-        && contribution
-            .parameter_bindings
+        .filter(|binding| binding.group == 0)
+        .count()
+        != contribution.bindings.len()
+    {
+        return Err(invalid());
+    }
+    for binding in &contribution.bindings {
+        if binding.location.group != 0 {
+            return Err(invalid());
+        }
+        let location = binding.location.binding;
+        let actual = reflected
             .iter()
-            .filter(|parameter| {
-                parameter.ty == MaterialType::Vec4
-                    && parameter.resource == tint[0].name
-                    && parameter.location == tint[0].location
-            })
-            .count()
-            == 1;
-    if !valid_parameter
-        || texture.is_empty()
-        || sampler.len() > 1
-        || bindings.len() != contribution.bindings.len()
-        || bindings.len() != 1 + texture.len() + sampler.len()
-    {
-        return Err(ForwardPreparationError::MaterialBindingSchema { source });
+            .find(|actual| actual.group == 0 && actual.binding == location)
+            .ok_or_else(invalid)?;
+        if !(actual.read || actual.query)
+            || actual.write
+            || actual.visibility.len() != 1
+            || !actual.visibility.contains(&ShaderStage::Fragment)
+        {
+            return Err(invalid());
+        }
+
+        match binding.kind {
+            MaterialResourceKind::Texture2dF32
+                if matches!(actual.kind, BindingKind::Texture)
+                    && actual.shape == Some(BindingShape::Texture2dF32) =>
+            {
+                schema.textures.push(MaterialTextureBinding {
+                    binding: location,
+                    name: binding.name.clone(),
+                    encoding: prepared
+                        .material()
+                        .texture_encoding_requirements()
+                        .iter()
+                        .find(|requirement| requirement.resource == binding.name)
+                        .map(|requirement| requirement.encoding),
+                });
+            }
+            MaterialResourceKind::Sampler { comparison: false }
+                if matches!(actual.kind, BindingKind::Sampler)
+                    && actual.shape == Some(BindingShape::Sampler { comparison: false })
+                    && schema.sampler.is_none() =>
+            {
+                schema.sampler = Some(location);
+                schema.sampler_name = Some(binding.name.clone());
+            }
+            kind if matches!(actual.kind, BindingKind::Uniform) => {
+                let ty = kind.uniform_material_type().ok_or_else(invalid)?;
+                let size = kind.uniform_min_binding_size().ok_or_else(invalid)?;
+                if actual.shape != Some(BindingShape::Uniform(ty.shader_type())) {
+                    return Err(invalid());
+                }
+                let parameter = contribution
+                    .parameter_bindings
+                    .iter()
+                    .find(|parameter| {
+                        parameter.location == binding.location
+                            && parameter.resource == binding.name
+                            && parameter.ty == ty
+                    })
+                    .ok_or_else(invalid)?;
+                schema.uniforms.push(MaterialUniformBinding {
+                    binding: location,
+                    parameter: parameter.parameter.clone(),
+                    ty,
+                    size,
+                });
+            }
+            _ => return Err(invalid()),
+        }
     }
-    if prepared
-        .shader()
-        .interface()
-        .bindings()
-        .iter()
-        .any(|actual| {
-            actual.group == 0
-                && !bindings.iter().any(|binding| {
-                    binding.location.binding == actual.binding
-                        && (actual.read || actual.query)
-                        && !actual.write
-                        && actual.visibility.contains(&ShaderStage::Fragment)
-                        && actual
-                            .visibility
-                            .iter()
-                            .all(|stage| *stage == ShaderStage::Fragment)
-                        && matches!(
-                            (
-                                binding.kind.clone(),
-                                actual.kind.clone(),
-                                actual.shape.clone()
-                            ),
-                            (
-                                MaterialResourceKind::UniformVec4,
-                                BindingKind::Uniform,
-                                Some(BindingShape::Uniform(fluxel_shader::ValueType::Vec4(
-                                    fluxel_shader::ScalarType::F32
-                                )))
-                            ) | (
-                                MaterialResourceKind::Texture2dF32,
-                                BindingKind::Texture,
-                                Some(BindingShape::Texture2dF32)
-                            ) | (
-                                MaterialResourceKind::Sampler { comparison: false },
-                                BindingKind::Sampler,
-                                Some(BindingShape::Sampler { comparison: false })
-                            )
-                        )
-                })
-        })
-    {
-        return Err(ForwardPreparationError::MaterialBindingSchema { source });
-    }
-    let mut textures: Vec<_> = texture
-        .into_iter()
-        .map(|binding| MaterialTextureBinding {
-            binding: binding.location.binding,
-            name: binding.name.clone(),
-            encoding: prepared
-                .material()
-                .texture_encoding_requirements()
-                .iter()
-                .find(|requirement| requirement.resource == binding.name)
-                .map(|requirement| requirement.encoding),
-        })
-        .collect();
-    textures.sort_unstable_by_key(|texture| texture.binding);
-    Ok(MaterialBindingSchema {
-        tint: tint[0].location.binding,
-        textures,
-        sampler: sampler.first().map(|binding| binding.location.binding),
-        sampler_name: sampler.first().map(|binding| binding.name.clone()),
-    })
+    schema
+        .uniforms
+        .sort_unstable_by_key(|uniform| uniform.binding);
+    schema
+        .textures
+        .sort_unstable_by_key(|texture| texture.binding);
+    Ok(schema)
 }

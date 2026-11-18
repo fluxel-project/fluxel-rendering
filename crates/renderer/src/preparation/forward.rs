@@ -8,7 +8,7 @@
 use std::{collections::HashMap, ops::Range};
 
 use fluxel_assets::{AssetKind, AssetSnapshot};
-use fluxel_material::{MaterialAsset, MaterialDefinition};
+use fluxel_material::{DynamicValue, MaterialAsset, MaterialDefinition, MaterialInstance};
 use fluxel_shader::ShaderComposer;
 
 use crate::{FeatureHandle, PreparedFrame, RenderId, RenderTransform, RenderView, SceneAssetRef};
@@ -90,13 +90,17 @@ impl TextureEncoding {
 
 #[path = "forward_capture.rs"]
 mod forward_capture;
+#[path = "forward_material_instance.rs"]
+mod forward_material_instance;
 #[path = "forward_material_request.rs"]
 mod forward_material_request;
 pub(crate) use forward_capture::ResolvedForwardTexture;
 pub use forward_capture::{
     ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
-    prepare_forward_capture_receiver, prepare_forward_scene_refraction_receiver,
+    prepare_forward_capture_receiver,
+    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver,
 };
+use forward_material_instance::{resolve_resource_aliases, resolve_uniform_values};
 use forward_material_request::material_request;
 
 /// Logical asset references and dynamic tint owned by one Forward scene record.
@@ -209,6 +213,7 @@ pub struct ForwardDrawInput {
     prepared: PreparedMaterial,
     sampler: Option<fluxel_rhi::api::SamplerDesc>,
     tint: [f32; 4],
+    uniform_values: Vec<DynamicValue>,
     transform: RenderTransform,
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
@@ -300,6 +305,11 @@ impl ForwardDrawInput {
         self.transform
     }
 
+    /// Returns the per-draw instance values in reflected uniform binding order.
+    pub fn uniform_values(&self) -> &[DynamicValue] {
+        &self.uniform_values
+    }
+
     /// Returns the validated scene view retained from the same snapshot.
     pub fn view(&self) -> &RenderView {
         &self.view
@@ -359,6 +369,7 @@ fn prepare_draw(
     source: ForwardDrawSource,
     order: i64,
     resources: &ForwardResources,
+    instance: Option<&MaterialInstance>,
     transform: RenderTransform,
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
@@ -368,7 +379,7 @@ fn prepare_draw(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if !resources.tint.iter().all(|value| value.is_finite()) {
+    if instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -386,7 +397,9 @@ fn prepare_draw(
         .map_err(ForwardPreparationError::Material)?;
     forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
-    let textures = resolve_asset_textures(resources, &schema, assets, source)?;
+    let resources = resolve_resource_aliases(resources, instance, prepared.material(), source)?;
+    let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
+    let textures = resolve_asset_textures(&resources, &schema, assets, source)?;
     let sampler = super::forward_sampler::resolve_sampler_binding(
         resources.sampler.as_ref(),
         &schema,
@@ -422,6 +435,7 @@ fn prepare_draw(
         prepared,
         sampler,
         tint: resources.tint,
+        uniform_values,
         transform,
         view: view.clone(),
         clip_from_local,

@@ -25,7 +25,6 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
         || frame.resident.streams.is_empty()
-        || frame.resident.textures.is_empty()
         || frame.draws.is_empty()
         || frame.uniform_upload.source.start >= frame.uniform_upload.source.end
         || frame.uniform_upload.destination.start >= frame.uniform_upload.destination.end
@@ -112,8 +111,7 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
             frame.frame.uniform_desc.size,
             device.capabilities().limits.uniform_offset_alignment,
         )?;
-        if draw.textures.is_empty()
-            || draw
+        if draw
                 .textures
                 .iter()
                 .any(|texture| *texture >= frame.resident.textures.len())

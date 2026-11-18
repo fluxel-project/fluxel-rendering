@@ -68,6 +68,7 @@ pub(crate) fn prepare_forward_with_lighting(
             ForwardDrawSource::Scene(record_id),
             0,
             &record.resources,
+            frame.material_instance(ForwardDrawSource::Scene(record_id)),
             record.transform,
             assets,
             composer,
@@ -120,14 +121,16 @@ pub(crate) fn prepare_feature_draws_with_lighting(
     requests
         .iter()
         .map(|request| {
+            let source = ForwardDrawSource::Feature {
+                feature,
+                local_id: request.local_id,
+            };
             prepare_draw(
                 view,
-                ForwardDrawSource::Feature {
-                    feature,
-                    local_id: request.local_id,
-                },
+                source,
                 request.order,
                 &request.resources,
+                frame.material_instance(source),
                 request.transform,
                 assets,
                 composer,

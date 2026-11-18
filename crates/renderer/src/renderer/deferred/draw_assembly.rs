@@ -29,7 +29,7 @@ pub(super) fn draws<B: ResourceBackend>(
         textures.len(),
         capture_textures.len(),
         values.transforms.len(),
-        values.tints.len(),
+        values.material_uniforms.len(),
     ]
     .iter()
     .any(|length| *length != count)
@@ -57,13 +57,28 @@ pub(super) fn draws<B: ResourceBackend>(
         {
             return Err(Error::InvalidRange);
         }
-        let mut entries = vec![BindGroupEntry {
-            binding: schema.tint,
-            resource: BindingResource::Buffer {
-                buffer: uniform,
-                range: 0..16,
-            },
-        }];
+        let material_uniform_ranges = values
+            .material_uniforms
+            .get(index)
+            .ok_or(Error::InvalidState)?;
+        if material_uniform_ranges.len() != schema.uniforms.len()
+            || material_uniform_ranges.iter().zip(&schema.uniforms).any(|(range, uniform)| {
+                range.end.checked_sub(range.start) != Some(uniform.size)
+            })
+        {
+            return Err(Error::InvalidRange);
+        }
+        let mut entries: Vec<_> = schema
+            .uniforms
+            .iter()
+            .map(|uniform_binding| BindGroupEntry {
+                binding: uniform_binding.binding,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    range: 0..uniform_binding.size,
+                },
+            })
+            .collect();
         for (texture_index, binding) in schema.textures.iter().enumerate() {
             let slot = textures[index][texture_index];
             let texture = resident.textures.get(slot).ok_or(Error::InvalidRange)?;
@@ -133,7 +148,8 @@ pub(super) fn draws<B: ResourceBackend>(
             textures: textures[index].clone(),
             capture_textures: capture_textures[index].clone(),
             vertices: inputs[index].geometry().value().vertices.clone(),
-            tint_range: values.tints[index].clone(),
+            material_uniform_ranges: material_uniform_ranges.clone(),
+            material_uniform_sizes: schema.uniforms.iter().map(|uniform| uniform.size).collect(),
             transform_range: values.transforms[index].clone(),
             transform_bytes,
         });

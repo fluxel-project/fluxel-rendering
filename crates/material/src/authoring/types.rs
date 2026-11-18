@@ -27,6 +27,17 @@ impl MaterialType {
         }
     }
 
+    /// Returns the portable physical uniform range for this float value.
+    ///
+    /// Keep a full 16-byte slot for scalar and short vector blocks too. The
+    /// type's reflected WGSL shape still determines which components are used.
+    #[must_use]
+    pub const fn uniform_binding_size(self) -> u64 {
+        match self {
+            Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4 => 16,
+        }
+    }
+
     /// Returns the exact shader value type used by callable and uniform reflection.
     #[must_use]
     pub const fn shader_type(self) -> ValueType {
@@ -64,6 +75,17 @@ pub enum DynamicValue {
 }
 
 impl DynamicValue {
+    /// Returns the authored components, without uniform alignment padding.
+    #[must_use]
+    pub fn components(&self) -> &[f32] {
+        match self {
+            Self::F32(value) => std::slice::from_ref(value),
+            Self::Vec2(values) => values,
+            Self::Vec3(values) => values,
+            Self::Vec4(values) => values,
+        }
+    }
+
     /// Returns this value's declared material type.
     #[must_use]
     pub const fn ty(&self) -> MaterialType {
@@ -155,15 +177,12 @@ impl MaterialResourceKind {
 
     /// Returns a portable uniform binding allocation in bytes.
     ///
-    /// `vec3<f32>` has 16-byte uniform layout alignment and therefore occupies
-    /// a 16-byte dynamic allocation even though it contains three components.
+    /// Float scalar and vector uniform bindings each occupy one 16-byte slot.
     #[must_use]
     pub const fn uniform_min_binding_size(self) -> Option<u64> {
-        match self {
-            Self::UniformF32 => Some(4),
-            Self::UniformVec2 => Some(8),
-            Self::UniformVec3 | Self::UniformVec4 => Some(16),
-            Self::Texture2dF32 | Self::Sampler { .. } => None,
+        match self.uniform_material_type() {
+            Some(ty) => Some(ty.uniform_binding_size()),
+            None => None,
         }
     }
 }

@@ -223,7 +223,7 @@ The position-deformation entry retains its single-draw contract.
 
 One frame aggregates concrete resident streams and textures, deduplicating by
 exact asset identity, generation, and device. Every draw retains its own stream
-mapping, texture index, pipeline, binding groups, and aligned transform/tint
+mapping, texture index, pipeline, binding groups, and aligned transform and material uniform
 ranges in the shared frame uniform buffer. The geometry pass clears once and
 records each selected draw in order. G-buffer executables are cached as the
 current frame's active set; pending draws retain their own native handles.
@@ -269,13 +269,25 @@ named image bindings per material.
 
 ### Material binding locations
 
-The bounded material schema resolves one dynamic vec4 parameter, one or more 2D
-float textures, and zero or one ordinary sampler in material group zero. Names and
-locations come from Material contribution metadata and its parameter mappings.
-Actual reflected resource shapes, read/query access, and fragment visibility
-must agree. Schema admission adds no unused-declaration restriction beyond the
-existing Shader contract. This admission belongs
-to the Forward/Deferred consumer; generic material preparation remains broader.
+The material schema resolves named float scalar and vector uniform parameters,
+2D float textures, and up to one ordinary sampler in material group zero.
+Contribution metadata and actual fragment reflection must agree on binding
+location, value shape, and read/query access. Renderer preparation checks the
+instance against the exact asset-bound material variant and rejects invalid
+parameter values before it reserves GPU resources.
+
+Scene and typed Feature preparation select instances by exact draw identity on
+the prepared frame. The built-in Forward and Deferred CPU pipelines accept that
+selection with `with_material_instances`. A capture receiver can supply an
+instance directly when it is prepared. The legacy tint input still supplies one
+vec4 uniform for existing draws. Instance draws can use numeric parameters
+without supplying textures.
+
+Frame packing uploads each instance parameter into an individually aligned
+16-byte uniform range in binding order. The full slot also covers uniform block
+padding on GL. The bind group uses these same ranges and the
+Graph declares each actual uniform read. Per-draw values can change without
+changing the compiled material key.
 
 Forward, Deferred, and capture derive layouts and concrete entries from that
 same schema, ordered by binding number as required by RHI. Deferred recomposes
@@ -284,9 +296,11 @@ environment group two remain Renderer contracts. A dense location permutation
 (texture zero, sampler one, tint two) exercises real submissions and reuse;
 zero-sampler textureLoad definitions use the same schema path.
 
-`ForwardResources::textures` supplies `ForwardTextureBinding` entries by exact
-material resource name. Preparation rejects missing, duplicate, or extra names
-and resolves exact asset generations in schema order. Submission rejects a
+`ForwardResources::textures` supplies `ForwardTextureBinding` entries. A legacy
+draw uses material resource names. An instance draw uses logical aliases to
+select texture sources and, when supplied, the sampler descriptor. Multiple
+resources can select the same alias. Preparation rejects missing, duplicate, or
+extra names and resolves exact asset generations in schema order. Submission rejects a
 capture source without its producer context. Capture resources share this model.
 The capture entry takes an explicit producer slot independently of the receiver
 resource names; multiple logical bindings may alias that one GPU product while

@@ -75,9 +75,6 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     )?;
                 }
             }
-            if draw.textures.is_empty() {
-                return Err(Error::InvalidRange);
-            }
             for texture in &draw.textures {
                 pass.texture(
                     *self

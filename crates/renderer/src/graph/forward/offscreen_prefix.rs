@@ -44,8 +44,7 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
     validate_depth_topology(expected, spec.depth.is_some())?;
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
-        if draw.textures.is_empty()
-            || draw.capture_textures.iter().any(|capture| *capture)
+        if draw.capture_textures.iter().any(|capture| *capture)
             || draw
                 .textures
                 .iter()

@@ -20,7 +20,12 @@ pub use forward_topology::FrameTopology;
 mod oit;
 pub use oit::DualDepthPeelingConfig;
 
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
+use fluxel_material::MaterialInstance;
 
 use crate::{FrameSnapshot, RenderBounds, RenderId, RenderRecord, RenderViewId, SceneError};
 use fluxel_rhi::backend::ResourceBackend;
@@ -203,6 +208,7 @@ pub struct ForwardCpuPipeline<V = BoundsVisibility> {
     visibility: V,
     depth_mode: ForwardDepthMode,
     sorted_transparency: bool,
+    material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
 }
 
 impl<V> ForwardCpuPipeline<V> {
@@ -212,7 +218,20 @@ impl<V> ForwardCpuPipeline<V> {
             visibility,
             depth_mode: ForwardDepthMode::Disabled,
             sorted_transparency: false,
+            material_instances: None,
         }
+    }
+
+    /// Supplies per-draw material instances for the prepared frame.
+    ///
+    /// Scene and Feature draws are looked up by their exact owner identities.
+    /// Selected instances must be compiled for the draw's material generation.
+    pub fn with_material_instances(
+        mut self,
+        instances: HashMap<crate::ForwardDrawSource, MaterialInstance>,
+    ) -> Self {
+        self.material_instances = Some(Arc::new(instances));
+        self
     }
 
     /// Selects the bounded opaque depth product.
@@ -270,6 +289,7 @@ where
             snapshot,
             view,
             candidates: visible,
+            material_instances: self.material_instances.clone(),
         })
     }
 }
@@ -307,9 +327,26 @@ pub struct PreparedFrame<'a, R> {
     snapshot: &'a FrameSnapshot<R>,
     view: RenderViewId,
     candidates: Vec<RenderId>,
+    material_instances: Option<Arc<HashMap<crate::ForwardDrawSource, MaterialInstance>>>,
 }
 
 impl<'a, R> PreparedFrame<'a, R> {
+    /// Supplies the material instances selected by a custom pipeline for this frame.
+    pub fn with_material_instances(
+        mut self,
+        instances: HashMap<crate::ForwardDrawSource, MaterialInstance>,
+    ) -> Self {
+        self.material_instances = Some(Arc::new(instances));
+        self
+    }
+
+    pub(crate) fn material_instance(
+        &self,
+        source: crate::ForwardDrawSource,
+    ) -> Option<&MaterialInstance> {
+        self.material_instances.as_ref()?.get(&source)
+    }
+
     pub(crate) fn validate_for(
         &self,
         snapshot: &FrameSnapshot<R>,

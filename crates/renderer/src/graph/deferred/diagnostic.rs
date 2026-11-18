@@ -163,12 +163,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         for (index, draw) in frame.draws.iter().enumerate() {
             let _ = writeln!(
                 output,
-                "draw[{index}]={{streams:{:?}, textures:{:?}, vertices:{:?}, vertex_ranges:{:?}, tint:{:?}, transform:{:?}}}",
+                "draw[{index}]={{streams:{:?}, textures:{:?}, vertices:{:?}, vertex_ranges:{:?}, material_uniforms:{:?}, transform:{:?}}}",
                 draw.vertex_streams,
                 draw.textures,
                 draw.vertices,
                 draw.vertex_ranges,
-                draw.tint_range,
+                draw.material_uniform_ranges,
                 draw.transform_range,
             );
         }

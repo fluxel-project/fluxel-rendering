@@ -32,6 +32,18 @@ pub enum ForwardPreparationError {
         /// Draw requesting the tint.
         source: ForwardDrawSource,
     },
+    /// An instance names a different asset generation or compiled variant.
+    MaterialInstanceVariant {
+        /// Draw requesting the material instance.
+        source: ForwardDrawSource,
+    },
+    /// A named instance value is missing, non-finite, or has the wrong type.
+    InvalidMaterialParameter {
+        /// Draw requesting the value.
+        source: ForwardDrawSource,
+        /// Parameter in the reflected binding schema.
+        parameter: String,
+    },
     /// A record transform has a non-finite component.
     InvalidTransform {
         /// Draw requesting the transform.

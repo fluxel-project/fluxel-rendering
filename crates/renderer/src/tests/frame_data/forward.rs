@@ -1,21 +1,21 @@
 use super::*;
+use fluxel_material::DynamicValue;
 
 #[test]
-fn transform_and_tint_have_distinct_aligned_physical_ranges() {
+fn transform_and_material_uniforms_have_distinct_aligned_physical_ranges() {
     let input = ForwardUniformInput {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
-        tint: [0.25, 0.5, 0.75, 1.0],
+        material_uniforms: vec![DynamicValue::Vec4([0.25, 0.5, 0.75, 1.0])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     };
     let packed = pack_forward_uniforms(&[input], 256, 512).unwrap();
     assert_eq!(packed.transforms.len(), 1);
     assert_eq!(packed.transforms[0], 0..64);
-    assert_eq!(packed.tints.len(), 1);
-    assert_eq!(packed.tints[0], 256..272);
+    assert_eq!(packed.material_uniforms, [vec![256..272]]);
     assert_eq!(packed.bytes.len(), 512);
     assert_eq!(&packed.bytes[256..260], &0.25f32.to_le_bytes());
     assert!(packed.bytes[64..256].iter().all(|byte| *byte == 0));
@@ -33,7 +33,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
-        tint: [1.0; 4],
+        material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     };
@@ -50,7 +50,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         normal_from_local: None,
         world_from_local: None,
         clip_from_world: None,
-        tint: [0.25, 0.5, 0.75, 1.0],
+        material_uniforms: vec![DynamicValue::Vec4([0.25, 0.5, 0.75, 1.0])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     };
@@ -64,16 +64,16 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         ]),
         world_from_local: Some(crate::RenderTransform::identity().columns()),
         clip_from_world: None,
-        tint: [1.0; 4],
+        material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     };
     let packed = pack_forward_uniforms(&[color, normal], 256, 1024).unwrap();
     // Color consumes clip only. The normal surface also consumes normal and
     // world matrices: the complete legacy PBR payload must be declared before
-    // its tint binding.
+    // its material binding.
     assert_eq!(packed.transforms, [0..64, 512..512 + PBR_TRANSFORM_BYTES]);
-    assert_eq!(packed.tints, [256..272, 768..784]);
+    assert_eq!(packed.material_uniforms, [vec![256..272], vec![768..784]]);
     assert_eq!(packed.bytes.len(), 1024);
     assert_eq!(&packed.bytes[576..580], &2.0f32.to_le_bytes());
     let world: Vec<_> = packed.bytes[640..704]
@@ -95,7 +95,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
                 normal_from_local: Some(crate::RenderTransform::identity().columns()),
                 world_from_local: Some(crate::RenderTransform::identity().columns()),
                 clip_from_world: None,
-                tint: [1.0; 4],
+                material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
                 shading_camera: None,
                 directional_light: crate::DirectionalLight::default(),
             }],
@@ -113,7 +113,7 @@ fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
         normal_from_local: Some([[f32::NAN, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]]),
         world_from_local: Some(crate::RenderTransform::identity().columns()),
         clip_from_world: None,
-        tint: [1.0; 4],
+        material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     };
@@ -138,7 +138,7 @@ fn pbr_transform_matrices_must_be_paired() {
                     normal_from_local,
                     world_from_local,
                     clip_from_world,
-                    tint: [1.0; 4],
+                    material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
                     shading_camera: None,
                     directional_light: crate::DirectionalLight::default(),
                 }],

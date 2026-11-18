@@ -39,7 +39,10 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     /// Parallel logical binding facts: true selects the same-Graph capture product.
     pub(crate) capture_textures: Vec<bool>,
     pub(crate) vertices: Range<u32>,
-    pub(crate) tint_range: Range<u64>,
+    /// Dynamic material uniform ranges in binding order.
+    pub(crate) material_uniform_ranges: Vec<Range<u64>>,
+    /// Exact byte footprint for each dynamic material binding.
+    pub(crate) material_uniform_sizes: Vec<u64>,
     pub(crate) transform_range: Range<u64>,
     /// Exact transform binding footprint selected by the material route.
     pub(crate) transform_bytes: u64,
@@ -237,11 +240,7 @@ pub(crate) fn deferred_scene_color_desc_with_format(
     extent: [u32; 2],
     format: TextureFormat,
 ) -> TextureDesc {
-    gbuffer_desc(
-        "fluxel deferred scene color",
-        extent,
-        format,
-    )
+    gbuffer_desc("fluxel deferred scene color", extent, format)
 }
 
 fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool) -> Result<()> {

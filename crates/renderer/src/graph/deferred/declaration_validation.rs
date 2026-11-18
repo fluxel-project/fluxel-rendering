@@ -89,18 +89,31 @@ pub(super) fn validate_draw_uniform_ranges<B: ResourceBackend>(
     ) {
         return Err(Error::InvalidRange);
     }
-    for (range, bytes) in [
-        (&draw.tint_range, 16_u64),
-        (&draw.transform_range, draw.transform_bytes),
-    ] {
+    if draw.material_uniform_ranges.len() != draw.material_uniform_sizes.len() {
+        return Err(Error::InvalidRange);
+    }
+    for (range, size) in draw
+        .material_uniform_ranges
+        .iter()
+        .zip(&draw.material_uniform_sizes)
+    {
         if range.start >= range.end
-            || range.end - range.start != bytes
+            || range.end - range.start != *size
             || range.end > uniform_size
             || !range.start.is_multiple_of(alignment)
             || u32::try_from(range.start).is_err()
         {
             return Err(Error::InvalidRange);
         }
+    }
+    let range = &draw.transform_range;
+    if range.start >= range.end
+        || range.end - range.start != draw.transform_bytes
+        || range.end > uniform_size
+        || !range.start.is_multiple_of(alignment)
+        || u32::try_from(range.start).is_err()
+    {
+        return Err(Error::InvalidRange);
     }
     Ok(())
 }

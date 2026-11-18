@@ -53,6 +53,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) sampler: Option<fluxel_rhi::api::SamplerDesc>,
     pub(crate) textures: Vec<ResolvedForwardTexture>,
     pub(crate) tint: [f32; 4],
+    uniform_values: Vec<DynamicValue>,
     pub(crate) transform: RenderTransform,
     pub(crate) view: RenderView,
     pub(crate) clip_from_local: [[f32; 4]; 4],
@@ -72,6 +73,7 @@ impl PreparedCaptureReceiver {
             prepared: self.prepared,
             sampler: self.sampler,
             tint: self.tint,
+            uniform_values: self.uniform_values,
             transform: self.transform,
             view: self.view,
             clip_from_local: self.clip_from_local,
@@ -145,7 +147,7 @@ pub fn prepare_forward_capture_receiver(
     composer: &mut ShaderComposer,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     prepare_capture_receiver(
-        view, source, order, resources, transform, assets, composer, None,
+        view, source, order, resources, transform, assets, composer, None, None,
     )
 }
 
@@ -176,6 +178,29 @@ pub fn prepare_forward_scene_refraction_receiver(
         assets,
         composer,
         Some(refraction_texture),
+        None,
+    )
+}
+
+/// Prepares a capture receiver using the named values and resources of one instance.
+///
+/// The instance must come from the exact asset-bound variant. Texture and
+/// sampler input names are the aliases selected by the instance. For projected
+/// refraction, pass the material's declared texture name as `refraction_texture`.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_forward_capture_receiver_with_instance(
+    view: &RenderView,
+    source: ForwardDrawSource,
+    order: i64,
+    resources: &ForwardCaptureResources,
+    transform: RenderTransform,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    refraction_texture: Option<&str>,
+    instance: &MaterialInstance,
+) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
+    prepare_capture_receiver(
+        view, source, order, resources, transform, assets, composer, refraction_texture, Some(instance),
     )
 }
 
@@ -189,6 +214,7 @@ fn prepare_capture_receiver(
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
     refraction_texture: Option<&str>,
+    instance: Option<&MaterialInstance>,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     if view.extent.contains(&0) || !finite_transform(view.transform) {
         return Err(ForwardPreparationError::InvalidView);
@@ -196,7 +222,7 @@ fn prepare_capture_receiver(
     if !finite_transform(transform) {
         return Err(ForwardPreparationError::InvalidTransform { source });
     }
-    if !resources.tint.iter().all(|value| value.is_finite()) {
+    if instance.is_none() && !resources.tint.iter().all(|value| value.is_finite()) {
         return Err(ForwardPreparationError::InvalidTint { source });
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
@@ -204,8 +230,9 @@ fn prepare_capture_receiver(
     let compiled = MaterialCompiler::compile_for(&material)
         .map_err(MaterialPreparationError::Material)
         .map_err(ForwardPreparationError::Material)?;
+    let resources = resolve_resource_aliases(resources, instance, &compiled, source)?;
     let scene_refraction = refraction_texture
-        .map(|name| scene_refraction_binding(&compiled, resources, name, source))
+        .map(|name| scene_refraction_binding(&compiled, &resources, name, source))
         .transpose()?;
     let request = material_request(
         material.value(),
@@ -221,6 +248,7 @@ fn prepare_capture_receiver(
         .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
+    let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, &schema.textures, assets, source)?;
     let sampler = super::super::forward_sampler::resolve_sampler_binding(
@@ -258,6 +286,7 @@ fn prepare_capture_receiver(
         sampler,
         textures,
         tint: resources.tint,
+        uniform_values,
         transform,
         view: view.clone(),
         clip_from_local,

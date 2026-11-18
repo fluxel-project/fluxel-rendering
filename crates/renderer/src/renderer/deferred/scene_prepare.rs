@@ -77,6 +77,13 @@ pub(super) fn materials(
         .map_err(RendererError::DeferredMaterial)?;
         let schema = crate::preparation::material_binding_schema(&material, input.source())
             .map_err(RendererError::ForwardPreparation)?;
+        if input.prepared().binding_schema() != Some(&schema) {
+            return Err(RendererError::ForwardPreparation(
+                crate::ForwardPreparationError::MaterialBindingSchema {
+                    source: input.source(),
+                },
+            ));
+        }
         prepared.push(material.with_binding_schema(schema));
     }
     Ok((prepared, pbr, effects))
@@ -108,7 +115,7 @@ pub(super) fn uniforms(
             },
             world_from_local: pbr.then(|| input.transform().columns()),
             clip_from_world: None,
-            tint: input.tint(),
+            material_uniforms: input.uniform_values().to_vec(),
             shading_camera: input.view().shading_camera,
             directional_light: input.view().directional_light,
         });

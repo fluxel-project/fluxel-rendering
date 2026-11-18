@@ -122,7 +122,7 @@ where
                     .prepared()
                     .uses_scene_refraction()
                     .then(|| input.view().transform.columns()),
-                tint: input.tint(),
+                material_uniforms: input.uniform_values().to_vec(),
                 shading_camera: input.view().shading_camera,
                 directional_light: input.view().directional_light,
             })
@@ -381,13 +381,28 @@ where
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?;
-            let mut material_entries = vec![BindGroupEntry {
-                binding: schema.tint,
-                resource: BindingResource::Buffer {
-                    buffer: frame_uniform,
-                    range: 0..16,
-                },
-            }];
+            let material_uniform_ranges = uniforms
+                .material_uniforms
+                .get(index)
+                .ok_or(Error::InvalidState)?;
+            if material_uniform_ranges.len() != schema.uniforms.len()
+                || material_uniform_ranges.iter().zip(&schema.uniforms).any(|(range, uniform)| {
+                    range.end.checked_sub(range.start) != Some(uniform.size)
+                })
+            {
+                return Err(Error::InvalidState.into());
+            }
+            let mut material_entries: Vec<_> = schema
+                .uniforms
+                .iter()
+                .map(|uniform| BindGroupEntry {
+                    binding: uniform.binding,
+                    resource: BindingResource::Buffer {
+                        buffer: frame_uniform,
+                        range: 0..uniform.size,
+                    },
+                })
+                .collect();
             if schema.textures.len() != draw_textures[index].len() {
                 return Err(Error::InvalidRange.into());
             }
@@ -462,7 +477,7 @@ where
                 .transpose()
                 .map_err(|error| self.observe_forward_error("environment bind group", error))?;
             let transform_range = uniforms.transforms[index].clone();
-            let tint_range = uniforms.tints[index].clone();
+            let material_uniform_ranges = material_uniform_ranges.clone();
             let vertex_ranges = mappings[index]
                 .iter()
                 .map(|&stream| 0..resident.streams[stream].desc.size)
@@ -483,10 +498,13 @@ where
                         ForwardBindGroup {
                             slot: 0,
                             group: material_group,
-                            dynamic_offsets: vec![
-                                u32::try_from(tint_range.start).map_err(|_| Error::InvalidRange)?,
-                            ],
-                            uniform_ranges: vec![tint_range],
+                            dynamic_offsets: material_uniform_ranges
+                                .iter()
+                                .map(|range| {
+                                    u32::try_from(range.start).map_err(|_| Error::InvalidRange)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                            uniform_ranges: material_uniform_ranges,
                         },
                         ForwardBindGroup {
                             slot: 1,

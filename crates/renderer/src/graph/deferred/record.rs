@@ -184,16 +184,17 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }
         }
         for draw in &draw_data {
-            for range in [&draw.tint, &draw.transform] {
+            for range in draw
+                .material_uniforms
+                .iter()
+                .chain(std::iter::once(&draw.transform))
+            {
                 pass.buffer(
                     self.uniform_slot,
                     range.clone(),
                     AccessKind::Read,
                     uniform_read(),
                 )?;
-            }
-            if draw.textures.is_empty() {
-                return Err(Error::InvalidRange);
             }
             for texture_index in &draw.textures {
                 let texture = frame
@@ -279,7 +280,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             raster.set_bind_group(
                 0,
                 &draw.material_group,
-                &[u32::try_from(draw.tint_range.start).map_err(|_| Error::InvalidRange)?],
+                &draw
+                    .material_uniform_ranges
+                    .iter()
+                    .map(|range| u32::try_from(range.start).map_err(|_| Error::InvalidRange))
+                    .collect::<Result<Vec<_>>>()?,
             )?;
             raster.set_bind_group(
                 1,

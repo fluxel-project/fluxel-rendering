@@ -299,8 +299,7 @@ pub(super) fn validate_spec<B: ResourceBackend>(
     for draw in &spec.draws {
         validate_graph_draw(draw, spec.streams.len())?;
         if (!receiver
-            && (draw.textures.is_empty()
-                || draw.capture_textures.iter().any(|capture| *capture)
+            && (draw.capture_textures.iter().any(|capture| *capture)
                 || draw
                     .textures
                     .iter()

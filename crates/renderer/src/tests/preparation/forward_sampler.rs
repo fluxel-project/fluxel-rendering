@@ -7,7 +7,7 @@ use fluxel_rhi::api::{AddressMode, FilterMode, SamplerDesc};
 
 fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
     MaterialBindingSchema {
-        tint: 0,
+        uniforms: Vec::new(),
         textures: vec![MaterialTextureBinding {
             binding: 1,
             name: "image".into(),

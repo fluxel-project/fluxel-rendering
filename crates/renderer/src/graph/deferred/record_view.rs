@@ -101,8 +101,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             return Err(Error::InvalidRange);
         }
         if self.draws.iter().any(|draw| {
-            draw.textures.is_empty()
-                || draw.capture_textures.len() != draw.textures.len()
+            draw.capture_textures.len() != draw.textures.len()
                 || draw
                     .textures
                     .iter()
@@ -118,7 +117,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
                     Ok(super::phase::DeferredGraphDraw {
                         streams: draw.vertex_streams.clone(),
                         accesses: draw_accesses(frame, draw)?,
-                        tint: draw.tint_range.clone(),
+                        material_uniforms: draw.material_uniform_ranges.clone(),
                         transform: draw.transform_range.clone(),
                         textures: draw.textures.clone(),
                     })
@@ -131,7 +130,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
                     Ok(super::phase::DeferredGraphDraw {
                         streams: draw.vertex_streams.clone(),
                         accesses: super::surface_validate::surface_draw_accesses(frame, draw)?,
-                        tint: draw.tint_range.clone(),
+                        material_uniforms: draw.material_uniform_ranges.clone(),
                         transform: draw.transform_range.clone(),
                         textures: draw.textures.clone(),
                     })

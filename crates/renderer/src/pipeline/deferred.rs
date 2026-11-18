@@ -182,6 +182,14 @@ impl<V> DeferredCpuPipeline<V> {
             forward: ForwardCpuPipeline::new(visibility),
         }
     }
+    /// Supplies per-draw material instances for the prepared frame.
+    pub fn with_material_instances(
+        mut self,
+        instances: std::collections::HashMap<crate::ForwardDrawSource, fluxel_material::MaterialInstance>,
+    ) -> Self {
+        self.forward = self.forward.with_material_instances(instances);
+        self
+    }
 }
 
 impl<R, V> FramePipeline<R> for DeferredCpuPipeline<V>

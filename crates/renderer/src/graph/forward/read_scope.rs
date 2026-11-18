@@ -172,9 +172,6 @@ impl ForwardReadState {
         Self::ensure_uncovered(indices, &self.texture_covered)?;
         for &draw_index in indices {
             let draw = self.draws.get(draw_index).ok_or(())?;
-            if draw.textures.is_empty() {
-                return Err(());
-            }
             for texture in &draw.textures {
                 let texture = *self.textures.get(*texture).ok_or(())?;
                 let range = pass.full_texture_range(texture).map_err(|_| ())?;

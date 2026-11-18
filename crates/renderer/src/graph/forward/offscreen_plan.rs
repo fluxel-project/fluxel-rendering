@@ -349,8 +349,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         validate_batches(frame)?;
         for draw in &frame.draws {
             validate_offsets(draw, self.uniform_alignment)?;
-            if draw.textures.is_empty()
-                || draw.capture_textures.iter().any(|capture| *capture)
+            if draw.capture_textures.iter().any(|capture| *capture)
                 || draw
                     .textures
                     .iter()

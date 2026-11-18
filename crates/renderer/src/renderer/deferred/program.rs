@@ -28,7 +28,7 @@ use program_fixed::{
     color_target_with_format, depth_state, opaque_triangles, single_sample, surface_triangles,
 };
 
-use program_layout::{ordinary_sampler, sampled_texture, uniform};
+use program_layout::{ordinary_sampler, sampled_texture, uniform as uniform_entry};
 
 pub(crate) use program_cache::DeferredProgramCache;
 
@@ -357,7 +357,11 @@ where
         label: &str,
         schema: &crate::preparation::MaterialBindingSchema,
     ) -> std::result::Result<BindGroupLayout<B>, RendererError> {
-        let mut entries = vec![uniform(schema.tint, 16, ShaderStage::Fragment)];
+        let mut entries: Vec<_> = schema
+            .uniforms
+            .iter()
+            .map(|binding| uniform_entry(binding.binding, binding.size, ShaderStage::Fragment))
+            .collect();
         entries.extend(
             schema
                 .textures

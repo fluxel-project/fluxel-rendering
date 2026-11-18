@@ -1,4 +1,5 @@
 use super::*;
+use fluxel_material::DynamicValue;
 
 fn pbr_input(world_from_local: [[f32; 4]; 4]) -> ForwardUniformInput {
     ForwardUniformInput {
@@ -6,7 +7,7 @@ fn pbr_input(world_from_local: [[f32; 4]; 4]) -> ForwardUniformInput {
         normal_from_local: Some(crate::RenderTransform::identity().columns()),
         world_from_local: Some(world_from_local),
         clip_from_world: None,
-        tint: [1.0; 4],
+        material_uniforms: vec![DynamicValue::Vec4([1.0; 4])],
         shading_camera: None,
         directional_light: crate::DirectionalLight::default(),
     }

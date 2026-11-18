@@ -1,4 +1,5 @@
 //! Bounded, aligned uniform bytes for the Forward preparation boundary.
+use fluxel_material::DynamicValue;
 use fluxel_rhi::api::{Error, Result};
 use std::ops::Range;
 
@@ -7,7 +8,8 @@ pub(crate) struct ForwardUniformInput {
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) world_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) clip_from_world: Option<[[f32; 4]; 4]>,
-    pub(crate) tint: [f32; 4],
+    /// Values in the material binding schema's ascending binding order.
+    pub(crate) material_uniforms: Vec<DynamicValue>,
     pub(crate) shading_camera: Option<crate::ShadingCamera>,
     pub(crate) directional_light: crate::DirectionalLight,
 }
@@ -15,7 +17,8 @@ pub(crate) struct ForwardUniformInput {
 pub(crate) struct ForwardUniformData {
     pub(crate) bytes: Vec<u8>,
     pub(crate) transforms: Vec<Range<u64>>,
-    pub(crate) tints: Vec<Range<u64>>,
+    /// Dynamic uniform ranges per draw, in material binding order.
+    pub(crate) material_uniforms: Vec<Vec<Range<u64>>>,
 }
 
 // `PbrTransforms::normal_from_local` is only ever multiplied by directions
@@ -60,7 +63,7 @@ fn transform_bytes(input: &ForwardUniformInput) -> Result<u64> {
     }
 }
 
-/// Both dynamic bindings use individually aligned physical starts.
+/// Every dynamic binding uses an individually aligned physical start.
 pub(crate) fn pack_forward_uniforms(
     inputs: &[ForwardUniformInput],
     alignment: u64,
@@ -79,8 +82,8 @@ pub(crate) fn pack_forward_uniforms(
     transforms
         .try_reserve_exact(inputs.len())
         .map_err(|_| Error::OutOfMemory)?;
-    let mut tints = Vec::new();
-    tints
+    let mut material_uniforms = Vec::new();
+    material_uniforms
         .try_reserve_exact(inputs.len())
         .map_err(|_| Error::OutOfMemory)?;
     let mut total: u64 = 0;
@@ -88,11 +91,22 @@ pub(crate) fn pack_forward_uniforms(
         let transform_end = total
             .checked_add(transform_bytes(input)?)
             .ok_or(Error::InvalidRange)?;
-        let tint_start = align(transform_end)?;
-        let tint_end = tint_start.checked_add(16).ok_or(Error::InvalidRange)?;
+        let mut ranges = Vec::new();
+        ranges
+            .try_reserve_exact(input.material_uniforms.len())
+            .map_err(|_| Error::OutOfMemory)?;
+        let mut uniform_end = transform_end;
+        for value in &input.material_uniforms {
+            let start = align(uniform_end)?;
+            let end = start
+                .checked_add(value.ty().uniform_binding_size())
+                .ok_or(Error::InvalidRange)?;
+            ranges.push(start..end);
+            uniform_end = end;
+        }
         transforms.push(total..transform_end);
-        tints.push(tint_start..tint_end);
-        total = align(tint_end)?;
+        material_uniforms.push(ranges);
+        total = align(uniform_end)?;
     }
     let total = total.max(16);
     if total > max_bytes || total > u64::from(u32::MAX) {
@@ -121,7 +135,12 @@ pub(crate) fn pack_forward_uniforms(
                     .iter()
                     .flat_map(|matrix| matrix.iter().flatten()),
             )
-            .chain(input.tint.iter())
+            .chain(
+                input
+                    .material_uniforms
+                    .iter()
+                    .flat_map(DynamicValue::components),
+            )
             .any(|value| !value.is_finite())
     }) {
         return Err(Error::InvalidRange);
@@ -131,9 +150,8 @@ pub(crate) fn pack_forward_uniforms(
         .try_reserve_exact(usize::try_from(total).map_err(|_| Error::InvalidRange)?)
         .map_err(|_| Error::OutOfMemory)?;
     bytes.resize(usize::try_from(total).map_err(|_| Error::InvalidRange)?, 0);
-    for ((input, transform), tint) in inputs.iter().zip(&transforms).zip(&tints) {
+    for ((input, transform), uniforms) in inputs.iter().zip(&transforms).zip(&material_uniforms) {
         let start = transform.start;
-        let tint = tint.start;
         for (component, value) in input.transform.iter().flatten().enumerate() {
             let offset = start as usize + component * 4;
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
@@ -170,15 +188,17 @@ pub(crate) fn pack_forward_uniforms(
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
         }
-        for (component, value) in input.tint.iter().enumerate() {
-            let offset = tint as usize + component * 4;
-            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        for (value, range) in input.material_uniforms.iter().zip(uniforms) {
+            for (component, value) in value.components().iter().enumerate() {
+                let offset = range.start as usize + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
         }
     }
     Ok(ForwardUniformData {
         bytes,
         transforms,
-        tints,
+        material_uniforms,
     })
 }
 
