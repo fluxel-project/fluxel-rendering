@@ -19,7 +19,7 @@ pub(super) fn source(diffuse: bool, transmission: bool) -> String {
     );
     let indirect = if diffuse {
         format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy{diffuse_weight};"
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy){diffuse_weight};"
         )
     } else {
         String::from("let indirect = vec3<f32>(0.0);")

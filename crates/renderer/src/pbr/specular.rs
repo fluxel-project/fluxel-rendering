@@ -362,9 +362,9 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
         ""
     };
     let indirect = if diffuse && effects {
-        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy * textureLoad(pbr_emissive_ao, coordinate, 0).a"
+        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * textureLoad(pbr_emissive_ao, coordinate, 0).a"
     } else if diffuse {
-        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy"
+        " + pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy)"
     } else {
         ""
     };
@@ -495,11 +495,11 @@ struct PbrSpecularVertexOutput {
     );
     let indirect = if diffuse && effects {
         format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0){diffuse_weight};"
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy) * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0){diffuse_weight};"
         )
     } else if diffuse {
         format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler) * spec.diffuse_energy{diffuse_weight};"
+            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, spec.diffuse_energy){diffuse_weight};"
         )
     } else {
         String::from("let indirect = vec3<f32>(0.0);")
