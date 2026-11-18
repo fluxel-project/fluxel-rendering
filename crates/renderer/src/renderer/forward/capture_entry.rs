@@ -263,6 +263,14 @@ pub(in crate::renderer) fn capture_assets(
     receiver: &crate::ForwardDrawInput,
 ) -> crate::ForwardAssets {
     let mut assets = producer.clone();
+    retain_capture_assets(&mut assets, receiver);
+    assets
+}
+
+pub(super) fn retain_capture_assets(
+    assets: &mut crate::ForwardAssets,
+    receiver: &crate::ForwardDrawInput,
+) {
     let geometry = receiver.geometry();
     if !assets
         .geometry
@@ -280,5 +288,4 @@ pub(in crate::renderer) fn capture_assets(
             }
         }
     }
-    assets
 }

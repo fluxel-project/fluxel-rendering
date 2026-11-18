@@ -7,9 +7,6 @@ use crate::{
 };
 use std::{collections::HashMap, time::Instant};
 
-#[path = "transparent_order.rs"]
-mod transparent_order;
-
 impl<B> Renderer<B>
 where
     B: ExecutionBackend

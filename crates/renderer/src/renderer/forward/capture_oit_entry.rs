@@ -1,6 +1,7 @@
 //! Same-Graph capture with independent finite OIT selection on each side.
 
 use super::assembly::{AssembledForwardTarget, ForwardAllocationStats};
+use super::capture_batch::{CaptureReceivers, order_capture_producer_draws};
 use super::*;
 use crate::{FramePipeline, preparation::OitDrawPartition};
 use std::{num::NonZeroU32, time::Instant};
@@ -111,9 +112,9 @@ where
             visibility,
             assets,
             producer_slot,
-            receiver,
-            producer_config,
-            receiver_config,
+            CaptureReceivers::Single(receiver),
+            Some(producer_config),
+            Some(receiver_config),
             None,
         )
         .await
@@ -145,7 +146,73 @@ where
             visibility,
             assets,
             producer_slot,
-            receiver,
+            CaptureReceivers::Single(receiver),
+            Some(producer_config),
+            Some(receiver_config),
+            Some(image),
+        )
+        .await
+    }
+
+    /// Submits projected Blend or MaskBlend receivers against the same captured scene.
+    /// Each optional config independently selects finite peeling on that side.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_forward_capture_batch<V>(
+        &mut self,
+        pipeline: &crate::ForwardCpuPipeline<V>,
+        snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        view: crate::RenderViewId,
+        visibility: crate::RenderBounds,
+        assets: &crate::ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        receivers: Vec<crate::PreparedCaptureReceiver>,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+    ) -> std::result::Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<crate::ForwardResources>,
+    {
+        self.submit_forward_oit_capture_target(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            producer_slot,
+            CaptureReceivers::RefractionBatch(receivers),
+            producer_config,
+            receiver_config,
+            None,
+        )
+        .await
+    }
+
+    /// Presents the same refraction batch to an acquired Surface in one submission.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_forward_capture_batch_surface<V>(
+        &mut self,
+        pipeline: &crate::ForwardCpuPipeline<V>,
+        snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        view: crate::RenderViewId,
+        visibility: crate::RenderBounds,
+        assets: &crate::ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        receivers: Vec<crate::PreparedCaptureReceiver>,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+        image: SurfaceImage<B>,
+    ) -> std::result::Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<crate::ForwardResources>,
+    {
+        self.submit_forward_oit_capture_target(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            producer_slot,
+            CaptureReceivers::RefractionBatch(receivers),
             producer_config,
             receiver_config,
             Some(image),
@@ -162,9 +229,9 @@ where
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
         producer_slot: CaptureTextureSlot,
-        receiver: crate::PreparedCaptureReceiver,
-        producer_config: &crate::DualDepthPeelingConfig,
-        receiver_config: &crate::DualDepthPeelingConfig,
+        receivers: CaptureReceivers,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
         surface: Option<SurfaceImage<B>>,
     ) -> std::result::Result<Submission, RendererError>
     where
@@ -195,18 +262,17 @@ where
             return Err(Error::InvalidRange.into());
         }
         let mut composer = fluxel_shader::ShaderComposer::new();
-        let receiver = receiver
-            .with_capture_lighting(
-                &mut composer,
-                self.environment_irradiance.is_some(),
-                self.environment_specular.is_some(),
-            )
-            .map_err(RendererError::ForwardPreparation)?
-            .into_draw_input();
-        super::capture_entry::validate_receiver_sources(&receiver, &producer_slot)?;
-        super::capture_entry::validate_receiver_view(&receiver, selected.view_record())?;
-        let scene_refraction = receiver.prepared().uses_scene_refraction();
-        let assets = super::capture_entry::capture_assets(assets, &receiver);
+        let environment = self.environment_irradiance.is_some();
+        let specular = self.environment_specular.is_some();
+        let (receiver, assets, scene_refraction) = receivers.prepare(
+            &producer_slot,
+            selected.view_record(),
+            assets,
+            environment,
+            specular,
+            &mut composer,
+            receiver_config,
+        )?;
         let inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             &assets,
@@ -215,22 +281,21 @@ where
             self.environment_specular.is_some(),
         )
         .map_err(RendererError::ForwardPreparation)?;
-        let producer =
-            super::oit_order::order_oit_draws(pipeline, &selected, inputs, producer_config)
-                .map_err(RendererError::ForwardPipeline)?;
-        // The receiver has exactly one draw, so excluded transparency has no
-        // inter-object sorting requirement or dependency on a producer eye.
-        let receiver = capture_oit_receiver_partition(receiver, Some(receiver_config));
+        let producer = order_capture_producer_draws(pipeline, &selected, inputs, producer_config)
+            .map_err(RendererError::ForwardPipeline)?;
+        let producer_rounds =
+            producer_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
+        let receiver_rounds =
+            receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
         if scene_refraction {
             self.admit_oit_capture_refraction(
                 extent,
                 surface.is_some() || receiver.peel_count != 0,
             )?;
         }
-        for (partition, config) in [(&producer, producer_config), (&receiver, receiver_config)] {
+        for (partition, rounds) in [(&producer, producer_rounds), (&receiver, receiver_rounds)] {
             if partition.peel_count != 0 {
-                config
-                    .rounds()
+                rounds
                     .get()
                     .checked_mul(3)
                     .and_then(|passes| passes.checked_add(5))
@@ -246,7 +311,7 @@ where
                 &assets,
                 None,
                 true,
-                producer_config.rounds(),
+                producer_rounds,
                 started,
             )
             .await?;
@@ -261,7 +326,7 @@ where
                 &assets,
                 Some(&capture_owner),
                 surface.is_some(),
-                receiver_config.rounds(),
+                receiver_rounds,
                 started,
             )
             .await?;

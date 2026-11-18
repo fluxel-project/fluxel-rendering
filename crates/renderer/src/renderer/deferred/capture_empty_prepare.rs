@@ -1,9 +1,8 @@
 //! Capture preparation when the producer has no Deferred G-buffer prefix.
 
+use super::capture_entry::CaptureReceiverInput;
 use super::*;
-use crate::renderer::forward::{
-    CaptureTextureSlot, OitExecutionTarget, capture_oit_receiver_partition,
-};
+use crate::renderer::forward::{CaptureTextureSlot, OitExecutionTarget};
 use std::{num::NonZeroU32, time::Instant};
 
 impl<B> Renderer<B>
@@ -28,15 +27,21 @@ where
         producer_inputs: Vec<crate::ForwardDrawInput>,
         peel_count: usize,
         rounds: NonZeroU32,
-        receiver_input: crate::ForwardDrawInput,
+        receiver: CaptureReceiverInput,
+        scene_refraction: bool,
         producer_slot: CaptureTextureSlot,
         retained_assets: &ForwardAssets,
-        receiver_config: Option<&crate::DualDepthPeelingConfig>,
         surface: Option<SurfaceImage<B>>,
     ) -> Result<Submission, RendererError> {
-        let extent = receiver_input.extent();
+        let extent = match &receiver {
+            CaptureReceiverInput::Forward { partition, .. } => {
+                partition.draws.first().ok_or(Error::InvalidRange)?.extent()
+            }
+            CaptureReceiverInput::Deferred(inputs) => {
+                inputs.first().ok_or(Error::InvalidRange)?.extent()
+            }
+        };
         let started = Instant::now();
-        let scene_refraction = receiver_input.prepared().uses_scene_refraction();
         if peel_count != 0 {
             rounds
                 .get()
@@ -65,30 +70,16 @@ where
             .capture_owner(&self.device, producer_slot, scene_refraction)
             .map_err(|error| self.observe_rhi_error(error))?;
 
-        if scene_refraction
-            || matches!(
-                receiver_input
-                    .prepared()
-                    .material()
-                    .surface_policy()
-                    .alpha_mode,
-                fluxel_material::SurfaceAlphaMode::Blend
-                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
-            )
-        {
-            let receiver_partition =
-                capture_oit_receiver_partition(receiver_input, receiver_config);
-            let receiver_rounds =
-                receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
+        if let CaptureReceiverInput::Forward { partition, rounds } = receiver {
             let receiver = self
                 .assemble_capture_oit_side(
                     snapshot,
-                    receiver_partition,
+                    partition,
                     extent,
                     retained_assets,
                     Some(&capture),
                     true,
-                    receiver_rounds,
+                    rounds,
                     started,
                 )
                 .await?;
@@ -113,17 +104,17 @@ where
                 .await;
         }
 
+        let CaptureReceiverInput::Deferred(receiver_inputs) = receiver else {
+            return Err(Error::InvalidState.into());
+        };
         self.deferred_residency.retain_assets(retained_assets);
         let receiver = self
-            .prepare_deferred_frames_with_capture(
-                std::slice::from_ref(&receiver_input),
-                Some(&capture),
-            )
+            .prepare_deferred_frames_with_capture(&receiver_inputs, Some(&capture))
             .await?;
         self.execute_forward_deferred_capture(
             PendingInputs::Frame {
                 _snapshot: snapshot,
-                _inputs: vec![receiver_input],
+                _inputs: receiver_inputs,
             },
             producer,
             receiver,

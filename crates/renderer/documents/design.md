@@ -935,6 +935,15 @@ read-only, including a cleared depth attachment when the producer has no opaque
 draws. Later rounds use the peeling interval. This also covers Deferred capture
 with no G-buffer prefix through its real Forward fallback.
 
+The capture batch entry points accept projected Blend or MaskBlend receivers
+with distinct draw sources. Their capture slots and camera must match the
+producer. All receivers sample the same immutable scene version. The batch uses
+one background copy, one borrowed producer depth attachment and one terminal.
+The ordinary segment and peeling exclusions sort by authored alpha index and
+back-to-front distance, retaining input order for equal keys. Peel candidates
+preserve the submitted order and use the existing finite reduction. Retained
+receiver inputs include each draw's assets through terminal completion.
+
 The scene-color transmission receiver is prepared with
 `prepare_forward_scene_refraction_receiver`. It names a material texture bound
 to the producer's capture slot and uses the material's ordinary sampler. The

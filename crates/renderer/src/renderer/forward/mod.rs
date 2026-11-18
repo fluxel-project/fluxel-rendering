@@ -312,12 +312,13 @@ pub(super) struct ForwardPipelineObjects<B: ResourceBackend> {
 mod assembly;
 pub(in crate::renderer) use assembly::AssembledForwardTarget;
 pub(in crate::renderer) use composed::order_draws as order_forward_draws;
+mod capture_batch;
 mod capture_composed;
+pub(in crate::renderer) use capture_batch::CaptureReceivers;
 mod capture_entry;
 mod capture_execute;
 mod capture_oit_composed;
 mod capture_oit_entry;
-pub(in crate::renderer) use capture_oit_entry::capture_oit_receiver_partition;
 mod capture_oit_execute;
 mod capture_receiver_contribution;
 mod captured;
@@ -345,6 +346,7 @@ mod sampler;
 mod surface_composite;
 pub(in crate::renderer) mod target_admission;
 mod texture_upload;
+mod transparent_order;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
 pub(crate) use sampler::{
@@ -356,9 +358,6 @@ pub(crate) use sampler::{
 };
 mod program;
 mod program_selection;
-pub(in crate::renderer) use capture_entry::{
-    capture_assets, validate_receiver_sources, validate_receiver_view,
-};
 pub(in crate::renderer) use capture_oit_entry::CaptureOitSide;
 pub(in crate::renderer) use captured::CaptureTextureOwner;
 pub use captured::CaptureTextureSlot;

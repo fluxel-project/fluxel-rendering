@@ -208,7 +208,7 @@ where
                 PendingInputs::CaptureForward {
                     _capture_snapshot: capture_snapshot,
                     _capture_inputs: capture_inputs,
-                    _receiver: receiver_input,
+                    _receivers: vec![receiver_input],
                 },
                 capture_frame,
                 receiver_frame,
@@ -226,7 +226,7 @@ where
                 PendingInputs::CaptureForward {
                     _capture_snapshot: capture_snapshot,
                     _capture_inputs: capture_inputs,
-                    _receiver: receiver_input,
+                    _receivers: vec![receiver_input],
                 },
                 capture_frame,
                 receiver_frame,

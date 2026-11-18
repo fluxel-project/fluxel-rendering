@@ -62,10 +62,18 @@ where
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
         let scene_refraction = match (&capture.retained, &receiver.retained) {
-            (PendingInputs::Frame { .. }, PendingInputs::Frame { _inputs, .. })
-                if _inputs.len() == 1 =>
-            {
-                _inputs[0].prepared().uses_scene_refraction()
+            (PendingInputs::Frame { .. }, PendingInputs::Frame { _inputs, .. }) => {
+                let first = _inputs.first().ok_or(Error::InvalidState)?;
+                let scene_refraction = first.prepared().uses_scene_refraction();
+                if _inputs.len() > 1
+                    && (!scene_refraction
+                        || _inputs
+                            .iter()
+                            .any(|input| !input.prepared().uses_scene_refraction()))
+                {
+                    return Err(Error::InvalidState.into());
+                }
+                scene_refraction
             }
             _ => return Err(Error::InvalidState.into()),
         };
@@ -293,16 +301,16 @@ where
         else {
             unreachable!("capture assembly retains its frame inputs");
         };
-        let PendingInputs::Frame { mut _inputs, .. } = receiver.retained else {
+        let PendingInputs::Frame {
+            _inputs: receivers, ..
+        } = receiver.retained
+        else {
             unreachable!("receiver assembly retains its frame inputs");
         };
-        let receiver_input = _inputs
-            .pop()
-            .expect("capture receiver assembly has one draw");
         let retained = PendingInputs::CaptureForward {
             _capture_snapshot: _snapshot,
             _capture_inputs: capture_inputs,
-            _receiver: receiver_input,
+            _receivers: receivers,
         };
         let workload = match composite {
             Some(composite) => PendingWork::CaptureOitSurface {

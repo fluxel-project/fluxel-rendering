@@ -1,11 +1,16 @@
 //! Deferred capture with real opaque or transparent-only producer namespaces.
 
 use super::*;
-use crate::renderer::forward::{
-    CaptureTextureOwner, CaptureTextureSlot, capture_assets, capture_oit_receiver_partition,
-    validate_receiver_sources, validate_receiver_view,
-};
+use crate::renderer::forward::{CaptureReceivers, CaptureTextureOwner, CaptureTextureSlot};
 use std::{num::NonZeroU32, time::Instant};
+
+pub(super) enum CaptureReceiverInput {
+    Forward {
+        partition: crate::preparation::OitDrawPartition,
+        rounds: NonZeroU32,
+    },
+    Deferred(Vec<crate::ForwardDrawInput>),
+}
 
 impl<B> Renderer<B>
 where
@@ -84,6 +89,72 @@ where
         .await
     }
 
+    /// Captures one Deferred producer and composites a same-view batch of
+    /// projected transparent receivers in one Graph submission.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_deferred_capture_batch<V>(
+        &mut self,
+        pipeline: &crate::DeferredCpuPipeline<V>,
+        snapshot: FrameSnapshot<ForwardResources>,
+        view: RenderViewId,
+        visibility: RenderBounds,
+        assets: &ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        receivers: Vec<crate::PreparedCaptureReceiver>,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+    ) -> Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<ForwardResources>,
+    {
+        self.submit_deferred_capture_target_inputs(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            producer_slot,
+            CaptureReceivers::RefractionBatch(receivers),
+            producer_config,
+            receiver_config,
+            None,
+        )
+        .await
+    }
+
+    /// Surface form of [`Self::submit_deferred_capture_batch`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn submit_deferred_capture_batch_surface<V>(
+        &mut self,
+        pipeline: &crate::DeferredCpuPipeline<V>,
+        snapshot: FrameSnapshot<ForwardResources>,
+        view: RenderViewId,
+        visibility: RenderBounds,
+        assets: &ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        receivers: Vec<crate::PreparedCaptureReceiver>,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+        image: SurfaceImage<B>,
+    ) -> Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<ForwardResources>,
+    {
+        self.submit_deferred_capture_target_inputs(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            producer_slot,
+            CaptureReceivers::RefractionBatch(receivers),
+            producer_config,
+            receiver_config,
+            Some(image),
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn submit_deferred_capture_target<V>(
         &mut self,
@@ -94,6 +165,38 @@ where
         assets: &ForwardAssets,
         producer_slot: CaptureTextureSlot,
         receiver: crate::PreparedCaptureReceiver,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+        surface: Option<SurfaceImage<B>>,
+    ) -> Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<ForwardResources>,
+    {
+        self.submit_deferred_capture_target_inputs(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            producer_slot,
+            CaptureReceivers::Single(receiver),
+            producer_config,
+            receiver_config,
+            surface,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_deferred_capture_target_inputs<V>(
+        &mut self,
+        pipeline: &crate::DeferredCpuPipeline<V>,
+        snapshot: FrameSnapshot<ForwardResources>,
+        view: RenderViewId,
+        visibility: RenderBounds,
+        assets: &ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        receivers: CaptureReceivers,
         producer_config: Option<&crate::DualDepthPeelingConfig>,
         receiver_config: Option<&crate::DualDepthPeelingConfig>,
         surface: Option<SurfaceImage<B>>,
@@ -117,13 +220,56 @@ where
         selected
             .validate_for(&snapshot, view)
             .map_err(RendererError::DeferredPipeline)?;
-        let extent = selected.view_record().extent;
         if surface
             .as_ref()
-            .is_some_and(|image| image.extent() != extent)
+            .is_some_and(|image| image.extent() != selected.view_record().extent)
         {
             return Err(Error::InvalidRange.into());
         }
+        let (receiver, retained_assets, scene_refraction) = receivers.prepare(
+            &producer_slot,
+            selected.view_record(),
+            assets,
+            self.environment_irradiance.is_some(),
+            self.environment_specular.is_some(),
+            &mut fluxel_shader::ShaderComposer::new(),
+            receiver_config,
+        )?;
+        self.submit_deferred_capture_prepared(
+            pipeline,
+            snapshot.clone(),
+            selected,
+            assets,
+            producer_slot,
+            receiver,
+            scene_refraction,
+            retained_assets,
+            producer_config,
+            receiver_config,
+            surface,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_deferred_capture_prepared<V>(
+        &mut self,
+        pipeline: &crate::DeferredCpuPipeline<V>,
+        snapshot: FrameSnapshot<ForwardResources>,
+        selected: crate::PreparedFrame<'_, ForwardResources>,
+        assets: &ForwardAssets,
+        producer_slot: CaptureTextureSlot,
+        partition: crate::preparation::OitDrawPartition,
+        scene_refraction: bool,
+        retained_assets: ForwardAssets,
+        producer_config: Option<&crate::DualDepthPeelingConfig>,
+        receiver_config: Option<&crate::DualDepthPeelingConfig>,
+        surface: Option<SurfaceImage<B>>,
+    ) -> Result<Submission, RendererError>
+    where
+        V: crate::VisibilityProvider<ForwardResources>,
+    {
+        let extent = selected.view_record().extent;
         let producer_inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
@@ -135,36 +281,28 @@ where
         if producer_inputs.is_empty() {
             return Err(Error::Unsupported("Deferred capture requires visible geometry").into());
         }
-        let receiver_input = receiver
-            .with_capture_lighting(
-                &mut fluxel_shader::ShaderComposer::new(),
-                self.environment_irradiance.is_some(),
-                self.environment_specular.is_some(),
+        let receiver_blended = partition.draws.iter().any(|input| {
+            matches!(
+                input.prepared().material().surface_policy().alpha_mode,
+                fluxel_material::SurfaceAlphaMode::Blend
+                    | fluxel_material::SurfaceAlphaMode::MaskBlend,
             )
-            .map_err(RendererError::ForwardPreparation)?
-            .into_draw_input();
-        validate_receiver_sources(&receiver_input, &producer_slot)?;
-        validate_receiver_view(&receiver_input, selected.view_record())?;
-        let scene_refraction = receiver_input.prepared().uses_scene_refraction();
-        let receiver_blended = matches!(
-            receiver_input
-                .prepared()
-                .material()
-                .surface_policy()
-                .alpha_mode,
-            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
-        );
-        if let Some(config) = receiver_config
-            .filter(|config| receiver_blended && !config.excludes_source(receiver_input.source()))
-        {
-            config
-                .rounds()
-                .get()
-                .checked_mul(3)
-                .and_then(|passes| passes.checked_add(5))
-                .ok_or(Error::InvalidRange)?;
-            crate::residency::OitPlan::admit(&self.device, extent)?;
-        }
+        });
+        let receiver = if scene_refraction || receiver_blended {
+            let rounds =
+                receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
+            if partition.peel_count != 0 {
+                rounds
+                    .get()
+                    .checked_mul(3)
+                    .and_then(|passes| passes.checked_add(5))
+                    .ok_or(Error::InvalidRange)?;
+                crate::residency::OitPlan::admit(&self.device, extent)?;
+            }
+            CaptureReceiverInput::Forward { partition, rounds }
+        } else {
+            CaptureReceiverInput::Deferred(partition.draws)
+        };
         if scene_refraction {
             super::super::forward::target_admission::admit(
                 &self.device,
@@ -177,7 +315,6 @@ where
             )
             .map_err(|error| self.observe_rhi_error(error))?;
         }
-        let retained_assets = capture_assets(assets, &receiver_input);
         let (producer_inputs, opaque_count, peel_count, rounds) = match producer_config {
             Some(config) => {
                 let partition = super::super::forward::order_forward_oit_draws(
@@ -218,14 +355,14 @@ where
         if opaque_count == 0 {
             return self
                 .submit_forward_only_capture_producer(
-                    snapshot,
+                    snapshot.clone(),
                     producer_inputs,
                     peel_count,
                     rounds,
-                    receiver_input,
+                    receiver,
+                    scene_refraction,
                     producer_slot,
                     &retained_assets,
-                    receiver_config,
                     surface,
                 )
                 .await;
@@ -264,15 +401,11 @@ where
         if scene_refraction {
             capture.retain_deferred_refraction_depth(&producer.gbuffer[2]);
         }
-        if scene_refraction || receiver_blended {
-            let receiver_partition =
-                capture_oit_receiver_partition(receiver_input, receiver_config);
-            let rounds =
-                receiver_config.map_or(NonZeroU32::MIN, crate::DualDepthPeelingConfig::rounds);
+        if let CaptureReceiverInput::Forward { partition, rounds } = receiver {
             let receiver = self
                 .assemble_capture_oit_side(
                     snapshot.clone(),
-                    receiver_partition,
+                    partition,
                     extent,
                     &retained_assets,
                     Some(&capture),
@@ -296,14 +429,14 @@ where
                 )
                 .await;
         }
+        let CaptureReceiverInput::Deferred(receiver_inputs) = receiver else {
+            return Err(Error::InvalidState.into());
+        };
         let receiver = self
-            .prepare_deferred_frames_with_capture(
-                std::slice::from_ref(&receiver_input),
-                Some(&capture),
-            )
+            .prepare_deferred_frames_with_capture(&receiver_inputs, Some(&capture))
             .await?;
         let mut inputs = producer_inputs;
-        inputs.push(receiver_input);
+        inputs.extend(receiver_inputs);
         self.execute_deferred_capture(
             PendingInputs::Frame {
                 _snapshot: snapshot.clone(),

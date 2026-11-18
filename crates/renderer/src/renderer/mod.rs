@@ -156,11 +156,11 @@ pub(super) enum PendingInputs {
         _inputs: Vec<crate::ForwardDrawInput>,
     },
     /// Both scene generations and resolved inputs retained by a same-Graph
-    /// capture producer and receiver until receiver readback completion.
+    /// capture producer and receivers until the terminal completion.
     CaptureForward {
         _capture_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         _capture_inputs: Vec<crate::ForwardDrawInput>,
-        _receiver: crate::ForwardDrawInput,
+        _receivers: Vec<crate::ForwardDrawInput>,
     },
 }
 
