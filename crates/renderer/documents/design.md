@@ -327,6 +327,8 @@ Deferred selects `Rgba16Float` for its admitted lighting attachment. Ordinary
 sorted transparency and environment transmission compose into that same
 attachment, and the final version feeds the terminal. Offscreen output still
 reads the separate RGBA8 destination with its four-byte pixel layout.
+Finite Deferred peeling keeps its resolved product in the lighting attachment
+format. The terminal consumes that product after any excluded sorted draws.
 Ordinary Forward raster and its terminal use one Graph. The processed route
 uses a linear `Rgba16Float` scene attachment and binds either a distinct RGBA8
 readback source or the acquired Surface as the terminal target. Sorted

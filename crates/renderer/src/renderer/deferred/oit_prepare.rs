@@ -34,9 +34,6 @@ where
             opaque_count,
             peel_count,
         } = partition;
-        if self.output_processing().is_some() {
-            return Err(Error::Unsupported("HDR Deferred OIT requires HDR OIT products").into());
-        }
         let transparent_inputs = draws.split_off(opaque_count);
         let opaque_inputs = draws;
         self.deferred_residency.retain_assets(assets);
@@ -55,7 +52,10 @@ where
                 crate::ForwardDepthMode::Depth32LessEqualWrite,
                 assets,
                 None,
-                TextureFormat::Rgba8Unorm,
+                // The overlay continues Deferred's lit scene color rather
+                // than starting a second display-space target. Its OIT
+                // result remains linear HDR until the Deferred terminal.
+                opaque.scene_color.desc.format,
                 started,
                 None,
                 true,

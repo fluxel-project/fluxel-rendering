@@ -131,7 +131,9 @@ impl<B: ResourceBackend> DeferredOitPlan<B> {
             || input.output.desc.array_layers != 1
             || input.output.desc.mip_levels != 1
             || input.output.desc.samples != 1
-            || input.output.desc.format != TextureFormat::Rgba8Unorm
+            // OIT's completed product enters the existing Deferred terminal.
+            // Match the opaque prefix: ordinary RGBA8 or HDR RGBA16F.
+            || input.output.desc.format != opaque.scene_color.desc.format
             || !input
                 .output
                 .desc
