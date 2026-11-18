@@ -1,36 +1,14 @@
 //! Recording one already-compiled capture OIT Graph pass.
 
-use super::shared_record::{
-    self, RasterColorSelection, RasterDepthSelection, RasterSelection, RecordSlots,
-};
+use super::shared_record::{self, RasterColorSelection, RasterDepthSelection, RasterSelection};
 use super::*;
 use crate::graph::oit_record::{OitDepthTargetRef, OitDrawSlots, OitRecordCommands};
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
-    pub(super) fn slots<'a>(&self, slots: &'a CaptureFrameSlots) -> RecordSlots<'a> {
-        RecordSlots {
-            device: self.id.device,
-            topology: FrameTopology::SortedForward,
-            resident_upload_slot: slots.resident_upload,
-            frame_upload_slot: slots.frame_upload,
-            uniform_slot: slots.uniform,
-            environment_upload_slot: slots.environment_upload,
-            specular_upload_slot: slots.specular_upload,
-            specular_view_uniform_slot: slots.specular_view_uniform,
-            stream_slots: &slots.streams,
-            texture_slots: &slots.textures,
-            environment_slot: slots.environment,
-            specular_radiance_slot: slots.specular_radiance,
-            specular_brdf_lut_slot: slots.specular_brdf_lut,
-            depth_slot: slots.depth,
-            target_slot: slots.target,
-            readback_slot: slots.readback,
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_pass(
         &self,
+        device: &Device<B>,
         encoder: &mut CommandEncoder<B>,
         capture: &ForwardFrame<B>,
         receiver: &ForwardFrame<B>,
@@ -38,6 +16,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         receiver_input: Option<&ForwardOitInput<'_, B>>,
         capture_commands: Option<&OitRecordCommands<'_, B>>,
         receiver_commands: Option<&OitRecordCommands<'_, B>>,
+        composite: Option<&crate::renderer::SurfaceCompositeOwner<B>>,
         pass: GraphPass,
     ) -> Result<Option<fluxel_rhi::api::ReadbackTicket<B>>>
     where
@@ -52,7 +31,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture_commands,
             receiver_commands,
             None,
-            None,
+            composite.map(|composite| (device, composite)),
             pass,
         )
     }
@@ -87,7 +66,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             capture_commands,
             receiver_commands,
             Some((image, composite)),
-            Some(device),
+            Some((device, composite)),
             pass,
         )
         .and_then(|ticket| {
@@ -110,7 +89,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         capture_commands: Option<&OitRecordCommands<'_, B>>,
         receiver_commands: Option<&OitRecordCommands<'_, B>>,
         surface: Option<(&SurfaceImage<B>, &crate::renderer::SurfaceCompositeOwner<B>)>,
-        device: Option<&Device<B>>,
+        hdr: Option<(&Device<B>, &crate::renderer::SurfaceCompositeOwner<B>)>,
         pass: GraphPass,
     ) -> Result<Option<fluxel_rhi::api::ReadbackTicket<B>>>
     where
@@ -339,6 +318,28 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                 .record_final_readback(&bindings, encoder, receiver, pass)
                 .map(Some);
         }
+        if let super::capture_oit_declaration::CaptureOitTerminal::HdrReadback(terminal) =
+            self.terminal
+        {
+            if pass == terminal.composite_pass {
+                return self
+                    .record_hdr_terminal(
+                        hdr.ok_or(Error::InvalidState)?.0,
+                        &bindings,
+                        encoder,
+                        receiver,
+                        receiver_input,
+                        terminal,
+                        hdr.ok_or(Error::InvalidState)?.1,
+                    )
+                    .map(|()| None);
+            }
+            if pass == terminal.readback_pass {
+                return self
+                    .record_hdr_readback(&bindings, encoder, receiver, terminal)
+                    .map(Some);
+            }
+        }
         if let (
             super::capture_oit_declaration::CaptureOitTerminal::Surface {
                 pass: terminal,
@@ -348,7 +349,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             },
             Some((image, composite)),
             Some(device),
-        ) = (self.terminal, surface, device)
+        ) = (self.terminal, surface, hdr.map(|(device, _)| device))
         {
             if pass == terminal {
                 return self

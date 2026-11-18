@@ -1,8 +1,30 @@
 //! Native terminal recording for one capture OIT Graph.
 
+use super::shared_record::RecordSlots;
 use super::*;
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
+    pub(super) fn slots<'a>(&self, slots: &'a CaptureFrameSlots) -> RecordSlots<'a> {
+        RecordSlots {
+            device: self.id.device,
+            topology: FrameTopology::SortedForward,
+            resident_upload_slot: slots.resident_upload,
+            frame_upload_slot: slots.frame_upload,
+            uniform_slot: slots.uniform,
+            environment_upload_slot: slots.environment_upload,
+            specular_upload_slot: slots.specular_upload,
+            specular_view_uniform_slot: slots.specular_view_uniform,
+            stream_slots: &slots.streams,
+            texture_slots: &slots.textures,
+            environment_slot: slots.environment,
+            specular_radiance_slot: slots.specular_radiance,
+            specular_brdf_lut_slot: slots.specular_brdf_lut,
+            depth_slot: slots.depth,
+            target_slot: slots.target,
+            readback_slot: slots.readback,
+        }
+    }
+
     pub(super) fn record_final_readback(
         &self,
         bindings: &FrameBindings<'_, B>,
@@ -16,6 +38,48 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         let mut slots = self.slots(&self.receiver);
         slots.target_slot = self.receiver_final;
         shared_record::record_readback(&slots, pass, bindings, encoder, receiver)
+    }
+
+    pub(super) fn record_hdr_terminal(
+        &self,
+        device: &Device<B>,
+        bindings: &FrameBindings<'_, B>,
+        encoder: &mut CommandEncoder<B>,
+        receiver: &ForwardFrame<B>,
+        receiver_input: Option<&ForwardOitInput<'_, B>>,
+        terminal: super::hdr_output::HdrReadbackTerminal,
+        composite: &crate::renderer::SurfaceCompositeOwner<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        let instance = receiver_input.map_or(receiver.frame.target_instance, |input| {
+            input.output.instance
+        });
+        terminal.record(
+            device,
+            bindings,
+            encoder,
+            self.receiver_final,
+            instance,
+            receiver,
+            composite,
+        )
+    }
+
+    pub(super) fn record_hdr_readback(
+        &self,
+        bindings: &FrameBindings<'_, B>,
+        encoder: &mut CommandEncoder<B>,
+        receiver: &ForwardFrame<B>,
+        terminal: super::hdr_output::HdrReadbackTerminal,
+    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
+    where
+        B: ReadbackBackend,
+    {
+        let mut slots = self.slots(&self.receiver);
+        slots.target_slot = terminal.output_slot;
+        shared_record::record_readback(&slots, terminal.readback_pass, bindings, encoder, receiver)
     }
 
     #[allow(clippy::too_many_arguments)]

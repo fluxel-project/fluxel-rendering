@@ -341,6 +341,9 @@ after the excluded sorted draws. The opaque attachment and intermediate
 peeling colors stay in the linear domain.
 Ordinary Forward capture retains the linear format through producer sampling
 and receiver composition. The receiver owns the terminal color conversion.
+For a peeling capture, producer sampling and receiver output each consume
+their own final version after excluded draws. Capture textures use the linear
+scene format through the receiver's material bindings.
 This processing targets SDR sRGB presentation. Native HDR display transfer
 and color-space selection remain separate work.
 

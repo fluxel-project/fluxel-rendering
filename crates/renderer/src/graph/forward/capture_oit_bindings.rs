@@ -219,6 +219,13 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             (super::capture_oit_declaration::CaptureOitTerminal::Readback { .. }, None) => {
                 Vec::new()
             }
+            (super::capture_oit_declaration::CaptureOitTerminal::HdrReadback(terminal), None) => {
+                terminal.append_binding(
+                    receiver.frame.output.as_ref().ok_or(Error::InvalidState)?,
+                    &mut textures,
+                );
+                Vec::new()
+            }
             (
                 super::capture_oit_declaration::CaptureOitTerminal::Surface { slot, .. },
                 Some(image),

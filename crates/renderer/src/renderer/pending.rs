@@ -124,6 +124,8 @@ where
         _receiver_oit: Option<Box<forward::OitFrameResources<B>>>,
         capture_publication: forward::ForwardPublication,
         receiver_publication: forward::ForwardPublication,
+        /// The HDR offscreen terminal's color conversion pipeline/bindings.
+        _composite: Option<SurfaceCompositeOwner<B>>,
         plan: Arc<crate::graph::CaptureOitPlan<B>>,
         extent: [u32; 2],
         row_pitch: u32,

@@ -41,6 +41,7 @@ pub(super) enum CaptureOitTerminal {
     Readback {
         pass: GraphPass,
     },
+    HdrReadback(super::hdr_output::HdrReadbackTerminal),
     Surface {
         pass: GraphPass,
         slot: TextureSlot,
@@ -220,6 +221,16 @@ where
         (raster, color, oit)
     };
     let terminal = match image {
+        None if receiver.frame.target_desc.format == TextureFormat::Rgba16Float => {
+            CaptureOitTerminal::HdrReadback(super::hdr_output::declare_hdr_readback(
+                &mut graph,
+                receiver_final,
+                receiver.frame.output.as_ref().ok_or(Error::InvalidState)?,
+                receiver_handles.readback,
+                receiver.extent,
+                receiver.readback_row_pitch,
+            )?)
+        }
         None => CaptureOitTerminal::Readback {
             pass: declare_readback(
                 &mut graph,

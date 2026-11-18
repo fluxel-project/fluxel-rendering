@@ -102,9 +102,14 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        let terminal_pass = match declaration.terminal {
+        let terminal_passes = match declaration.terminal {
             super::capture_oit_declaration::CaptureOitTerminal::Readback { pass }
-            | super::capture_oit_declaration::CaptureOitTerminal::Surface { pass, .. } => pass,
+            | super::capture_oit_declaration::CaptureOitTerminal::Surface { pass, .. } => {
+                vec![pass]
+            }
+            super::capture_oit_declaration::CaptureOitTerminal::HdrReadback(terminal) => {
+                vec![terminal.composite_pass, terminal.readback_pass]
+            }
         };
         let mut expected = vec![declaration.capture_upload];
         expected.extend(declaration.capture_mips.iter().map(|item| item.pass));
@@ -117,7 +122,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         }
         expected.push(declaration.receiver_raster);
         append_oit_passes(&mut expected, declaration.receiver_oit.as_ref());
-        expected.push(terminal_pass);
+        expected.extend(terminal_passes);
         if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
@@ -207,6 +212,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         if !matches!(
             self.terminal,
             super::capture_oit_declaration::CaptureOitTerminal::Readback { .. }
+                | super::capture_oit_declaration::CaptureOitTerminal::HdrReadback(_)
         ) {
             return Err(Error::InvalidState);
         }

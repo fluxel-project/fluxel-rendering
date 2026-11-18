@@ -7,7 +7,13 @@ use std::time::Instant;
 
 impl<B> Renderer<B>
 where
-    B: ExecutionBackend + ResourceBackend + MappingBackend + ReadbackBackend + RasterBackend,
+    B: ExecutionBackend
+        + ResourceBackend
+        + MappingBackend
+        + ReadbackBackend
+        + RasterBackend
+        + PipelineBackend
+        + ShaderBackend,
 {
     pub(in crate::renderer) async fn execute_capture_oit(
         &mut self,
@@ -72,6 +78,37 @@ where
             }
         };
         let image = present.as_ref().map(PresentBinding::image);
+        // Readback from a linear HDR scene product must go through the same
+        // output terminal as the ordinary Forward capture path. The source is
+        // the receiver's actual final product, which is the OIT output when
+        // peeling was selected and otherwise the receiver color attachment.
+        let offscreen_composite = if image.is_none()
+            && receiver.frame.frame.target_desc.format == TextureFormat::Rgba16Float
+        {
+            match receiver.oit.as_ref() {
+                Some(oit) => Some(
+                    self.oit_offscreen_composite_owner(
+                        &oit.output,
+                        receiver.frame.extent,
+                        TextureFormat::Rgba8Unorm,
+                    )
+                    .await?,
+                ),
+                None => Some(
+                    self.color_composite_from_target(
+                        &receiver.frame.frame.target,
+                        &receiver.frame.frame.target_view,
+                        &receiver.frame.frame.target_desc,
+                        receiver.frame.frame.target_instance,
+                        receiver.frame.extent,
+                        TextureFormat::Rgba8Unorm,
+                    )
+                    .await?,
+                ),
+            }
+        } else {
+            None
+        };
         let declaration = match image {
             Some(image) => crate::graph::CaptureOitPlan::declare_surface_with_capture_contribution(
                 &self.device,
@@ -181,6 +218,7 @@ where
                     ),
                     (None, None) => {
                         if let Some(readback) = plan.record_pass(
+                            &self.device,
                             encoder,
                             &capture.frame,
                             &receiver.frame,
@@ -188,6 +226,7 @@ where
                             receiver_input.as_ref(),
                             capture_commands.as_ref(),
                             receiver_commands.as_ref(),
+                            offscreen_composite.as_ref(),
                             pass,
                         )? {
                             if ticket.is_some() {
@@ -284,6 +323,7 @@ where
                 _receiver_oit: receiver.oit.map(Box::new),
                 capture_publication: capture.publication,
                 receiver_publication: receiver.publication,
+                _composite: offscreen_composite,
                 plan,
                 extent,
                 row_pitch,

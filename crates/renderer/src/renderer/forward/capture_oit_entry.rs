@@ -288,13 +288,18 @@ where
         extent: [u32; 2],
         sampled_target: bool,
     ) -> Result<()> {
+        let hdr = self.output_processing().is_some();
         super::target_admission::admit(
             &self.device,
             crate::FrameTopology::SortedForward,
             extent,
-            TextureFormat::Rgba8Unorm,
+            if hdr {
+                TextureFormat::Rgba16Float
+            } else {
+                TextureFormat::Rgba8Unorm
+            },
             false,
-            sampled_target,
+            sampled_target || hdr,
             true,
         )
     }
@@ -330,7 +335,11 @@ where
                 crate::ForwardDepthMode::Depth32LessEqualWrite,
                 assets,
                 None,
-                TextureFormat::Rgba8Unorm,
+                if self.output_processing().is_some() {
+                    TextureFormat::Rgba16Float
+                } else {
+                    TextureFormat::Rgba8Unorm
+                },
                 started,
                 capture,
                 sampled_target || peel_count != 0,
