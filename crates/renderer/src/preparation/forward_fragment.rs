@@ -10,6 +10,7 @@ use fluxel_shader::{
 };
 
 const ENTRY_UNIT: &str = "renderer-forward-fragment-entry";
+const COLOR_UNIT: &str = "renderer-forward-color";
 const INTERFACE_OPTION: &str = "renderer.forward_fragment_interface";
 
 /// The logical OIT material draw stage.  The Graph owns iteration count; this
@@ -86,10 +87,34 @@ pub(crate) fn with_ordinary_forward_fragment(
         .static_options
         .insert(INTERFACE_OPTION.into(), interface.option_value().into());
     replace_entry(&mut request, ordinary_source(interface));
+    if !request
+        .source_units
+        .iter()
+        .any(|unit| unit.id.0 == COLOR_UNIT)
+    {
+        request.source_units.push(SourceUnit::new(
+            COLOR_UNIT,
+            "fn renderer_forward_color(color: vec4<f32>) -> vec4<f32> { return color; }",
+        ));
+    }
     request
         .static_options
         .insert("renderer.forward_fragment_stage".into(), "ordinary".into());
     request
+}
+
+/// Selects RGB association for this renderer-owned Forward color output.
+pub(super) fn use_premultiplied_rgb(request: &mut ShaderCompositionRequest) {
+    if let Some(unit) = request
+        .source_units
+        .iter_mut()
+        .find(|unit| unit.id.0 == COLOR_UNIT)
+    {
+        *unit = SourceUnit::new(
+            COLOR_UNIT,
+            "fn renderer_forward_color(color: vec4<f32>) -> vec4<f32> { return vec4<f32>(color.rgb * color.a, color.a); }",
+        );
+    }
 }
 
 /// Replaces the ordinary entry with a stage-specific OIT entry while retaining
@@ -178,7 +203,7 @@ fn ordinary_source(interface: ForwardFragmentInterface) -> String {
         interface,
         "@location(0) vec4<f32>",
         "",
-        "return renderer_forward_shade({arguments});",
+        "return renderer_forward_color(renderer_forward_shade({arguments}));",
     )
 }
 
@@ -220,7 +245,7 @@ struct RendererOitPeelOutput {
     @location(2) back: vec4<f32>,
 };"#,
         &format!(
-            r#"let final_color = renderer_forward_shade({{arguments}});
+            r#"let final_color = renderer_forward_color(renderer_forward_shade({{arguments}}));
     var depth = {{position}}.z;
     {depth_rounding}
     let coordinate = vec2<i32>({{position}}.xy);

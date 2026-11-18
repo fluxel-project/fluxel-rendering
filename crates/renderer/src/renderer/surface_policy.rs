@@ -6,7 +6,7 @@
 //! reverses the effective winding, so a cached pipeline cannot reuse the
 //! opposite front-face state.
 
-use fluxel_material::{SurfaceAlphaMode, SurfaceSideOrientation};
+use fluxel_material::{SurfaceAlphaMode, SurfaceBlendMode, SurfaceSideOrientation};
 use fluxel_rhi::{
     api::{
         BlendComponent, BlendFactor, BlendOperation, BlendState, CullMode, Error, FrontFace,
@@ -26,7 +26,7 @@ use crate::{ForwardDrawInput, FrameTopology, RenderTransform};
 pub(crate) struct RasterSurfaceState {
     front_face: FrontFaceState,
     culling: Culling,
-    alpha_blending: bool,
+    blend_mode: Option<SurfaceBlendMode>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -58,7 +58,10 @@ impl RasterSurfaceState {
     }
 
     /// Returns the preliminary primitive with the opposite front-face winding.
-    pub(crate) fn preliminary_primitive(self, mut primary: PrimitiveState) -> Option<PrimitiveState> {
+    pub(crate) fn preliminary_primitive(
+        self,
+        mut primary: PrimitiveState,
+    ) -> Option<PrimitiveState> {
         if self.culling != Culling::SeparateBack {
             return None;
         }
@@ -79,21 +82,26 @@ impl RasterSurfaceState {
         self
     }
 
-    /// Returns Babylon's `ALPHA_COMBINE` fixed-function blend factors.
-    ///
-    /// Color uses straight alpha. Babylon separately adds source and
-    /// destination alpha; it does not use the Porter-Duff alpha factors used
-    /// by its distinct `ALPHA_LAYER_ACCUMULATE` mode.
+    /// Returns Babylon's selected fixed-function blend factors.
     pub(crate) fn blend_state(self) -> Option<BlendState> {
-        self.alpha_blending.then_some(BlendState {
+        let mode = self.blend_mode?;
+        Some(BlendState {
             color: BlendComponent {
-                src_factor: BlendFactor::SrcAlpha,
+                src_factor: if mode.uses_premultiplied_rgb() {
+                    BlendFactor::One
+                } else {
+                    BlendFactor::SrcAlpha
+                },
                 dst_factor: BlendFactor::OneMinusSrcAlpha,
                 operation: BlendOperation::Add,
             },
             alpha: BlendComponent {
                 src_factor: BlendFactor::One,
-                dst_factor: BlendFactor::One,
+                dst_factor: if mode == SurfaceBlendMode::PremultipliedPorterDuff {
+                    BlendFactor::OneMinusSrcAlpha
+                } else {
+                    BlendFactor::One
+                },
                 operation: BlendOperation::Add,
             },
         })
@@ -101,7 +109,7 @@ impl RasterSurfaceState {
 
     /// Opaque and masked fragments can write the selected depth attachment.
     pub(crate) const fn depth_write_enabled(self) -> bool {
-        !self.alpha_blending
+        self.blend_mode.is_none()
     }
 }
 
@@ -114,7 +122,9 @@ impl RasterSurfaceState {
 /// normal transforms and is already rejected by the PBR preparation boundary.
 pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceState {
     let policy = input.prepared().material().surface_policy();
-    let orientation = policy.side_orientation.unwrap_or(input.mesh_side_orientation());
+    let orientation = policy
+        .side_orientation
+        .unwrap_or(input.mesh_side_orientation());
     let clockwise = (orientation == SurfaceSideOrientation::Clockwise)
         ^ (linear_determinant(input.transform()) < 0.0);
     RasterSurfaceState {
@@ -129,10 +139,11 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
             (true, true) => Culling::Front,
             (true, false) => Culling::Back,
         },
-        alpha_blending: matches!(
+        blend_mode: matches!(
             policy.alpha_mode,
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
-        ),
+        )
+        .then_some(policy.blend_mode),
     }
 }
 

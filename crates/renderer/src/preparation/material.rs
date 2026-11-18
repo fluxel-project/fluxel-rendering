@@ -172,6 +172,13 @@ pub(super) fn prepare_compiled_material(
         .static_options
         .get("renderer.emissive")
         .is_some_and(|value| value == "disabled");
+    if material
+        .surface_policy()
+        .blend_mode
+        .uses_premultiplied_rgb()
+    {
+        super::forward_fragment::use_premultiplied_rgb(&mut request);
+    }
     let contribution = material.contribution();
     for (name, value) in contribution.shader_static_options() {
         if let Some(existing) = request.static_options.get(&name) {
@@ -183,13 +190,18 @@ pub(super) fn prepare_compiled_material(
         }
     }
     request.source_units.extend(contribution.source_units());
-    request.bindings.extend(contribution.binding_declarations().into_iter().map(|binding| {
-        if emissive_disabled && binding.group == 0 {
-            binding.with_optional_use()
-        } else {
-            binding
-        }
-    }));
+    request.bindings.extend(
+        contribution
+            .binding_declarations()
+            .into_iter()
+            .map(|binding| {
+                if emissive_disabled && binding.group == 0 {
+                    binding.with_optional_use()
+                } else {
+                    binding
+                }
+            }),
+    );
     request
         .callables
         .extend(contribution.callable_declarations());

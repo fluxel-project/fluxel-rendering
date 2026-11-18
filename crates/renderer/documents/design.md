@@ -644,6 +644,10 @@ uses ordinary sorted Forward before OIT admission; selected-route failures
 remain errors. One submission retains all intermediate/output owners, pipelines
 and groups in its pending Forward workload until covering completion.
 Its sampled opaque target does not enter the ordinary CopySrc frame pool.
+Surface blend policy selects straight RGB with additive alpha, premultiplied
+RGB with additive alpha, or premultiplied RGB with source-over alpha. The
+Forward fragment associates RGB after alpha evaluation. Like Babylon, OIT
+receives that surface output and applies its separate peel accumulation.
 Back accumulation discards zero-alpha layers, matching Babylon's `oitBackBlend`.
 Final alpha uses `front.a + back.a`, as in the scene `DepthPeelingRenderer`'s
 `oitFinal` pass. The back accumulator already contains the opaque scene color.

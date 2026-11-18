@@ -16,6 +16,8 @@ pub use definition::{
     SurfaceOutput,
 };
 pub use nodes::*;
-pub use surface_policy::{SurfaceAlphaMode, SurfacePolicy, SurfaceSideOrientation};
+pub use surface_policy::{
+    SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
+};
 pub use transmission::TransmissionExtensions;
 pub use types::*;

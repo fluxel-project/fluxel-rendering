@@ -16,6 +16,25 @@ pub enum SurfaceAlphaMode {
     MaskBlend,
 }
 
+/// Color and alpha blend factors used for a blend-capable surface.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum SurfaceBlendMode {
+    /// Straight RGB and additive alpha, matching Babylon's `ALPHA_COMBINE`.
+    #[default]
+    Combine,
+    /// Premultiplied RGB and additive alpha.
+    Premultiplied,
+    /// Premultiplied RGB and source-over alpha.
+    PremultipliedPorterDuff,
+}
+
+impl SurfaceBlendMode {
+    /// Returns whether the fragment must multiply RGB by final alpha.
+    pub const fn uses_premultiplied_rgb(self) -> bool {
+        !matches!(self, Self::Combine)
+    }
+}
+
 /// The winding that identifies the front side of a surface.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SurfaceSideOrientation {
@@ -35,6 +54,8 @@ pub enum SurfaceSideOrientation {
 pub struct SurfacePolicy {
     /// Alpha mode selected by the author.
     pub alpha_mode: SurfaceAlphaMode,
+    /// RGB association and blend factors for transparent composition.
+    pub blend_mode: SurfaceBlendMode,
     /// The threshold used by mask modes.
     pub alpha_cutoff: f32,
     /// Whether a consumer should cull back-facing primitives.
@@ -56,6 +77,13 @@ impl SurfacePolicy {
     #[must_use]
     pub fn double_sided() -> Self {
         Self::default().with_double_sided(true)
+    }
+
+    /// Selects the blend factors and fragment RGB association.
+    #[must_use]
+    pub fn with_blend_mode(mut self, mode: SurfaceBlendMode) -> Self {
+        self.blend_mode = mode;
+        self
     }
 
     /// Selects the authored front-side winding for this material.
@@ -85,6 +113,7 @@ impl Default for SurfacePolicy {
     fn default() -> Self {
         Self {
             alpha_mode: SurfaceAlphaMode::Opaque,
+            blend_mode: SurfaceBlendMode::Combine,
             alpha_cutoff: Self::DEFAULT_ALPHA_CUTOFF,
             back_face_culling: true,
             side_orientation: None,
@@ -97,6 +126,7 @@ impl Default for SurfacePolicy {
 impl PartialEq for SurfacePolicy {
     fn eq(&self, other: &Self) -> bool {
         self.alpha_mode == other.alpha_mode
+            && self.blend_mode == other.blend_mode
             && self.alpha_cutoff.to_bits() == other.alpha_cutoff.to_bits()
             && self.back_face_culling == other.back_face_culling
             && self.side_orientation == other.side_orientation
