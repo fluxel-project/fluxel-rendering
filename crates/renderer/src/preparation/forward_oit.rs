@@ -67,6 +67,7 @@ pub(crate) fn prepare_oit_material(
         input.source(),
         input.prepared().uses_environment_irradiance(),
         input.prepared().uses_specular_ibl(),
+        None,
     )?;
     let request = with_oit_forward_fragment(
         request,

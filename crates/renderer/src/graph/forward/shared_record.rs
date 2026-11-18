@@ -354,6 +354,27 @@ pub(super) fn record_raster<B: ResourceBackend>(
 where
     B: RasterBackend,
 {
+    record_raster_with_color_load(
+        slots,
+        pass_id,
+        bindings,
+        encoder,
+        frame,
+        LoadOp::Clear(ClearColor::Float([0.0; 4])),
+    )
+}
+
+pub(super) fn record_raster_with_color_load<B: ResourceBackend>(
+    slots: &RecordSlots<'_>,
+    pass_id: GraphPass,
+    bindings: &FrameBindings<'_, B>,
+    encoder: &mut CommandEncoder<B>,
+    frame: &ForwardFrame<B>,
+    color_load: LoadOp<ClearColor>,
+) -> Result<()>
+where
+    B: RasterBackend,
+{
     validate_forward_topology(slots.topology, frame.draws.len(), frame.draw_batches.len())?;
     validate_batches(frame)?;
     if frame
@@ -391,7 +412,7 @@ where
                 texture: &frame.frame.target,
                 view: &frame.frame.target_view,
                 instance: frame.frame.target_instance,
-                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                load: color_load,
                 read_write: slots.topology == FrameTopology::SortedForward,
             },
             depth,

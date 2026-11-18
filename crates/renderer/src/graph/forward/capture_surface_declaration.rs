@@ -7,6 +7,7 @@ use super::capture_declaration::{
 use super::*;
 use fluxel_rhi::api::TextureDimension;
 
+use super::capture_terminal::declare_capture_background_copy;
 pub(crate) struct CaptureForwardSurfaceDeclaration {
     pub(super) graph: GraphBuilder,
     pub(super) lane: LaneId,
@@ -15,6 +16,7 @@ pub(crate) struct CaptureForwardSurfaceDeclaration {
     pub(super) capture_raster: GraphPass,
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
+    pub(super) receiver_background_copy: Option<GraphPass>,
     pub(super) receiver_raster: GraphPass,
     pub(super) composite: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -37,6 +39,7 @@ pub(super) fn declare_capture_surface_forward<B, Capture, Receiver>(
     image: &SurfaceImage<B>,
     capture_topology: FrameTopology,
     receiver_topology: FrameTopology,
+    preserve_capture_background: bool,
     capture_contribute: Capture,
     receiver_contribute: Receiver,
 ) -> std::result::Result<CaptureForwardSurfaceDeclaration, ForwardPlanBuildError>
@@ -107,8 +110,16 @@ where
         import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
-    let (receiver_handles, receiver_mip_generations) =
+    let (mut receiver_handles, receiver_mip_generations) =
         declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
+    let receiver_background_copy = preserve_capture_background
+        .then(|| {
+            declare_capture_background_copy(&mut graph, capture_target, receiver_handles.target)
+        })
+        .transpose()?;
+    if let Some((_, target)) = receiver_background_copy {
+        receiver_handles.target = target;
+    }
     let (receiver_raster, receiver_target) = declare_raster(
         &mut graph,
         &receiver_spec,
@@ -161,6 +172,7 @@ where
         capture_raster,
         receiver_upload,
         receiver_mip_generations,
+        receiver_background_copy: receiver_background_copy.map(|(pass, _)| pass),
         receiver_raster,
         composite,
         capture: capture_slots,

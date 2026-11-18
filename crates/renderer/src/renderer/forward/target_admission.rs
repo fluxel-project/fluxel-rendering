@@ -24,6 +24,7 @@ pub(super) fn admit_assembly<B: ResourceBackend>(
         format,
         imported_surface,
         sampled_target,
+        inputs.iter().any(|input| input.prepared().uses_scene_refraction()),
     )
 }
 
@@ -35,6 +36,7 @@ pub(super) fn admit<B: ResourceBackend>(
     format: TextureFormat,
     imported_surface: bool,
     sampled_target: bool,
+    copy_destination: bool,
 ) -> Result<(), Error> {
     let usage = if imported_surface {
         TextureUsage::RENDER_ATTACHMENT
@@ -42,6 +44,9 @@ pub(super) fn admit<B: ResourceBackend>(
         let mut usage = TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC;
         if sampled_target {
             usage |= TextureUsage::TEXTURE_BINDING;
+        }
+        if copy_destination {
+            usage |= TextureUsage::COPY_DST;
         }
         usage
     };

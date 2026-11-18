@@ -41,7 +41,8 @@ pub use preparation::{
     GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,
     GeometryStreamBinding, LinearSpecularLod, MaterialPreparationError, PreparedCaptureReceiver,
     PreparedGeometry, PreparedGeometryBindings, PreparedMaterial, SpecularIblImage, SpecularIblMip,
-    TextureEncoding, prepare_forward, prepare_forward_capture_receiver, prepare_material,
+    TextureEncoding, prepare_forward, prepare_forward_capture_receiver,
+    prepare_forward_scene_refraction_receiver, prepare_material,
 };
 pub use render_scene::{
     ChangeReceipt, DirtyRange, FrameSnapshot, RenderBounds, RenderChange, RenderChangeSet,

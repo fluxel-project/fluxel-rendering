@@ -18,6 +18,7 @@ use crate::preparation::forward_fragment::{
 };
 
 mod direct_light;
+mod scene_refraction;
 pub(crate) mod specular;
 mod templates;
 

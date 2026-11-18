@@ -31,6 +31,7 @@ where
         alignment: u64,
         surface: bool,
         sampled_target: bool,
+        copy_destination: bool,
         attachments: Option<&BorrowedForwardAttachments<B>>,
     ) -> std::result::Result<PreparedFrameBuffers<B>, RendererError> {
         if let Some(attachments) = attachments {
@@ -65,7 +66,7 @@ where
                 textures: 0,
             });
         }
-        if !sampled_target {
+        if !sampled_target && !copy_destination {
             if let Some(offscreen) = self.forward_frames[slot].take().filter(|buffers| {
                 crate::frame_data::pool::compatible(
                     buffers,
@@ -89,7 +90,7 @@ where
                 });
             }
         }
-        let plan = crate::residency::plan_forward_frame(
+        let mut plan = crate::residency::plan_forward_frame(
             extent,
             uniform_len,
             uniform_len,
@@ -99,6 +100,9 @@ where
             sampled_target,
         )
         .map_err(|error| self.observe_forward_error("frame planning", error))?;
+        if copy_destination {
+            plan.target_desc.usage |= TextureUsage::COPY_DST;
+        }
         let bytes = plan
             .upload_desc
             .size

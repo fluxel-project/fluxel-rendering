@@ -1,6 +1,21 @@
 //! Capture-product preparation for the bounded Forward receiver.
 
+use fluxel_material::{MaterialCompiler, MaterialResourceKind};
+
 use super::*;
+use crate::preparation::material::prepare_compiled_material;
+
+#[derive(Clone)]
+struct SceneRefractionBinding {
+    texture: String,
+    sampler: String,
+}
+
+impl SceneRefractionBinding {
+    fn names(&self) -> (&str, &str) {
+        (&self.texture, &self.sampler)
+    }
+}
 
 /// The declared source for a Forward material's sampled color input.
 #[derive(Clone, Debug)]
@@ -42,6 +57,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) view: RenderView,
     pub(crate) clip_from_local: [[f32; 4]; 4],
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
+    scene_refraction: Option<SceneRefractionBinding>,
 }
 
 impl PreparedCaptureReceiver {
@@ -65,6 +81,22 @@ impl PreparedCaptureReceiver {
 
     /// Re-prepares this retained receiver for the selected lighting route.
     pub(crate) fn with_lighting(
+        self,
+        composer: &mut ShaderComposer,
+        environment: bool,
+        specular: bool,
+    ) -> Result<Self, ForwardPreparationError> {
+        if self.scene_refraction.is_some() {
+            return Err(
+                ForwardPreparationError::UnsupportedSceneRefractionReceiver {
+                    source: self.source,
+                },
+            );
+        }
+        self.with_capture_lighting(composer, environment, specular)
+    }
+
+    pub(crate) fn with_capture_lighting(
         mut self,
         composer: &mut ShaderComposer,
         environment: bool,
@@ -77,6 +109,9 @@ impl PreparedCaptureReceiver {
             self.source,
             environment,
             specular,
+            self.scene_refraction
+                .as_ref()
+                .map(SceneRefractionBinding::names),
         )?;
         let prepared = prepare_material(
             &self.material,
@@ -124,6 +159,51 @@ pub fn prepare_forward_capture_receiver(
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
+    prepare_capture_receiver(
+        view, source, order, resources, transform, assets, composer, None,
+    )
+}
+
+/// Prepares one PBR receiver that refracts an explicitly named capture texture.
+///
+/// Select a texture resource bound to a capture slot in `resources`. The
+/// ordinary Forward capture producer supplies that slot. Transmission and an
+/// ordinary material sampler must be declared, and the submitted renderer
+/// must provide the specular BRDF environment used for surface reflectance.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_forward_scene_refraction_receiver(
+    view: &RenderView,
+    source: ForwardDrawSource,
+    order: i64,
+    resources: &ForwardCaptureResources,
+    transform: RenderTransform,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    refraction_texture: &str,
+) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
+    prepare_capture_receiver(
+        view,
+        source,
+        order,
+        resources,
+        transform,
+        assets,
+        composer,
+        Some(refraction_texture),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_capture_receiver(
+    view: &RenderView,
+    source: ForwardDrawSource,
+    order: i64,
+    resources: &ForwardCaptureResources,
+    transform: RenderTransform,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    refraction_texture: Option<&str>,
+) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     if view.extent.contains(&0) || !finite_transform(view.transform) {
         return Err(ForwardPreparationError::InvalidView);
     }
@@ -135,18 +215,23 @@ pub fn prepare_forward_capture_receiver(
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
+    let compiled = MaterialCompiler::compile_for(&material)
+        .map_err(MaterialPreparationError::Material)
+        .map_err(ForwardPreparationError::Material)?;
+    let scene_refraction = refraction_texture
+        .map(|name| scene_refraction_binding(&compiled, resources, name, source))
+        .transpose()?;
     let request = material_request(
         material.value(),
         &geometry.value().layout,
         view,
         source,
         false,
-        // This constructor prepares a logical receiver before a Renderer is
-        // available. Declare its required environment route here; with_lighting
-        // must still admit the actual selected environment before allocation.
+        // The actual environment is validated again at submission.
         material.value().transmission_extensions().is_some(),
+        scene_refraction.as_ref().map(SceneRefractionBinding::names),
     )?;
-    let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
+    let prepared = prepare_compiled_material(compiled, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
@@ -191,6 +276,36 @@ pub fn prepare_forward_capture_receiver(
         view: view.clone(),
         clip_from_local,
         normal_from_local,
+        scene_refraction,
+    })
+}
+
+fn scene_refraction_binding(
+    material: &fluxel_material::CompiledMaterialVariant,
+    resources: &ForwardCaptureResources,
+    texture: &str,
+    source: ForwardDrawSource,
+) -> Result<SceneRefractionBinding, ForwardPreparationError> {
+    let invalid = ForwardPreparationError::InvalidSceneRefractionSource { source };
+    let bindings = &material.contribution().bindings;
+    if material.transmission_extensions().is_none()
+        || !bindings.iter().any(|binding| {
+            binding.name == texture && binding.kind == MaterialResourceKind::Texture2dF32
+        })
+        || !resources.textures.iter().any(|binding| {
+            binding.resource == texture
+                && matches!(binding.source, ForwardTextureSource::CaptureSlot(_))
+        })
+    {
+        return Err(invalid);
+    }
+    let sampler = bindings
+        .iter()
+        .find(|binding| binding.kind == MaterialResourceKind::Sampler { comparison: false })
+        .ok_or(invalid)?;
+    Ok(SceneRefractionBinding {
+        texture: texture.to_owned(),
+        sampler: sampler.name.clone(),
     })
 }
 

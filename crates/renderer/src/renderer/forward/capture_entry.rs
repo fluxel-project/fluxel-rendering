@@ -60,7 +60,7 @@ where
             return Err(Error::InvalidRange.into());
         }
         let receiver_input = receiver
-            .with_lighting(
+            .with_capture_lighting(
                 &mut fluxel_shader::ShaderComposer::new(),
                 self.environment_irradiance.is_some(),
                 self.environment_specular.is_some(),
@@ -70,9 +70,7 @@ where
         validate_receiver_sources(&receiver_input, &producer_slot)?;
         let receiver_topology = receiver_topology(&receiver_input)?;
         let retained_assets = capture_assets(assets, &receiver_input);
-        if receiver_input.extent() != extent {
-            return Err(Error::InvalidRange.into());
-        }
+        validate_receiver_view(&receiver_input, selected.view_record())?;
         let capture_inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,
             assets,
@@ -154,7 +152,7 @@ where
         .map_err(RendererError::ForwardPreparation)?;
         let extent = selected.view_record().extent;
         let receiver_input = receiver
-            .with_lighting(
+            .with_capture_lighting(
                 &mut fluxel_shader::ShaderComposer::new(),
                 self.environment_irradiance.is_some(),
                 self.environment_specular.is_some(),
@@ -164,9 +162,7 @@ where
         validate_receiver_sources(&receiver_input, &producer_slot)?;
         let receiver_topology = receiver_topology(&receiver_input)?;
         let retained_assets = capture_assets(assets, &receiver_input);
-        if receiver_input.extent() != extent {
-            return Err(Error::InvalidRange.into());
-        }
+        validate_receiver_view(&receiver_input, selected.view_record())?;
         let capture_inputs =
             super::composed::order_draws(pipeline, &selected, capture_inputs, topology)
                 .map_err(RendererError::ForwardPipeline)?;
@@ -194,16 +190,35 @@ where
     }
 }
 
+pub(super) fn validate_receiver_view(
+    receiver: &crate::ForwardDrawInput,
+    producer: &crate::RenderView,
+) -> std::result::Result<(), RendererError> {
+    if receiver.extent() != producer.extent {
+        return Err(Error::InvalidRange.into());
+    }
+    if receiver.prepared().uses_scene_refraction()
+        && (receiver.view().transform.columns() != producer.transform.columns()
+            || receiver.view().shading_camera != producer.shading_camera)
+    {
+        return Err(Error::InvalidRange.into());
+    }
+    Ok(())
+}
+
 pub(in crate::renderer) fn receiver_topology(
     receiver: &crate::ForwardDrawInput,
 ) -> std::result::Result<crate::FrameTopology, RendererError> {
     super::composed::validate_transparent_input(receiver)
         .map_err(RendererError::ForwardPipeline)?;
     Ok(
-        if matches!(
-            receiver.prepared().material().surface_policy().alpha_mode,
-            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend
-        ) {
+        if receiver.prepared().uses_scene_refraction()
+            || matches!(
+                receiver.prepared().material().surface_policy().alpha_mode,
+                fluxel_material::SurfaceAlphaMode::Blend
+                    | fluxel_material::SurfaceAlphaMode::MaskBlend
+            )
+        {
             crate::FrameTopology::SortedForward
         } else {
             crate::FrameTopology::OpaqueForward

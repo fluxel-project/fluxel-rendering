@@ -146,15 +146,13 @@ where
         let specular = self.environment_specular.is_some();
         let mut composer = fluxel_shader::ShaderComposer::new();
         let receiver_input = receiver
-            .with_lighting(&mut composer, environment, specular)
+            .with_capture_lighting(&mut composer, environment, specular)
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         super::capture_entry::validate_receiver_sources(&receiver_input, &producer_slot)?;
         let receiver_topology = super::capture_entry::receiver_topology(&receiver_input)?;
         let retained_assets = super::capture_entry::capture_assets(assets, &receiver_input);
-        if receiver_input.extent() != extent {
-            return Err(Error::InvalidRange.into());
-        }
+        super::capture_entry::validate_receiver_view(&receiver_input, selected.view_record())?;
 
         let mut capture_inputs = crate::preparation::prepare_forward_with_lighting(
             &selected,

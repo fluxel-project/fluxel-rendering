@@ -132,6 +132,16 @@ pub enum ForwardPreparationError {
         /// Draw requesting environment refraction.
         source: ForwardDrawSource,
     },
+    /// The selected scene refraction texture and sampler must be actual material bindings.
+    InvalidSceneRefractionSource {
+        /// Draw requesting the capture texture.
+        source: ForwardDrawSource,
+    },
+    /// The submitted pipeline does not consume a scene-color refraction receiver.
+    UnsupportedSceneRefractionReceiver {
+        /// Draw requesting a capture receiver.
+        source: ForwardDrawSource,
+    },
     /// Material, Shader, or geometry logical validation failed.
     Material(MaterialPreparationError),
     /// Texture dimensions or payload length are invalid.

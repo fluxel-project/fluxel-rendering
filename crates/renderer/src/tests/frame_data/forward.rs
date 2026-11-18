@@ -6,6 +6,7 @@ fn transform_and_tint_have_distinct_aligned_physical_ranges() {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
         world_from_local: None,
+        clip_from_world: None,
         tint: [0.25, 0.5, 0.75, 1.0],
         shading_camera: None,
     };
@@ -30,6 +31,7 @@ fn empty_input_and_capacity_failures_remain_bounded() {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
         world_from_local: None,
+        clip_from_world: None,
         tint: [1.0; 4],
         shading_camera: None,
     };
@@ -45,6 +47,7 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: None,
         world_from_local: None,
+        clip_from_world: None,
         tint: [0.25, 0.5, 0.75, 1.0],
         shading_camera: None,
     };
@@ -57,17 +60,19 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
             [0.0, 0.0, 0.0, 1.0],
         ]),
         world_from_local: Some(crate::RenderTransform::identity().columns()),
+        clip_from_world: Some(crate::RenderTransform::identity().columns()),
         tint: [1.0; 4],
         shading_camera: None,
     };
-    let packed = pack_forward_uniforms(&[color, normal], 256, 1024).unwrap();
+    let packed = pack_forward_uniforms(&[color, normal], 256, 2048).unwrap();
     // Color consumes clip only. The normal surface also consumes normal and
-    // world matrices: the complete PBR payload must be declared before its tint binding.
-    assert_eq!(packed.transforms, [0..64, 512..512 + PBR_TRANSFORM_BYTES]);
-    assert_eq!(packed.tints, [256..272, 768..784]);
-    assert_eq!(packed.bytes.len(), 1024);
-    assert_eq!(&packed.bytes[576..580], &2.0f32.to_le_bytes());
-    let world: Vec<_> = packed.bytes[640..704]
+    // world and view-projection matrices: the complete PBR payload must be
+    // declared before its tint binding.
+    assert_eq!(packed.transforms, [0..64, 768..768 + PBR_TRANSFORM_BYTES]);
+    assert_eq!(packed.tints, [512..528, 1280..1296]);
+    assert_eq!(packed.bytes.len(), 1536);
+    assert_eq!(&packed.bytes[832..836], &2.0f32.to_le_bytes());
+    let world: Vec<_> = packed.bytes[896..960]
         .chunks_exact(4)
         .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
         .collect();
@@ -77,14 +82,19 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
         ]
     );
-    assert!(packed.bytes[720..768].iter().all(|byte| *byte == 0));
-    assert!(packed.bytes[64..256].iter().all(|byte| *byte == 0));
+    let clip_from_world: Vec<_> = packed.bytes[976..1040]
+        .chunks_exact(4)
+        .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
+        .collect();
+    assert_eq!(clip_from_world, world);
+    assert!(packed.bytes[64..512].iter().all(|byte| *byte == 0));
     assert!(matches!(
         pack_forward_uniforms(
             &[ForwardUniformInput {
                 transform: crate::RenderTransform::identity().columns(),
                 normal_from_local: Some(crate::RenderTransform::identity().columns()),
                 world_from_local: Some(crate::RenderTransform::identity().columns()),
+                clip_from_world: Some(crate::RenderTransform::identity().columns()),
                 tint: [1.0; 4],
                 shading_camera: None,
             }],
@@ -101,6 +111,7 @@ fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
         transform: crate::RenderTransform::identity().columns(),
         normal_from_local: Some([[f32::NAN, 0.0, 0.0, 0.0], [0.0; 4], [0.0; 4], [0.0; 4]]),
         world_from_local: Some(crate::RenderTransform::identity().columns()),
+        clip_from_world: Some(crate::RenderTransform::identity().columns()),
         tint: [1.0; 4],
         shading_camera: None,
     };
@@ -111,15 +122,20 @@ fn non_finite_normal_matrix_is_rejected_before_byte_allocation() {
 }
 
 #[test]
-fn pbr_normal_and_world_matrices_must_be_paired() {
+fn pbr_transform_matrices_must_be_paired() {
     let matrix = crate::RenderTransform::identity().columns();
-    for (normal_from_local, world_from_local) in [(Some(matrix), None), (None, Some(matrix))] {
+    for (normal_from_local, world_from_local, clip_from_world) in [
+        (Some(matrix), None, Some(matrix)),
+        (Some(matrix), Some(matrix), None),
+        (None, Some(matrix), Some(matrix)),
+    ] {
         assert!(matches!(
             pack_forward_uniforms(
                 &[ForwardUniformInput {
                     transform: matrix,
                     normal_from_local,
                     world_from_local,
+                    clip_from_world,
                     tint: [1.0; 4],
                     shading_camera: None,
                 }],

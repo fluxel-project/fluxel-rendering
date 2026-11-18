@@ -129,7 +129,7 @@ pub(crate) fn require_supported_surface_modes(
             || (prepared.uses_transmission() && !prepared.uses_specular_ibl())
         {
             return Err(Error::Unsupported(
-                "Forward transmission requires its environment-refraction shader route",
+                "Forward transmission requires its selected refraction shader route",
             ));
         }
     }

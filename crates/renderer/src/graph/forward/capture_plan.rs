@@ -14,6 +14,7 @@ pub(crate) struct CaptureForwardPlan<B: ResourceBackend> {
     pub(super) capture_raster: GraphPass,
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
+    pub(super) receiver_background_copy: Option<GraphPass>,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -34,6 +35,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
         receiver: &ForwardFrame<B>,
         capture_topology: FrameTopology,
         receiver_topology: FrameTopology,
+        preserve_capture_background: bool,
         capture_contribute: C,
         receiver_contribute: R,
     ) -> std::result::Result<CaptureForwardDeclaration, ForwardPlanBuildError>
@@ -51,6 +53,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             receiver,
             capture_topology,
             receiver_topology,
+            preserve_capture_background,
             capture_contribute,
             receiver_contribute,
         )
@@ -82,6 +85,7 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             capture_raster: declaration.capture_raster,
             receiver_upload: declaration.receiver_upload,
             receiver_mip_generations: declaration.receiver_mip_generations,
+            receiver_background_copy: declaration.receiver_background_copy,
             receiver_raster: declaration.receiver_raster,
             receiver_readback: declaration.receiver_readback,
             capture: declaration.capture,
@@ -135,8 +139,17 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
             plan: self.id,
             index: self.receiver_upload_step().index
                 + 1
-                + u32::try_from(self.receiver_mip_generations.len()).unwrap_or(u32::MAX),
+                + u32::try_from(self.receiver_mip_generations.len()).unwrap_or(u32::MAX)
+                + u32::from(self.receiver_background_copy.is_some()),
         }
+    }
+    pub(crate) fn receiver_background_copy_step(&self) -> Option<StepId> {
+        self.receiver_background_copy.map(|_| StepId {
+            plan: self.id,
+            index: self.receiver_upload_step().index
+                + 1
+                + u32::try_from(self.receiver_mip_generations.len()).unwrap_or(u32::MAX),
+        })
     }
     pub(crate) fn receiver_mip_generation_step(&self, index: usize) -> Result<StepId> {
         if index >= self.receiver_mip_generations.len() {
@@ -184,7 +197,9 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
 impl<B: ResourceBackend> CaptureForwardPlan<B> {
     fn accepted_steps(&self) -> Vec<StepId> {
         let mut steps = Vec::with_capacity(
-            5 + self.capture_mip_generations.len() + self.receiver_mip_generations.len(),
+            5 + self.capture_mip_generations.len()
+                + self.receiver_mip_generations.len()
+                + usize::from(self.receiver_background_copy.is_some()),
         );
         steps.push(self.capture_upload_step());
         for index in 0..self.capture_mip_generations.len() {
@@ -201,6 +216,9 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
                     .expect("bounded by length"),
             );
         }
+        if let Some(step) = self.receiver_background_copy_step() {
+            steps.push(step);
+        }
         steps.push(self.receiver_raster_step());
         steps.push(self.receiver_readback_step());
         steps
@@ -209,7 +227,9 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
 
 fn declared_passes(declaration: &CaptureForwardDeclaration) -> Vec<GraphPass> {
     let mut passes = Vec::with_capacity(
-        5 + declaration.capture_mip_generations.len() + declaration.receiver_mip_generations.len(),
+        5 + declaration.capture_mip_generations.len()
+            + declaration.receiver_mip_generations.len()
+            + usize::from(declaration.receiver_background_copy.is_some()),
     );
     passes.push(declaration.capture_upload);
     passes.extend(
@@ -226,6 +246,9 @@ fn declared_passes(declaration: &CaptureForwardDeclaration) -> Vec<GraphPass> {
             .iter()
             .map(|generation| generation.pass),
     );
+    if let Some(copy) = declaration.receiver_background_copy {
+        passes.push(copy);
+    }
     passes.push(declaration.receiver_raster);
     passes.push(declaration.receiver_readback);
     passes

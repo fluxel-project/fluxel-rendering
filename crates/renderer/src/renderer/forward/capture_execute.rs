@@ -66,6 +66,7 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
+        let preserve_capture_background = receiver_input.prepared().uses_scene_refraction();
         // The receiver is assembled after its producer, but its target facts
         // are already known. Admit a transparent receiver before any producer
         // allocation so an unsupported final target cannot strand that work.
@@ -76,6 +77,7 @@ where
             TextureFormat::Rgba8Unorm,
             false,
             surface.is_some(),
+            preserve_capture_background,
         )
         .map_err(|error| self.observe_forward_error("capture receiver blend admission", error))?;
         let capture = self
@@ -201,6 +203,7 @@ where
                 image,
                 capture_topology,
                 receiver_topology,
+                preserve_capture_background,
                 capture_contribute,
             )
             .await
@@ -216,6 +219,7 @@ where
                 (capture_publication, receiver_publication),
                 capture_topology,
                 receiver_topology,
+                preserve_capture_background,
                 capture_contribute,
             )
             .await
@@ -276,6 +280,7 @@ where
         publications: (ForwardPublication, ForwardPublication),
         capture_topology: crate::FrameTopology,
         receiver_topology: crate::FrameTopology,
+        preserve_capture_background: bool,
         capture_contribute: C,
     ) -> std::result::Result<super::Submission, RendererError>
     where
@@ -293,6 +298,7 @@ where
             &receiver,
             capture_topology,
             receiver_topology,
+            preserve_capture_background,
             capture_contribute,
             |context| receiver_contribution(context, receiver_topology),
         )
@@ -362,7 +368,16 @@ where
             }
             Ok(())
         });
-        let fourth = receiver_mips.and_then(|()| {
+        let background = receiver_mips.and_then(|()| {
+            if let Some(step) = plan.receiver_background_copy_step() {
+                execution.commands(step, |encoder| {
+                    plan.record_receiver_background_copy(encoder, &capture, &receiver)
+                })
+            } else {
+                Ok(())
+            }
+        });
+        let fourth = background.and_then(|()| {
             execution.commands(plan.receiver_raster_step(), |encoder| {
                 plan.record_receiver_raster(encoder, &capture, &receiver)
             })
@@ -404,6 +419,7 @@ where
         image: SurfaceImage<B>,
         capture_topology: crate::FrameTopology,
         receiver_topology: crate::FrameTopology,
+        preserve_capture_background: bool,
         capture_contribute: C,
     ) -> std::result::Result<super::Submission, RendererError>
     where
@@ -420,6 +436,7 @@ where
             &image,
             capture_topology,
             receiver_topology,
+            preserve_capture_background,
             capture_contribute,
             |context| receiver_contribution(context, receiver_topology),
         )
@@ -512,7 +529,21 @@ where
             }
             Ok(())
         });
-        let d = receiver_mips.and_then(|()| {
+        let background = receiver_mips.and_then(|()| {
+            if let Some(step) = plan.receiver_background_copy_step() {
+                execution.commands(step, |encoder| {
+                    plan.record_receiver_background_copy(
+                        encoder,
+                        &capture,
+                        &receiver,
+                        present_image,
+                    )
+                })
+            } else {
+                Ok(())
+            }
+        });
+        let d = background.and_then(|()| {
             execution.commands(plan.receiver_raster_step(), |e| {
                 plan.record_receiver_raster(e, &capture, &receiver, present_image)
             })

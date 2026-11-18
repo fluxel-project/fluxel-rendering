@@ -21,6 +21,7 @@ mod capture_specular_bindings;
 mod capture_surface_declaration;
 mod capture_surface_plan;
 mod capture_surface_record;
+mod capture_terminal;
 mod capture_upload;
 mod declaration;
 mod offscreen_bindings;

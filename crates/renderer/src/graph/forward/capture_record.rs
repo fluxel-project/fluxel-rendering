@@ -119,12 +119,44 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
     where
         B: RasterBackend,
     {
+        let slots = self.record_slots(&self.receiver, self.receiver_topology);
+        if self.receiver_background_copy.is_some() {
+            return shared_record::record_raster_with_color_load(
+                &slots,
+                self.receiver_raster,
+                &self.bindings(capture, receiver)?,
+                encoder,
+                receiver,
+                LoadOp::Load,
+            );
+        }
         shared_record::record_raster(
-            &self.record_slots(&self.receiver, self.receiver_topology),
+            &slots,
             self.receiver_raster,
             &self.bindings(capture, receiver)?,
             encoder,
             receiver,
+        )
+    }
+
+    pub(crate) fn record_receiver_background_copy(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        capture: &ForwardFrame<B>,
+        receiver: &ForwardFrame<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let pass_id = self.receiver_background_copy.ok_or(Error::InvalidState)?;
+        let bindings = self.bindings(capture, receiver)?;
+        super::capture_terminal::record_background_copy(
+            &bindings,
+            pass_id,
+            encoder,
+            self.capture.target,
+            self.receiver.target,
+            capture.extent,
         )
     }
 

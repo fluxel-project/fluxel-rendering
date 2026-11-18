@@ -29,6 +29,7 @@ pub struct PreparedMaterial {
     environment_irradiance: bool,
     specular_ibl: bool,
     transmission: bool,
+    scene_refraction: bool,
     oit_fragment: Option<(OitDrawStage, OitDepthPrecision)>,
     binding_schema: Option<MaterialBindingSchema>,
 }
@@ -58,6 +59,10 @@ impl PreparedMaterial {
 
     pub(crate) fn uses_transmission(&self) -> bool {
         self.transmission
+    }
+
+    pub(crate) fn uses_scene_refraction(&self) -> bool {
+        self.scene_refraction
     }
 
     /// Returns the renderer-owned OIT shader stage and its admitted extrema
@@ -145,10 +150,19 @@ pub fn prepare_material(
     snapshot: &AssetSnapshot<MaterialAsset, MaterialDefinition>,
     geometry: &GeometryLayout,
     composer: &mut ShaderComposer,
-    mut request: ShaderCompositionRequest,
+    request: ShaderCompositionRequest,
 ) -> Result<PreparedMaterial, MaterialPreparationError> {
     let material =
         MaterialCompiler::compile_for(snapshot).map_err(MaterialPreparationError::Material)?;
+    prepare_compiled_material(material, geometry, composer, request)
+}
+
+pub(super) fn prepare_compiled_material(
+    material: CompiledMaterialVariant,
+    geometry: &GeometryLayout,
+    composer: &mut ShaderComposer,
+    mut request: ShaderCompositionRequest,
+) -> Result<PreparedMaterial, MaterialPreparationError> {
     let contribution = material.contribution();
     for (name, value) in contribution.shader_static_options() {
         if let Some(existing) = request.static_options.get(&name) {
@@ -208,10 +222,13 @@ pub fn prepare_material(
         .static_options
         .get("renderer.specular_ibl")
         .is_some_and(|value| value == "latlong-linear-roughness-lod-height-correlated-v1");
-    let transmission = request
+    let transmission_route = request
         .static_options
         .get("renderer.transmission")
-        .is_some_and(|value| value == "environment-refraction-beer-lambert-v1");
+        .map(String::as_str);
+    let scene_refraction = transmission_route == Some("scene-color-projected-v1");
+    let transmission =
+        scene_refraction || transmission_route == Some("environment-refraction-beer-lambert-v1");
     if transmission && !specular_ibl {
         return Err(MaterialPreparationError::InvalidEnvironmentRoute);
     }
@@ -252,6 +269,7 @@ pub fn prepare_material(
         environment_irradiance,
         specular_ibl,
         transmission,
+        scene_refraction,
         oit_fragment,
         binding_schema: None,
     })

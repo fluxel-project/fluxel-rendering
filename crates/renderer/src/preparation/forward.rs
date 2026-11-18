@@ -95,7 +95,7 @@ mod forward_material_request;
 pub(crate) use forward_capture::ResolvedForwardTexture;
 pub use forward_capture::{
     ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
-    prepare_forward_capture_receiver,
+    prepare_forward_capture_receiver, prepare_forward_scene_refraction_receiver,
 };
 use forward_material_request::material_request;
 
@@ -365,6 +365,7 @@ fn prepare_draw(
         source,
         environment,
         specular,
+        None,
     )?;
     let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
         .map_err(ForwardPreparationError::Material)?;

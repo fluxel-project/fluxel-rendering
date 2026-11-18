@@ -15,6 +15,7 @@ pub(super) fn material_request(
     source: ForwardDrawSource,
     environment: bool,
     specular: bool,
+    scene_color: Option<(&str, &str)>,
 ) -> Result<ShaderCompositionRequest, ForwardPreparationError> {
     let effects = material.surface_extensions();
     let has_effects = effects.occlusion.is_some() || effects.emissive.is_some();
@@ -56,7 +57,12 @@ pub(super) fn material_request(
         if view.shading_camera.is_none() {
             return Err(ForwardPreparationError::InvalidView);
         }
-        Ok(crate::pbr::specular::forward_transmission_request(request))
+        Ok(match scene_color {
+            Some((texture, sampler)) => {
+                crate::pbr::specular::forward_scene_transmission_request(request, texture, sampler)
+            }
+            None => crate::pbr::specular::forward_transmission_request(request),
+        })
     } else if specular && crate::pbr::is_pbr(material.output()) {
         if view.shading_camera.is_none() {
             return Err(ForwardPreparationError::InvalidView);

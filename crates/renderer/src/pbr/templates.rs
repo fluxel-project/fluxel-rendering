@@ -43,6 +43,7 @@ struct PbrTransforms {
     normal_from_local: mat4x4<f32>,
     world_from_local: mat4x4<f32>,
     shading_camera: vec4<f32>,
+    clip_from_world: mat4x4<f32>,
 };
 @group(1) @binding(0) var<uniform> pbr_transforms: PbrTransforms;
 struct PbrVertexOutput {

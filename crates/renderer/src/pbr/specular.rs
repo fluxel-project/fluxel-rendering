@@ -206,7 +206,7 @@ pub(crate) fn with_specular_ibl(mut request: ShaderCompositionRequest) -> Shader
 pub(crate) fn forward_specular_request(
     request: ShaderCompositionRequest,
 ) -> ShaderCompositionRequest {
-    forward_specular_request_inner(request, false)
+    forward_specular_request_inner(request, false, None)
 }
 
 /// Selects environment refraction from the same prefiltered radiance chain as
@@ -214,12 +214,21 @@ pub(crate) fn forward_specular_request(
 pub(crate) fn forward_transmission_request(
     request: ShaderCompositionRequest,
 ) -> ShaderCompositionRequest {
-    forward_specular_request_inner(request, true)
+    forward_specular_request_inner(request, true, None)
+}
+
+pub(crate) fn forward_scene_transmission_request(
+    request: ShaderCompositionRequest,
+    texture: &str,
+    sampler: &str,
+) -> ShaderCompositionRequest {
+    forward_specular_request_inner(request, true, Some((texture, sampler)))
 }
 
 fn forward_specular_request_inner(
     mut request: ShaderCompositionRequest,
     transmission: bool,
+    scene_color: Option<(&str, &str)>,
 ) -> ShaderCompositionRequest {
     let diffuse_irradiance = has_static_option(
         &request,
@@ -234,7 +243,13 @@ fn forward_specular_request_inner(
     let uv0 = has_vertex_semantic(&request, "UV0");
     let normal_map = uv0 && has_vertex_semantic(&request, "TANGENT");
     let source = if uv0 {
-        forward_source(normal_map, effects, diffuse_irradiance, transmission)
+        forward_source(
+            normal_map,
+            effects,
+            diffuse_irradiance,
+            transmission,
+            scene_color,
+        )
     } else {
         forward_standard::source(diffuse_irradiance, transmission)
     };
@@ -292,10 +307,18 @@ fn forward_specular_request_inner(
             "pbr-specular-transmission",
             transmission::TRANSMISSION,
         ));
-        request.with_static_option(
-            "renderer.transmission",
-            "environment-refraction-beer-lambert-v1",
-        )
+        if scene_color.is_some() {
+            request.source_units.push(SourceUnit::new(
+                "pbr-scene-transmission",
+                super::scene_refraction::WGSL,
+            ));
+            request.with_static_option("renderer.transmission", "scene-color-projected-v1")
+        } else {
+            request.with_static_option(
+                "renderer.transmission",
+                "environment-refraction-beer-lambert-v1",
+            )
+        }
     } else {
         request
     };
@@ -421,7 +444,13 @@ fn deferred_source(effects: bool, diffuse: bool) -> String {
     )
 }
 
-fn forward_source(normal_map: bool, effects: bool, diffuse: bool, transmission: bool) -> String {
+fn forward_source(
+    normal_map: bool,
+    effects: bool,
+    diffuse: bool,
+    transmission: bool,
+    scene_color: Option<(&str, &str)>,
+) -> String {
     let input = if normal_map {
         r#"
 struct PbrSpecularVertexOutput {
@@ -509,10 +538,16 @@ struct PbrSpecularVertexOutput {
     } else {
         "let emissive = vec3<f32>(0.0);"
     };
-    let refraction = if transmission {
-        "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
+    let refraction = if let Some((texture, sampler)) = scene_color {
+        format!(
+            "let refraction = pbr_scene_transmission({texture}, {sampler}, input.world_position, normal, view, transmission_intensity, transmission_thickness) * spec.refraction_energy;"
+        )
+    } else if transmission {
+        String::from(
+            "let refraction = pbr_environment_transmission(normal, view, properties.y, transmission_intensity, transmission_thickness) * spec.refraction_energy;",
+        )
     } else {
-        "let refraction = vec3<f32>(0.0);"
+        String::from("let refraction = vec3<f32>(0.0);")
     };
     format!(
         r#"{input}

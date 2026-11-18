@@ -1,7 +1,7 @@
 //! One Graph declaration for a captured Forward texture and its receiver.
 
 use fluxel_rhi::{
-    api::{BufferUsage, Device, Error, ImageLayout, LaneClass, LaneId, Result, TextureUsage},
+    api::{Device, Error, ImageLayout, LaneClass, LaneId, Result, TextureUsage},
     backend::ResourceBackend,
 };
 use std::collections::HashMap;
@@ -13,11 +13,12 @@ use crate::{
 };
 
 use super::super::mip_generation::MipGenerationPass;
+use super::capture_terminal::{declare_capture_background_copy, declare_readback};
 use super::{
     BufferGraphFact, BufferSlot, ForwardGraphSpec, ForwardPhaseDriver, ForwardPlanBuildError,
-    GraphBuilder, GraphPass, TextureGraphFact, TextureSlot, copy_write_uses,
-    texture_copy_read_uses, validate_depth_spec, validate_depth_topology,
-    validate_forward_topology, validate_graph_draw, validate_resident_texture_devices, whole,
+    GraphBuilder, GraphPass, TextureGraphFact, TextureSlot, validate_depth_spec,
+    validate_depth_topology, validate_forward_topology, validate_graph_draw,
+    validate_resident_texture_devices,
 };
 
 /// All Graph slots imported for one Forward frame namespace.
@@ -67,6 +68,7 @@ pub(crate) struct CaptureForwardDeclaration {
     pub(super) capture_raster: GraphPass,
     pub(super) receiver_upload: GraphPass,
     pub(super) receiver_mip_generations: Vec<MipGenerationPass>,
+    pub(super) receiver_background_copy: Option<GraphPass>,
     pub(super) receiver_raster: GraphPass,
     pub(super) receiver_readback: GraphPass,
     pub(super) capture: CaptureFrameSlots,
@@ -86,6 +88,7 @@ pub(super) fn declare_capture_forward<B, Capture, Receiver>(
     receiver: &ForwardFrame<B>,
     capture_topology: FrameTopology,
     receiver_topology: FrameTopology,
+    preserve_capture_background: bool,
     capture_contribute: Capture,
     receiver_contribute: Receiver,
 ) -> std::result::Result<CaptureForwardDeclaration, ForwardPlanBuildError>
@@ -150,8 +153,16 @@ where
         import_frame(&mut graph, &receiver_spec, Some(&aliases), &mut shared)?;
     let (receiver_upload, receiver_handles) =
         declare_upload(&mut graph, &receiver_spec, receiver_handles)?;
-    let (receiver_handles, receiver_mip_generations) =
+    let (mut receiver_handles, receiver_mip_generations) =
         declare_mip_generations(&mut graph, &receiver_spec, receiver_handles, &mut shared)?;
+    let receiver_background_copy = preserve_capture_background
+        .then(|| {
+            declare_capture_background_copy(&mut graph, capture_target, receiver_handles.target)
+        })
+        .transpose()?;
+    if let Some((_, target)) = receiver_background_copy {
+        receiver_handles.target = target;
+    }
     let (receiver_raster, receiver_target) = declare_raster(
         &mut graph,
         &receiver_spec,
@@ -174,6 +185,7 @@ where
         capture_raster,
         receiver_upload,
         receiver_mip_generations,
+        receiver_background_copy: receiver_background_copy.map(|(pass, _)| pass),
         receiver_raster,
         receiver_readback,
         capture: capture_slots,
@@ -565,35 +577,4 @@ where
     driver
         .finish()
         .map_err(|_| ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution))
-}
-
-fn declare_readback(
-    graph: &mut GraphBuilder,
-    spec: &ForwardGraphSpec,
-    target: crate::graph::definition::TextureHandle,
-    readback: crate::graph::definition::BufferHandle,
-) -> std::result::Result<GraphPass, ForwardPlanBuildError> {
-    let length = u64::from(spec.readback_row_pitch)
-        .checked_mul(u64::from(spec.extent[1]))
-        .ok_or(Error::InvalidRange)?;
-    graph
-        .add_pass("forward-capture-readback", |pass| {
-            pass.read_texture_with_use(
-                target,
-                whole(),
-                texture_copy_read_uses().uses,
-                ImageLayout::CopySrc,
-                TextureUsage::COPY_SRC,
-            )?;
-            pass.write_with_use(
-                readback,
-                0..length,
-                copy_write_uses().uses,
-                BufferUsage::COPY_DST,
-            )?;
-            pass.side_effect();
-            Ok(())
-        })
-        .map(|(pass, ())| pass)
-        .map_err(|_| Error::InvalidState.into())
 }

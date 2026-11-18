@@ -889,6 +889,21 @@ scopes. When it has no peel candidates, the producer invokes the typed sorted
 contribution on the same capture Graph. The receiver independently selects
 its ordinary or OIT product.
 
+The scene-color transmission receiver is prepared with
+`prepare_forward_scene_refraction_receiver`. It names a material texture bound
+to the producer's capture slot and uses the material's ordinary sampler. The
+producer and receiver share the projection and shading camera. The selected
+Babylon two-dimensional thickness branch projects the displaced world point
+into capture coordinates and samples the resolved scene image at level zero.
+The specular environment remains the source of the surface reflectance.
+
+The same Graph copies the producer color to a distinct receiver target before
+the refractor raster loads it. The refractor samples the original producer
+version. The copy preserves color outside the refractor's coverage, and only
+this receiver target needs copy-destination usage. The receiver currently owns
+its own depth attachment. Foreground occlusion against producer depth requires
+the producer depth to be retained into the receiver pass.
+
 The capture target adds sampled usage only on this route. Ordinary Forward
 targets keep their existing capability requirements. Device format facts and
 the allocation owner's saved descriptor, identity, incoming state and layout

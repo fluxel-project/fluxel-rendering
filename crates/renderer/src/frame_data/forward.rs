@@ -6,6 +6,7 @@ pub(crate) struct ForwardUniformInput {
     pub(crate) transform: [[f32; 4]; 4],
     pub(crate) normal_from_local: Option<[[f32; 4]; 4]>,
     pub(crate) world_from_local: Option<[[f32; 4]; 4]>,
+    pub(crate) clip_from_world: Option<[[f32; 4]; 4]>,
     pub(crate) tint: [f32; 4],
     pub(crate) shading_camera: Option<crate::ShadingCamera>,
 }
@@ -40,7 +41,8 @@ fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
 }
 
 const PBR_CAMERA_OFFSET: usize = 192;
-pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CAMERA_OFFSET as u64 + 16;
+const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_CAMERA_OFFSET + 16;
+pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
 
 /// Both dynamic bindings use individually aligned physical starts.
 pub(crate) fn pack_forward_uniforms(
@@ -51,10 +53,10 @@ pub(crate) fn pack_forward_uniforms(
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
-    if inputs
-        .iter()
-        .any(|input| input.normal_from_local.is_some() != input.world_from_local.is_some())
-    {
+    if inputs.iter().any(|input| {
+        let pbr = input.normal_from_local.is_some();
+        pbr != input.world_from_local.is_some() || pbr != input.clip_from_world.is_some()
+    }) {
         return Err(Error::InvalidRange);
     }
     let align = |value: u64| {
@@ -92,6 +94,12 @@ pub(crate) fn pack_forward_uniforms(
             .chain(
                 input
                     .world_from_local
+                    .iter()
+                    .flat_map(|matrix| matrix.iter().flatten()),
+            )
+            .chain(
+                input
+                    .clip_from_world
                     .iter()
                     .flat_map(|matrix| matrix.iter().flatten()),
             )
@@ -133,6 +141,11 @@ pub(crate) fn pack_forward_uniforms(
                 .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
             for (component, value) in camera.into_iter().enumerate() {
                 let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let clip_from_world = input.clip_from_world.ok_or(Error::InvalidRange)?;
+            for (component, value) in clip_from_world.iter().flatten().enumerate() {
+                let offset = start as usize + PBR_CLIP_FROM_WORLD_OFFSET + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
         }
