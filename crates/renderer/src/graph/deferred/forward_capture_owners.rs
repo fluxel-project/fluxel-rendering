@@ -8,6 +8,7 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     overlay: Option<&super::capture_producer::DeferredCaptureOverlay<'_, B>>,
     receiver: &ForwardFrame<B>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
+    scene_refraction: bool,
 ) -> Result<()> {
     super::capture_owner_validation::validate_overlay_owners(producer, overlay)?;
     let (instance, texture, view, desc, incoming, layout) =
@@ -42,11 +43,22 @@ pub(super) fn validate_owners<B: ResourceBackend>(
     {
         return Err(Error::InvalidState);
     }
+    if scene_refraction && receiver_oit.is_some() {
+        return Err(Error::InvalidState);
+    }
     let depth = receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?;
     if depth.device != device
         || depth.instance == instance
         || depth.texture.device() != device
         || depth.view.device() != device
+        || (scene_refraction
+            && (depth.instance != producer.gbuffer[2].instance
+                || depth.incoming != producer.gbuffer[2].incoming
+                || depth.layout != producer.gbuffer[2].layout
+                || !crate::graph::forward::same_texture_owner_desc(
+                    &depth.desc,
+                    &producer.gbuffer[2].desc,
+                )))
     {
         return Err(Error::InvalidState);
     }

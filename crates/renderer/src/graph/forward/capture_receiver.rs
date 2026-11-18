@@ -5,8 +5,10 @@
 
 use super::capture_declaration::{
     CaptureFrameSlots, FrameHandles, SharedResidentImports, capture_texture_slots,
-    declare_mip_generations, declare_upload, import_frame_inner, validate_spec,
+    declare_mip_generations, declare_raster, declare_upload, import_frame_inner, validate_spec,
 };
+use super::capture_depth_alias::import_frame_with_depth_alias;
+use super::capture_terminal::declare_capture_background_copy;
 use super::*;
 use crate::graph::definition::TextureHandle;
 use crate::graph::oit_record::{OitDepthTargetRef, OitDrawSlots, OitRecordCommands};
@@ -16,6 +18,7 @@ pub(in crate::graph) struct ForwardReceiverComposition {
     pub(in crate::graph) upload: GraphPass,
     pub(in crate::graph) mip_generations: Vec<super::super::mip_generation::MipGenerationPass>,
     pub(in crate::graph) raster: GraphPass,
+    background_copy: Option<(GraphPass, TextureSlot)>,
     oit: Option<super::oit_plan::ForwardOitPlan>,
     pub(in crate::graph) final_slot: TextureSlot,
     pub(in crate::graph) final_handle: TextureHandle,
@@ -24,6 +27,7 @@ pub(in crate::graph) struct ForwardReceiverComposition {
     spec: ForwardGraphSpec,
     pub(in crate::graph) shape: ForwardShape,
     pub(in crate::graph) alignment: u64,
+    scene_refraction: bool,
 }
 
 /// Terminal selected by the enclosing combined Graph, never a second plan.
@@ -128,6 +132,7 @@ pub(in crate::graph) fn declare_forward_capture_namespace<B>(
     graph: &mut GraphBuilder,
     frame: &ForwardFrame<B>,
     capture_source: Option<TextureHandle>,
+    scene_refraction: Option<TextureHandle>,
     oit_input: Option<&ForwardOitInput<'_, B>>,
     shared: &mut SharedResidentImports,
 ) -> std::result::Result<ForwardCaptureReceiver, ForwardPlanBuildError>
@@ -140,6 +145,9 @@ where
         return Err(Error::WrongDevice.into());
     }
     let receiver = capture_source.is_some();
+    if scene_refraction.is_some() && (!receiver || oit_input.is_some()) {
+        return Err(Error::InvalidState.into());
+    }
     validate_spec(device, &spec, FrameTopology::SortedForward, receiver)?;
     super::capture_oit_declaration::validate_oit_input(device, frame, &spec, oit_input)?;
     let aliases = capture_source
@@ -152,19 +160,59 @@ where
             })
         })
         .transpose()?;
-    let (slots, handles) = import_frame_inner(graph, &spec, aliases.as_deref(), shared, None)?;
+    let (slots, handles) = match scene_refraction {
+        Some(depth) => {
+            import_frame_with_depth_alias(graph, &spec, aliases.as_deref(), shared, depth)?
+        }
+        None => import_frame_inner(graph, &spec, aliases.as_deref(), shared, None)?,
+    };
     let (upload, handles) = declare_upload(graph, &spec, handles)?;
-    let (handles, mip_generations) = declare_mip_generations(graph, &spec, handles, shared)?;
+    let (mut handles, mip_generations) = declare_mip_generations(graph, &spec, handles, shared)?;
     let dependency = mip_generations
         .last()
         .map_or(upload, |generation| generation.pass);
-    let (raster, final_handle, oit) = super::capture_oit_declaration::declare_side(
-        graph, &spec, &handles, upload, dependency, oit_input,
-    )?;
+    let background_copy = scene_refraction
+        .map(|_| {
+            declare_capture_background_copy(
+                graph,
+                capture_source.ok_or(Error::InvalidState)?,
+                handles.target,
+            )
+        })
+        .transpose()?;
+    if let Some((_, target)) = background_copy {
+        handles.target = target;
+    }
+    let (raster, final_handle, oit) = if scene_refraction.is_some() {
+        let (pass, color, _) = declare_raster(
+            graph,
+            &spec,
+            FrameTopology::SortedForward,
+            upload,
+            &handles,
+            |context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>| {
+                context.sorted(|pass| {
+                    pass.depends_on_uploads()?;
+                    pass.read_vertex_streams()?;
+                    pass.read_frame_uniforms()?;
+                    pass.read_sampled_textures()?;
+                    pass.read_selected_depth()?;
+                    pass.read_write_main_color()
+                })
+            },
+        )?;
+        (pass, color, None)
+    } else {
+        super::capture_oit_declaration::declare_side(
+            graph, &spec, &handles, upload, dependency, oit_input,
+        )?
+    };
     Ok(ForwardReceiverComposition {
         upload,
         mip_generations,
         raster,
+        background_copy: background_copy
+            .map(|(pass, _)| (pass, capture_source.expect("receiver source").into())),
         oit,
         final_slot: final_handle.into(),
         final_handle,
@@ -173,6 +221,7 @@ where
         shape: spec.shape.clone(),
         spec,
         alignment: device.capabilities().limits.uniform_offset_alignment,
+        scene_refraction: scene_refraction.is_some(),
     })
 }
 
@@ -182,6 +231,8 @@ pub(in crate::graph) fn declare_receiver_after_deferred<B>(
     graph: &mut GraphBuilder,
     receiver: &ForwardFrame<B>,
     producer_final: TextureHandle,
+    producer_depth: TextureHandle,
+    scene_refraction: bool,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
     shared: &mut SharedResidentImports,
 ) -> std::result::Result<ForwardCaptureReceiver, ForwardPlanBuildError>
@@ -193,6 +244,7 @@ where
         graph,
         receiver,
         Some(producer_final),
+        scene_refraction.then_some(producer_depth),
         receiver_oit,
         shared,
     )
@@ -209,6 +261,9 @@ impl ForwardReceiverComposition {
                 .iter()
                 .map(|generation| generation.pass),
         );
+        if let Some((pass, _)) = self.background_copy {
+            passes.push(pass);
+        }
         passes.push(self.raster);
         if let Some(oit) = &self.oit {
             passes.extend(oit.passes());
@@ -220,6 +275,10 @@ impl ForwardReceiverComposition {
 
     pub(in crate::graph) fn final_slot(&self) -> TextureSlot {
         self.final_slot
+    }
+
+    pub(in crate::graph) fn scene_refraction(&self) -> bool {
+        self.scene_refraction
     }
 
     pub(in crate::graph) fn validate_frame<B: ResourceBackend>(
@@ -366,15 +425,17 @@ impl ForwardReceiverComposition {
             frame.frame.target_incoming,
             frame.frame.target_layout,
         ));
-        if let (Some(slot), Some(depth)) = (s.depth, frame.frame.depth.as_ref()) {
-            textures.push(BoundTexture::new(
-                slot,
-                depth.instance,
-                &depth.texture,
-                &depth.desc,
-                depth.incoming,
-                depth.layout,
-            ));
+        if !self.scene_refraction {
+            if let (Some(slot), Some(depth)) = (s.depth, frame.frame.depth.as_ref()) {
+                textures.push(BoundTexture::new(
+                    slot,
+                    depth.instance,
+                    &depth.texture,
+                    &depth.desc,
+                    depth.incoming,
+                    depth.layout,
+                ));
+            }
         }
         super::capture_specular_bindings::append(
             s,

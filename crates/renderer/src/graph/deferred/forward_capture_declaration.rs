@@ -3,11 +3,11 @@
 use super::*;
 use crate::{
     graph::{
-        forward::{
-            declare_receiver_after_deferred, declare_receiver_terminal, ForwardCaptureReceiver,
-            ForwardReceiverTerminal, SharedResidentImports,
-        },
         ForwardOitInput,
+        forward::{
+            ForwardCaptureReceiver, ForwardReceiverTerminal, SharedResidentImports,
+            declare_receiver_after_deferred, declare_receiver_terminal,
+        },
     },
     residency::ForwardFrame,
 };
@@ -28,6 +28,7 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
         producer_overlay: Option<&super::capture_producer::DeferredCaptureOverlay<'_, B>>,
         receiver: &ForwardFrame<B>,
         receiver_oit: Option<&ForwardOitInput<'_, B>>,
+        scene_refraction: bool,
         image: Option<&fluxel_rhi::api::SurfaceImage<B>>,
         producer_contribute: F,
     ) -> Result<DeferredForwardCaptureDeclaration>
@@ -81,6 +82,8 @@ impl<B: ResourceBackend> super::DeferredForwardCapturePlan<B> {
             &mut prefix.graph,
             receiver,
             producer_final,
+            prefix.gbuffer[2],
+            scene_refraction,
             receiver_oit,
             &mut shared,
         )

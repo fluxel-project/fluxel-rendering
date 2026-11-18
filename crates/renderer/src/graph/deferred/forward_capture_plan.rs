@@ -107,7 +107,13 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
         {
             return Err(Error::InvalidState);
         }
-        super::forward_capture_owners::validate_owners(producer, overlay, receiver, receiver_oit)?;
+        super::forward_capture_owners::validate_owners(
+            producer,
+            overlay,
+            receiver,
+            receiver_oit,
+            self.receiver.scene_refraction(),
+        )?;
         match (&self.terminal, image, composite) {
             (ForwardReceiverTerminal::Offscreen { .. }, None, None) => {}
             (

@@ -35,6 +35,7 @@ impl<B: ResourceBackend> ForwardDeferredCapturePlan<B> {
             encoder,
             &bindings,
             producer,
+            None,
             producer_oit,
             producer_commands,
             pass,

@@ -73,15 +73,7 @@ impl<B: ResourceBackend> ForwardFrameBuffers<B> {
         {
             return Err(Error::WrongDevice);
         }
-        let depth_attachment = super::ForwardDepthAttachment {
-            texture: depth.texture.clone(),
-            view: depth.view.clone(),
-            desc: depth.desc.clone(),
-            instance: depth.instance,
-            incoming: depth.incoming,
-            layout: depth.layout,
-            device: depth.device,
-        };
+        let depth_attachment = super::ForwardDepthAttachment::from_texture(depth);
         Ok((
             Self {
                 upload: device.create_buffer(&plan.upload_desc)?,

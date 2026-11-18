@@ -78,6 +78,15 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
         )
     }
 
+    pub(in crate::renderer) fn retain_deferred_refraction_depth(
+        &mut self,
+        depth: &crate::residency::ForwardTexture<B>,
+    ) {
+        self.refraction_depth = Some(crate::residency::ForwardDepthAttachment::from_texture(
+            depth,
+        ));
+    }
+
     pub(crate) fn resident(&self) -> crate::residency::ForwardTexture<B> {
         crate::residency::ForwardTexture {
             texture: self.texture.clone(),

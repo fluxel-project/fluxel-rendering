@@ -23,6 +23,18 @@ pub(crate) struct ForwardDepthAttachment<B: ResourceBackend> {
 }
 
 impl<B: ResourceBackend> ForwardDepthAttachment<B> {
+    pub(crate) fn from_texture(depth: &super::ForwardTexture<B>) -> Self {
+        Self {
+            texture: depth.texture.clone(),
+            view: depth.view.clone(),
+            desc: depth.desc.clone(),
+            instance: depth.instance,
+            incoming: depth.incoming,
+            layout: depth.layout,
+            device: depth.device,
+        }
+    }
+
     pub(crate) fn retain(&self) -> Self {
         Self {
             texture: self.texture.clone(),

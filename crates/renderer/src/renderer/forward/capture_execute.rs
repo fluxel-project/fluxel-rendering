@@ -16,7 +16,7 @@ where
         + ShaderBackend,
 {
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn submit_prepared_forward_capture<C>(
+    pub(in crate::renderer) async fn submit_prepared_forward_capture<C>(
         &mut self,
         snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         capture_inputs: Vec<crate::ForwardDrawInput>,

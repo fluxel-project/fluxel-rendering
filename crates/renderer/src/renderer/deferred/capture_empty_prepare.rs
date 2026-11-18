@@ -34,6 +34,39 @@ where
     ) -> Result<Submission, RendererError> {
         let extent = receiver_input.extent();
         let started = Instant::now();
+        if receiver_input.prepared().uses_scene_refraction() {
+            if peel_count != 0 {
+                return Err(Error::Unsupported("OIT-only producer for scene refraction").into());
+            }
+            let environment = self.environment_irradiance.clone().filter(|_| {
+                producer_inputs
+                    .iter()
+                    .any(|input| input.prepared().uses_environment_irradiance())
+            });
+            return self
+                .submit_prepared_forward_capture(
+                    snapshot,
+                    producer_inputs,
+                    receiver_input,
+                    producer_slot,
+                    extent,
+                    crate::FrameTopology::SortedForward,
+                    crate::FrameTopology::SortedForward,
+                    crate::ForwardDepthMode::Depth32LessEqualWrite,
+                    retained_assets,
+                    surface,
+                    started,
+                    environment,
+                    |context| {
+                        super::super::forward::receiver_contribution(
+                            context,
+                            crate::FrameTopology::SortedForward,
+                            false,
+                        )
+                    },
+                )
+                .await;
+        }
         if peel_count != 0 {
             rounds
                 .get()

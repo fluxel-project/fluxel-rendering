@@ -12,8 +12,8 @@ pub(crate) use specular_environment::{SpecularEnvironmentFrameOwner, SpecularIbl
 mod forward;
 pub(crate) use deferred::{
     DeferredDraw, DeferredFrame, DeferredPublication, DeferredSurfaceFrame,
-    allocate_deferred_scene_color, deferred_albedo_format, deferred_scene_color_desc,
-    plan_deferred_gbuffer_with_effects,
+    allocate_deferred_scene_color, allocate_deferred_scene_color_desc, deferred_albedo_format,
+    deferred_scene_color_desc, plan_deferred_gbuffer_with_effects,
 };
 pub(crate) use environment::EnvironmentFrameOwner;
 pub(crate) use oit::{OitDepthPrecision, OitOwners, OitPingPongOwners, OitPlan, OitTextureOwner};

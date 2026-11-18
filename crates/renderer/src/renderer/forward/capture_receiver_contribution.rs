@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn receiver_contribution<B: ResourceBackend>(
+pub(in crate::renderer) fn receiver_contribution<B: ResourceBackend>(
     context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
     topology: crate::FrameTopology,
     reads_producer_depth: bool,

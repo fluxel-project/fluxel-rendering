@@ -3,6 +3,7 @@
 use super::*;
 use crate::renderer::forward::{
     CaptureTextureOwner, CaptureTextureSlot, capture_assets, validate_receiver_sources,
+    validate_receiver_view,
 };
 use std::{num::NonZeroU32, time::Instant};
 
@@ -136,7 +137,7 @@ where
             return Err(Error::Unsupported("Deferred capture requires visible geometry").into());
         }
         let receiver_input = receiver
-            .with_lighting(
+            .with_capture_lighting(
                 &mut fluxel_shader::ShaderComposer::new(),
                 self.environment_irradiance.is_some(),
                 self.environment_specular.is_some(),
@@ -144,8 +145,34 @@ where
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
         validate_receiver_sources(&receiver_input, &producer_slot)?;
-        if receiver_input.extent() != extent {
-            return Err(Error::InvalidRange.into());
+        validate_receiver_view(&receiver_input, selected.view_record())?;
+        let scene_refraction = receiver_input.prepared().uses_scene_refraction();
+        let receiver_blended = matches!(
+            receiver_input
+                .prepared()
+                .material()
+                .surface_policy()
+                .alpha_mode,
+            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
+        );
+        if scene_refraction
+            && receiver_blended
+            && receiver_config
+                .is_some_and(|config| !config.excludes_source(receiver_input.source()))
+        {
+            return Err(Error::Unsupported("OIT scene-refraction receiver").into());
+        }
+        if scene_refraction {
+            super::super::forward::target_admission::admit(
+                &self.device,
+                crate::FrameTopology::SortedForward,
+                extent,
+                TextureFormat::Rgba8Unorm,
+                false,
+                true,
+                true,
+            )
+            .map_err(|error| self.observe_rhi_error(error))?;
         }
         let retained_assets = capture_assets(assets, &receiver_input);
         let (producer_inputs, opaque_count, peel_count, rounds) = match producer_config {
@@ -209,9 +236,10 @@ where
                 rounds,
                 &retained_assets,
                 Instant::now(),
+                scene_refraction,
             )
             .await?;
-        let capture = match composition.as_ref() {
+        let mut capture = match composition.as_ref() {
             Some(composition) => match composition.oit.as_ref() {
                 Some(oit) => {
                     CaptureTextureOwner::from_oit_output(&self.device, producer_slot, &oit.output)
@@ -230,15 +258,11 @@ where
             ),
         }
         .map_err(|error| self.observe_rhi_error(error))?;
-        if matches!(
-            receiver_input
-                .prepared()
-                .material()
-                .surface_policy()
-                .alpha_mode,
-            fluxel_material::SurfaceAlphaMode::Blend | fluxel_material::SurfaceAlphaMode::MaskBlend,
-        ) {
-            let receiver_partition = match receiver_config {
+        if scene_refraction {
+            capture.retain_deferred_refraction_depth(&producer.gbuffer[2]);
+        }
+        if scene_refraction || receiver_blended {
+            let receiver_partition = match receiver_config.filter(|_| !scene_refraction) {
                 Some(config) => {
                     crate::preparation::partition_oit_draws(vec![receiver_input], config)
                 }
@@ -281,6 +305,7 @@ where
                     composition,
                     receiver,
                     surface,
+                    scene_refraction,
                     |context| pipeline.contribute_deferred(&selected, context),
                 )
                 .await;

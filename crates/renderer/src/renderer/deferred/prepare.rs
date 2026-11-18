@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
-use fluxel_rhi::api::{BindGroupDesc, BindGroupEntry, BindingResource, Error, Support};
+use fluxel_rhi::api::{
+    BindGroupDesc, BindGroupEntry, BindingResource, Error, Support, TextureDesc, TextureUsage,
+};
 
 use crate::residency::{
-    DeferredFrame, ForwardFrameBuffers, allocate_deferred_scene_color,
-    plan_deferred_gbuffer_with_effects, plan_forward_frame,
+    DeferredFrame, ForwardFrameBuffers, allocate_deferred_scene_color_desc,
+    deferred_scene_color_desc, plan_deferred_gbuffer_with_effects, plan_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -49,11 +51,33 @@ where
         inputs: &[ForwardDrawInput],
         capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
+        self.prepare_deferred_frames_with_color_copy(inputs, capture, false)
+            .await
+    }
+
+    pub(super) async fn prepare_deferred_frames_with_color_copy(
+        &mut self,
+        inputs: &[ForwardDrawInput],
+        capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
+        copy_source: bool,
+    ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         self.ensure_open()?;
         crate::renderer::require_opaque_or_mask(inputs)
             .map_err(|error| self.observe_rhi_error(error))?;
         let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
-        self.prepare_deferred_resources(inputs, &prepared, pbr, effects, capture)
+        let extent = inputs.first().ok_or(Error::InvalidState)?.extent();
+        let mut scene_color = deferred_scene_color_desc(extent);
+        if copy_source {
+            scene_color.usage |= TextureUsage::COPY_SRC;
+            match self.device.texture_support(&scene_color) {
+                Support::Supported(facts) if facts.filterable => {}
+                Support::Supported(_) => {
+                    return Err(Error::Unsupported("filterable Deferred capture color").into());
+                }
+                Support::Unsupported(reason) => return Err(Error::Unsupported(reason).into()),
+            }
+        }
+        self.prepare_deferred_resources(inputs, &prepared, pbr, effects, capture, scene_color)
             .await
     }
 
@@ -64,6 +88,7 @@ where
         pbr: bool,
         effects: bool,
         capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
+        scene_color_desc: TextureDesc,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
         super::resident_assembly::validate_capture_inputs(
             inputs,
@@ -231,7 +256,7 @@ where
                 .map_err(|error| self.observe_rhi_error(error))?;
             (frame, uniform_upload, gbuffer, effects_attachment)
         };
-        let scene_color = allocate_deferred_scene_color(&self.device, input.extent())
+        let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color_sampler_desc = crate::renderer::forward::material_sampler(1)
             .map_err(|error| self.observe_rhi_error(error))?;

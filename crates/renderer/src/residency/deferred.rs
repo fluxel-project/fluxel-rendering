@@ -211,6 +211,13 @@ pub(crate) fn allocate_deferred_scene_color<B: ResourceBackend>(
         false,
     )?;
     let desc = deferred_scene_color_desc(extent);
+    allocate_deferred_scene_color_desc(device, desc)
+}
+
+pub(crate) fn allocate_deferred_scene_color_desc<B: ResourceBackend>(
+    device: &Device<B>,
+    desc: TextureDesc,
+) -> Result<ForwardTexture<B>> {
     let support = match device.texture_support(&desc) {
         Support::Supported(support) => support,
         Support::Unsupported(reason) => return Err(Error::Unsupported(reason)),

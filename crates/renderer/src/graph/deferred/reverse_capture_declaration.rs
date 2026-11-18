@@ -3,8 +3,8 @@
 use super::*;
 use crate::{
     graph::{
-        forward::{declare_forward_capture_namespace, SharedResidentImports},
         ForwardOitInput,
+        forward::{SharedResidentImports, declare_forward_capture_namespace},
     },
     residency::ForwardFrame,
 };
@@ -44,6 +44,7 @@ impl<B: ResourceBackend> ForwardDeferredCapturePlan<B> {
             device,
             &mut graph,
             producer,
+            None,
             None,
             producer_oit,
             &mut shared,

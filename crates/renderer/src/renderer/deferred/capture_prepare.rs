@@ -54,6 +54,7 @@ where
         rounds: NonZeroU32,
         assets: &ForwardAssets,
         started: Instant,
+        copy_scene_color: bool,
     ) -> Result<
         (
             crate::residency::DeferredFrame<B>,
@@ -79,7 +80,13 @@ where
         let transparent = draws.split_off(opaque_count);
         let opaque = draws;
         self.deferred_residency.retain_assets(assets);
-        let deferred = self.prepare_deferred_frames(&opaque).await?;
+        let deferred = self
+            .prepare_deferred_frames_with_color_copy(
+                &opaque,
+                None,
+                copy_scene_color && peel_count == 0,
+            )
+            .await?;
         if transparent.is_empty() {
             return Ok((deferred, None, opaque));
         }

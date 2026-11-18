@@ -22,6 +22,7 @@ where
         composition: Option<super::DeferredCaptureComposition<B>>,
         receiver: crate::renderer::forward::CaptureOitSide<B>,
         surface: Option<SurfaceImage<B>>,
+        scene_refraction: bool,
         contribute: F,
     ) -> Result<Submission, RendererError>
     where
@@ -54,6 +55,7 @@ where
             overlay.as_ref(),
             &receiver.frame,
             receiver_input.as_ref(),
+            scene_refraction,
             image,
             |context| {
                 contribute(context).inspect_err(|error| {

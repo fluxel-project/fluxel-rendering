@@ -937,7 +937,17 @@ final version and native owner alongside immutable assets. Opaque/masked
 receivers keep their own G-buffer and lighting; Blend/MaskBlend receivers append
 a Forward namespace with their own color/depth owners and optional finite OIT.
 Only sampled capture bindings alias the producer, so the receiver never clears
-or writes its sampled source. One shared resident import set covers Forward and Deferred producer,
+or writes its sampled source. A scene-refraction receiver uses the Forward
+refraction program for opaque, masked, and blended materials. Its Graph copy
+reads the final producer color after Deferred lighting and any sorted or peeling
+suffix, and initializes a separate receiver color target. The receiver samples
+the producer color and loads the original G-buffer depth attachment read-only,
+using the same camera and projection. This preserves foreground occlusion and
+the background outside coverage. With no opaque producer prefix, a sorted
+producer and this receiver use the existing Forward refraction capture path.
+Scene-refraction receivers that require peeling and all-transparent peeling
+producers for scene refraction still require their composition paths.
+One shared resident import set covers Forward and Deferred producer,
 overlay and receiver cache hits. Completed allocations reuse one Graph handle
 only after comparing actual device, descriptor and incoming-state facts;
 resources with pending uploads or fresh mip writes cannot reuse an old version. A producer has no output terminal; only the
@@ -954,9 +964,8 @@ submission. Typed capture Features remain unfinished. Shared read-only resources
 merged only after complete owner-fact comparison; OIT resolves their canonical
 installed references for native recording, preserving pointer-exact guards on
 attachments, depth, and product targets.
-Specialized Deferred
-transmission, blur, PBR reflection and refraction still require their own real
-Graph paths and acceptance evidence. Deferred OIT has its real Graph path but
+Capture blur and the wider PBR reflection and refraction combinations still
+require their own Graph paths and acceptance evidence. Deferred OIT has its real Graph path but
 still requires the M1 behavior matrix. The Deferred transparency seam reuses the
 actual RGBA8 scene-color target and G-buffer depth: ordinary blend is ColorRW
 without an extra copy, while OIT treats scene color as a read-only source and

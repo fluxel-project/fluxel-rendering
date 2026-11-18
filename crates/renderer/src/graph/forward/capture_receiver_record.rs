@@ -64,6 +64,7 @@ impl ForwardReceiverComposition {
         encoder: &mut CommandEncoder<B>,
         bindings: &FrameBindings<'_, B>,
         frame: &ForwardFrame<B>,
+        producer_depth: Option<&crate::residency::ForwardTexture<B>>,
         input: Option<&ForwardOitInput<'_, B>>,
         commands: Option<&OitRecordCommands<'_, B>>,
         pass: GraphPass,
@@ -73,6 +74,19 @@ impl ForwardReceiverComposition {
         }
         if self.record_prefix_pass(encoder, bindings, frame, pass)? {
             return Ok(true);
+        }
+        if let Some((background_copy, source)) = self.background_copy {
+            if pass == background_copy {
+                super::capture_terminal::record_background_copy(
+                    bindings,
+                    pass,
+                    encoder,
+                    source,
+                    self.slots.target,
+                    frame.extent,
+                )?;
+                return Ok(true);
+            }
         }
         let slots = self.record_slots(frame.resident.device);
         let depth = frame.frame.depth.as_ref().ok_or(Error::InvalidState)?;
@@ -102,6 +116,36 @@ impl ForwardReceiverComposition {
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
                             read_only: false,
+                            read_write: false,
+                        }),
+                    },
+                )?;
+            } else if self.scene_refraction {
+                let producer_depth = producer_depth.ok_or(Error::InvalidState)?;
+                super::shared_record::record_raster_selection(
+                    &slots,
+                    pass,
+                    bindings,
+                    encoder,
+                    frame,
+                    super::shared_record::RasterSelection {
+                        draws: 0..frame.draws.len(),
+                        color: super::shared_record::RasterColorSelection {
+                            slot: self.slots.target,
+                            texture: &frame.frame.target,
+                            view: &frame.frame.target_view,
+                            instance: frame.frame.target_instance,
+                            load: LoadOp::Load,
+                            read_write: true,
+                        },
+                        depth: Some(super::shared_record::RasterDepthSelection {
+                            slot: self.slots.depth.ok_or(Error::InvalidState)?,
+                            texture: &producer_depth.texture,
+                            view: &producer_depth.view,
+                            instance: producer_depth.instance,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                            read_only: true,
                             read_write: false,
                         }),
                     },

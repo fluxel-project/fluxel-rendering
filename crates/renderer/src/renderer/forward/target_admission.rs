@@ -24,12 +24,14 @@ pub(super) fn admit_assembly<B: ResourceBackend>(
         format,
         imported_surface,
         sampled_target,
-        inputs.iter().any(|input| input.prepared().uses_scene_refraction()),
+        inputs
+            .iter()
+            .any(|input| input.prepared().uses_scene_refraction()),
     )
 }
 
 /// Checks the exact target descriptor selected for this frame's topology.
-pub(super) fn admit<B: ResourceBackend>(
+pub(in crate::renderer) fn admit<B: ResourceBackend>(
     device: &Device<B>,
     topology: crate::FrameTopology,
     extent: [u32; 2],

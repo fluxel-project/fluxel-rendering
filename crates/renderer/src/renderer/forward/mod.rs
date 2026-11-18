@@ -331,7 +331,7 @@ mod prepare_entry;
 mod prepare_frames;
 mod sampler;
 mod surface_composite;
-mod target_admission;
+pub(in crate::renderer) mod target_admission;
 mod texture_upload;
 #[cfg(test)]
 pub(crate) use sampler::validate_sampled_texture_owner;
@@ -344,8 +344,11 @@ pub(crate) use sampler::{
 };
 mod program;
 mod program_selection;
-pub(in crate::renderer) use capture_entry::{capture_assets, validate_receiver_sources};
+pub(in crate::renderer) use capture_entry::{
+    capture_assets, validate_receiver_sources, validate_receiver_view,
+};
 pub(in crate::renderer) use capture_oit_entry::CaptureOitSide;
+pub(in crate::renderer) use capture_receiver_contribution::receiver_contribution;
 pub(in crate::renderer) use captured::CaptureTextureOwner;
 pub use captured::CaptureTextureSlot;
 pub(crate) use surface_composite::SurfaceCompositeOwner;

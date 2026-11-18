@@ -3,7 +3,7 @@
 use super::*;
 use crate::graph::forward::ForwardReceiverTerminal;
 use crate::{
-    graph::{oit_record::OitRecordCommands, ForwardOitInput},
+    graph::{ForwardOitInput, oit_record::OitRecordCommands},
     residency::ForwardFrame,
 };
 
@@ -74,6 +74,9 @@ impl<B: ResourceBackend> DeferredForwardCapturePlan<B> {
             encoder,
             &bindings,
             receiver,
+            self.receiver
+                .scene_refraction()
+                .then_some(&producer.gbuffer[2]),
             receiver_oit,
             receiver_commands,
             pass,

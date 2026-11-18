@@ -190,7 +190,7 @@ where
     }
 }
 
-pub(super) fn validate_receiver_view(
+pub(in crate::renderer) fn validate_receiver_view(
     receiver: &crate::ForwardDrawInput,
     producer: &crate::RenderView,
 ) -> std::result::Result<(), RendererError> {
