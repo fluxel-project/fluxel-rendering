@@ -38,6 +38,11 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
+        let color_format = if self.output_processing().is_some() {
+            TextureFormat::Rgba16Float
+        } else {
+            color_format
+        };
         let assembled = self
             .assemble_prepared_forward(
                 retained_snapshot,
@@ -56,18 +61,43 @@ where
             .await?;
         let result = match assembled.target {
             AssembledForwardTarget::Offscreen { frame } => {
-                self.execute_forward_with_contribution(
+                if frame.frame.target_desc.format == TextureFormat::Rgba16Float {
+                    self.execute_forward_hdr(
+                        assembled.retained,
+                        frame,
+                        assembled.publication,
+                        assembled.topology,
+                        assembled.batch_stats,
+                        None,
+                        contribute,
+                    )
+                    .await
+                } else {
+                    self.execute_forward_with_contribution(
+                        assembled.retained,
+                        frame,
+                        assembled.publication,
+                        assembled.topology,
+                        assembled.batch_stats,
+                        contribute,
+                    )
+                    .await
+                }
+            }
+            AssembledForwardTarget::Surface { frame, image } => {
+                self.execute_forward_surface(
                     assembled.retained,
                     frame,
                     assembled.publication,
                     assembled.topology,
                     assembled.batch_stats,
+                    image,
                     contribute,
                 )
                 .await
             }
-            AssembledForwardTarget::Surface { frame, image } => {
-                self.execute_forward_surface(
+            AssembledForwardTarget::HdrSurface { frame, image } => {
+                self.execute_forward_hdr_surface(
                     assembled.retained,
                     frame,
                     assembled.publication,
@@ -109,6 +139,24 @@ pub(in crate::renderer) enum AssembledForwardTarget<B: ResourceBackend> {
         frame: crate::residency::SurfaceForwardFrame<B>,
         image: SurfaceImage<B>,
     },
+    HdrSurface {
+        frame: crate::residency::ForwardFrame<B>,
+        image: SurfaceImage<B>,
+    },
+}
+
+impl<B: ResourceBackend> AssembledForwardTarget<B> {
+    pub(super) fn from_offscreen(
+        frame: crate::residency::ForwardFrame<B>,
+        surface: Option<(SurfaceImage<B>, [u32; 2])>,
+        process_output: bool,
+    ) -> Result<Self> {
+        match surface {
+            None => Ok(Self::Offscreen { frame }),
+            Some((image, _)) if process_output => Ok(Self::HdrSurface { frame, image }),
+            Some(_) => Err(Error::InvalidState),
+        }
+    }
 }
 
 pub(in crate::renderer) struct AssembledForward<B: ResourceBackend> {

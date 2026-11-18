@@ -35,6 +35,9 @@ where
             PendingWork::DeferredSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::Forward { plan, .. } => plan.completion(&self.outcome),
             PendingWork::ForwardSurface { plan, .. } => plan.completion(&self.outcome),
+            PendingWork::ForwardHdrSurface { plan, .. } => {
+                plan.hdr_surface_completion(&self.outcome)
+            }
             PendingWork::ForwardOitSurface { plan, .. } => plan.surface_completion(&self.outcome),
             PendingWork::CaptureForward { plan, .. } => plan.completion(&self.outcome),
             PendingWork::CaptureOit { plan, .. } => plan.completion(&self.outcome),
@@ -88,6 +91,7 @@ where
             PendingWork::SurfaceRaster { .. }
             | PendingWork::ForwardOitSurface { .. }
             | PendingWork::ForwardSurface { .. }
+            | PendingWork::ForwardHdrSurface { .. }
             | PendingWork::DeferredOitSurface { .. }
             | PendingWork::DeferredCaptureSurface { .. }
             | PendingWork::DeferredForwardCaptureSurface { .. }

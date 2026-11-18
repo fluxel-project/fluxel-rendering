@@ -16,6 +16,21 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         declare_offscreen_with(device, frame, expected, contribute)
     }
 
+    pub(crate) fn declare_hdr_with<F>(
+        device: &Device<B>,
+        frame: &ForwardFrame<B>,
+        expected: FrameTopology,
+        image: Option<&SurfaceImage<B>>,
+        contribute: F,
+    ) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
+    where
+        F: FnOnce(
+            &mut ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), PipelineError>,
+    {
+        declare_offscreen_hdr_with(device, frame, expected, image, contribute)
+    }
+
     pub(crate) fn validate_declaration(
         &self,
         declaration: &OffscreenForwardDeclaration,
@@ -82,7 +97,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 3);
+        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 4);
         expected.push(declaration.upload_pass);
         expected.extend(declaration.mip_passes.iter().map(|pass| pass.pass));
         expected.push(declaration.raster_pass);
@@ -90,38 +105,56 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             expected.extend(product.passes());
             expected.extend(product.fallback);
         }
-        expected.push(declaration.readback_pass);
+        if let Some(terminal) = declaration.hdr_terminal.as_ref() {
+            match terminal {
+                HdrForwardTerminal::Offscreen {
+                    composite_pass,
+                    readback_pass,
+                    ..
+                } => expected.extend([*composite_pass, *readback_pass]),
+                HdrForwardTerminal::Surface { composite_pass, .. } => {
+                    expected.push(*composite_pass);
+                }
+            }
+        } else {
+            expected.push(declaration.readback_pass);
+        }
         if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
-        let submission = if oit.as_ref().and_then(|product| product.surface).is_some() {
-            let present = StepId {
-                plan: id,
-                index: u32::try_from(execution.logical().passes().len())
-                    .map_err(|_| Error::InvalidRange)?,
+        let hdr_surface = matches!(
+            declaration.hdr_terminal,
+            Some(HdrForwardTerminal::Surface { .. })
+        );
+        let submission =
+            if oit.as_ref().and_then(|product| product.surface).is_some() || hdr_surface {
+                let present = StepId {
+                    plan: id,
+                    index: u32::try_from(execution.logical().passes().len())
+                        .map_err(|_| Error::InvalidRange)?,
+                };
+                let mut steps = execution.steps(device, id, declaration.lane)?;
+                let previous = present.index.checked_sub(1).ok_or(Error::InvalidState)?;
+                steps.push(StepDesc {
+                    lane: declaration.lane,
+                    kind: StepKind::Present,
+                    waits: vec![StepWait {
+                        previous: StepId {
+                            plan: id,
+                            index: previous,
+                        },
+                        destination: AccessScope {
+                            stages: StageMask::ALL_COMMANDS,
+                            accesses: AccessMask::ALL,
+                        },
+                    }],
+                });
+                let submission = unsafe { SubmissionPlan::from_compiled(id, Arc::from(steps)) };
+                submission.validate_for_execution(device)?;
+                submission
+            } else {
+                execution.submission(device, id, declaration.lane)?
             };
-            let mut steps = execution.steps(device, id, declaration.lane)?;
-            let previous = present.index.checked_sub(1).ok_or(Error::InvalidState)?;
-            steps.push(StepDesc {
-                lane: declaration.lane,
-                kind: StepKind::Present,
-                waits: vec![StepWait {
-                    previous: StepId {
-                        plan: id,
-                        index: previous,
-                    },
-                    destination: AccessScope {
-                        stages: StageMask::ALL_COMMANDS,
-                        accesses: AccessMask::ALL,
-                    },
-                }],
-            });
-            let submission = unsafe { SubmissionPlan::from_compiled(id, Arc::from(steps)) };
-            submission.validate_for_execution(device)?;
-            submission
-        } else {
-            execution.submission(device, id, declaration.lane)?
-        };
         Ok(Self {
             id,
             lane: declaration.lane,
@@ -154,6 +187,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             uniform_alignment: declaration.uniform_alignment,
             topology: declaration.topology,
             oit,
+            hdr_terminal: declaration.hdr_terminal,
         })
     }
 
@@ -182,6 +216,48 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 .expect("compiled pass count fits u32"),
         }
     }
+
+    pub(crate) fn hdr_composite_step(&self) -> Result<StepId> {
+        let pass = match self.hdr_terminal.as_ref() {
+            Some(HdrForwardTerminal::Offscreen { composite_pass, .. })
+            | Some(HdrForwardTerminal::Surface { composite_pass, .. }) => *composite_pass,
+            None => return Err(Error::InvalidState),
+        };
+        self.step_for(pass)
+    }
+
+    pub(crate) fn hdr_readback_step(&self) -> Result<StepId> {
+        let pass = match self.hdr_terminal.as_ref() {
+            Some(HdrForwardTerminal::Offscreen { readback_pass, .. }) => *readback_pass,
+            _ => return Err(Error::InvalidState),
+        };
+        self.step_for(pass)
+    }
+
+    pub(crate) fn hdr_present_step(&self) -> Result<StepId> {
+        match self.hdr_terminal {
+            Some(HdrForwardTerminal::Surface { .. }) => Ok(StepId {
+                plan: self.id,
+                index: u32::try_from(self.execution.logical().passes().len())
+                    .map_err(|_| Error::InvalidRange)?,
+            }),
+            _ => Err(Error::InvalidState),
+        }
+    }
+
+    fn step_for(&self, wanted: GraphPass) -> Result<StepId> {
+        let index = self
+            .execution
+            .logical()
+            .passes()
+            .iter()
+            .position(|pass| *pass == wanted)
+            .ok_or(Error::InvalidState)?;
+        Ok(StepId {
+            plan: self.id,
+            index: u32::try_from(index).map_err(|_| Error::InvalidRange)?,
+        })
+    }
     pub(crate) fn mip_steps(&self) -> impl ExactSizeIterator<Item = StepId> + '_ {
         (0..self.mip_passes.len()).map(|index| StepId {
             plan: self.id,
@@ -198,6 +274,29 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     pub(crate) fn validate_frame(&self, frame: &ForwardFrame<B>) -> Result<()> {
         self.validate_frame_base(frame)?;
         self.validate_bindings(frame)
+    }
+
+    pub(crate) fn validate_hdr_frame(
+        &self,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()> {
+        self.validate_frame_base(frame)?;
+        if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+            return Err(Error::InvalidState);
+        }
+        match (self.hdr_terminal.as_ref(), image) {
+            (Some(HdrForwardTerminal::Offscreen { .. }), None) => self.bindings(frame).map(|_| ()),
+            (Some(HdrForwardTerminal::Surface { extent, format, .. }), Some(image))
+                if image.is_current()
+                    && image.device() == self.id.device
+                    && image.extent() == *extent
+                    && image.format() == *format =>
+            {
+                self.bindings_with_hdr_surface(frame, image).map(|_| ())
+            }
+            _ => Err(Error::InvalidState),
+        }
     }
     pub(super) fn validate_frame_base(&self, frame: &ForwardFrame<B>) -> Result<()> {
         validate_resident_texture_devices(&frame.resident, self.id.device)?;
@@ -263,7 +362,9 @@ impl<B: ResourceBackend> ForwardPlan<B> {
     where
         B: ExecutionBackend,
     {
-        if self.oit.as_ref().and_then(|oit| oit.surface).is_some() {
+        if self.oit.as_ref().and_then(|oit| oit.surface).is_some()
+            || matches!(self.hdr_terminal, Some(HdrForwardTerminal::Surface { .. }))
+        {
             return Err(Error::InvalidState);
         }
         let expected: Vec<_> = (0..self.execution.logical().passes().len())
@@ -286,6 +387,45 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                             && point.covers.lane_frontiers.iter().any(|&(lane, step)| {
                                 lane == self.lane && step == self.readback_step()
                             })
+                    })
+                    .map(|point| point.point.clone())
+            })
+            .ok_or(Error::InvalidState)
+    }
+
+    pub(crate) fn hdr_surface_completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>>
+    where
+        B: ExecutionBackend,
+    {
+        let present = self.hdr_present_step()?;
+        let mut expected: Vec<_> = (0..self.execution.logical().passes().len())
+            .map(|index| StepId {
+                plan: self.id,
+                index: u32::try_from(index).expect("compiled pass index fits u32"),
+            })
+            .collect();
+        expected.push(present);
+        let facts = outcome.facts();
+        if facts.status != ExecutionStatus::Accepted
+            || facts.accepted != Some(expected.as_slice())
+            || !facts.presents.is_some_and(|items| {
+                items.len() == 1 && items[0].accepted && items[0].step == Some(present)
+            })
+        {
+            return Err(Error::InvalidState);
+        }
+        facts
+            .checkpoints
+            .and_then(|points| {
+                points
+                    .iter()
+                    .find(|point| {
+                        point.point.device() == self.id.device
+                            && point
+                                .covers
+                                .lane_frontiers
+                                .iter()
+                                .any(|&(lane, step)| lane == self.lane && step == present)
                     })
                     .map(|point| point.point.clone())
             })

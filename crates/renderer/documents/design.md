@@ -327,6 +327,13 @@ Deferred selects `Rgba16Float` for its admitted lighting attachment. Ordinary
 sorted transparency and environment transmission compose into that same
 attachment, and the final version feeds the terminal. Offscreen output still
 reads the separate RGBA8 destination with its four-byte pixel layout.
+Ordinary Forward raster and its terminal use one Graph. The processed route
+uses a linear `Rgba16Float` scene attachment and binds either a distinct RGBA8
+readback source or the acquired Surface as the terminal target. Sorted
+Deferred frames without a G-buffer prefix use this same Forward route. The
+terminal pipeline, sampling group, scene and destination owners remain alive
+through covering completion, including recording or presentation failure
+where earlier commands may have been accepted.
 This processing targets SDR sRGB presentation. Native HDR display transfer
 and color-space selection remain separate work.
 

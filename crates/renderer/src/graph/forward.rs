@@ -25,6 +25,7 @@ mod capture_surface_record;
 mod capture_terminal;
 mod capture_upload;
 mod declaration;
+mod hdr_record;
 mod offscreen_bindings;
 mod offscreen_declaration;
 mod offscreen_plan;
@@ -108,7 +109,10 @@ use capture_surface_declaration::{
 };
 pub(crate) use capture_surface_plan::CaptureForwardSurfacePlan;
 use declaration::{SurfaceForwardDeclaration, declare_surface_with};
-use offscreen_declaration::{OffscreenForwardDeclaration, declare_offscreen_with};
+use offscreen_declaration::{
+    HdrForwardTerminal, OffscreenForwardDeclaration, declare_offscreen_hdr_with,
+    declare_offscreen_with,
+};
 
 /// Exact offscreen resources and stable draw partition for one OIT frame.
 /// This is Graph-private: the renderer retains all actual native programs and
@@ -197,6 +201,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     uniform_alignment: u64,
     topology: FrameTopology,
     oit: Option<oit_plan::ForwardOitPlan>,
+    hdr_terminal: Option<HdrForwardTerminal>,
 }
 
 /// Forward execution plan whose final raster attachment is an acquired surface

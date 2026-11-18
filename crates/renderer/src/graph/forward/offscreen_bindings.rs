@@ -22,6 +22,17 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         }
         self.bindings_inner(frame, Some(input), image)
     }
+
+    pub(super) fn bindings_with_hdr_surface<'a>(
+        &'a self,
+        frame: &'a ForwardFrame<B>,
+        image: &'a SurfaceImage<B>,
+    ) -> Result<FrameBindings<'a, B>> {
+        if !matches!(self.hdr_terminal, Some(HdrForwardTerminal::Surface { .. })) {
+            return Err(Error::InvalidState);
+        }
+        self.bindings_inner(frame, None, Some(image))
+    }
     fn bindings_inner<'a>(
         &'a self,
         frame: &'a ForwardFrame<B>,
@@ -197,6 +208,18 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                         }),
                 )
                 .collect();
+        if let Some(HdrForwardTerminal::Offscreen { output_slot, .. }) = self.hdr_terminal.as_ref()
+        {
+            let output = frame.frame.output.as_ref().ok_or(Error::InvalidState)?;
+            textures.push(BoundTexture::new(
+                *output_slot,
+                output.instance,
+                &output.texture,
+                &output.desc,
+                output.incoming,
+                output.layout,
+            ));
+        }
         if let Some(input) = oit {
             let product = self.oit.as_ref().ok_or(Error::InvalidState)?;
             for (slots, side) in product.slots.ping_pong.iter().zip(&input.owners.ping_pong) {
@@ -232,9 +255,18 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 ));
             }
         }
-        let surface_textures = match (self.oit.as_ref().and_then(|oit| oit.surface), image) {
-            (None, None) => Vec::new(),
-            (Some(surface), Some(image)) => vec![BoundSurfaceTexture::new(surface.slot, image)?],
+        let oit_surface = self.oit.as_ref().and_then(|oit| oit.surface);
+        let hdr_surface = match self.hdr_terminal.as_ref() {
+            Some(HdrForwardTerminal::Surface { surface_slot, .. }) => Some(*surface_slot),
+            Some(HdrForwardTerminal::Offscreen { .. }) | None => None,
+        };
+        let surface_textures = match (oit_surface, hdr_surface, image) {
+            (None, None, None) => Vec::new(),
+            (Some(_), Some(_), _) => return Err(Error::InvalidState),
+            (Some(surface), None, Some(image)) => {
+                vec![BoundSurfaceTexture::new(surface.slot, image)?]
+            }
+            (None, Some(surface), Some(image)) => vec![BoundSurfaceTexture::new(surface, image)?],
             _ => return Err(Error::InvalidState),
         };
         FrameBindings::new_with_surface_textures(

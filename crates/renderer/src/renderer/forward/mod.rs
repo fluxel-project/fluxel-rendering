@@ -179,6 +179,13 @@ where
             } => {
                 publish(&_frame.resident, publication, &mut self.forward_residency);
             }
+            super::PendingWork::ForwardHdrSurface {
+                _frame,
+                publication,
+                ..
+            } => {
+                publish(&_frame.resident, publication, &mut self.forward_residency);
+            }
             super::PendingWork::CaptureForward {
                 _capture,
                 _receiver,
@@ -224,7 +231,10 @@ where
     pub(super) fn recycle_completed_readback(&mut self, work: super::PendingWork<B>, slot: usize) {
         match work {
             super::PendingWork::Forward { _frame, _oit, .. } => {
-                if _oit.is_some() {
+                if _oit.is_some()
+                    || _frame.frame.target_desc.format == TextureFormat::Rgba16Float
+                    || _frame.frame.output.is_some()
+                {
                     // OIT samples the opaque target; the ordinary pool expects
                     // a final CopySrc target. Retire this frame at completion.
                     return;
@@ -316,6 +326,7 @@ mod composed_pair;
 mod depth;
 mod entry;
 mod execute;
+mod hdr_execute;
 mod oit_composed;
 mod oit_composed_pair;
 mod oit_entry;

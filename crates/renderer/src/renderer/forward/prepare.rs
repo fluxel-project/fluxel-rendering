@@ -51,8 +51,16 @@ where
             .iter()
             .any(|input| input.prepared().uses_scene_refraction());
         let borrowed_attachments = attachments.is_some();
+        // A 16-bit acquired image is still an ordinary direct Surface target
+        // unless output processing explicitly requested the separate linear
+        // scene target.  The latter must not be inferred from the lease's
+        // format: applications may legitimately acquire an RGBA16F surface.
+        let process_output = self.output_processing().is_some()
+            && color_format == TextureFormat::Rgba16Float
+            && attachments.is_none();
+        let direct_surface = surface.is_some() && !process_output;
         if let Some(attachments) = attachments.as_ref() {
-            if surface.is_some()
+            if direct_surface
                 || depth_mode != crate::ForwardDepthMode::Depth32LessEqualWrite
                 || !matches!(topology, crate::FrameTopology::SortedForward)
                 || color_format != attachments.color.desc.format
@@ -79,8 +87,8 @@ where
                 topology,
                 extent,
                 color_format,
-                surface.is_some(),
-                sampled_target,
+                direct_surface,
+                sampled_target || process_output,
             )
             .map_err(|error| self.observe_forward_error("surface target admission", error))?;
         }
@@ -348,8 +356,9 @@ where
             uniform_len,
             row_pitch,
             limits.uniform_offset_alignment,
-            surface.is_some(),
-            sampled_target,
+            direct_surface,
+            color_format,
+            sampled_target || process_output,
             scene_refraction,
             attachments.as_ref(),
         )?;
@@ -551,7 +560,7 @@ where
                 };
                 AssembledForwardTarget::Surface { frame, image }
             }
-            (None, Some(frame), None) => {
+            (surface, Some(frame), None) => {
                 let frame = ForwardFrame {
                     resident,
                     resident_upload,
@@ -565,7 +574,7 @@ where
                     extent,
                     readback_row_pitch: row_pitch,
                 };
-                AssembledForwardTarget::Offscreen { frame }
+                AssembledForwardTarget::from_offscreen(frame, surface, process_output)?
             }
             _ => return Err(Error::InvalidState.into()),
         };

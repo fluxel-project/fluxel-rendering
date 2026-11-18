@@ -291,6 +291,7 @@ where
                 super::PendingWork::Forward {
                     _frame: Box::new(frame),
                     _oit: None,
+                    _composite: None,
                     publication,
                     plan,
                     extent,

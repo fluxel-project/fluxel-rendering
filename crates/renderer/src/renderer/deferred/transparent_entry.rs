@@ -41,12 +41,12 @@ where
                 .iter()
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
-        let format = surface
-            .as_ref()
-            .map_or(TextureFormat::Rgba8Unorm, SurfaceImage::format);
         if opaque.is_empty() {
             // No selected opaque records means there is no G-buffer product.
             // This is an empty partition, not recovery from failed admission.
+            let format = surface
+                .as_ref()
+                .map_or(TextureFormat::Rgba8Unorm, SurfaceImage::format);
             return self
                 .submit_prepared_forward(
                     snapshot,

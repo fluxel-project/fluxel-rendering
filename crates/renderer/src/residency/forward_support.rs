@@ -15,6 +15,7 @@ pub(crate) struct ForwardFramePlan {
     pub(crate) upload_desc: BufferDesc,
     pub(crate) uniform_desc: BufferDesc,
     pub(crate) target_desc: TextureDesc,
+    pub(crate) output_desc: Option<TextureDesc>,
     pub(crate) readback_desc: BufferDesc,
     pub(crate) uniform_upload: ForwardUniformUpload,
 }

@@ -77,6 +77,9 @@ where
     Forward {
         _frame: Box<crate::residency::ForwardFrame<B>>,
         _oit: Option<Box<forward::OitFrameResources<B>>>,
+        /// The HDR offscreen terminal's color conversion pipeline/bindings.
+        /// It owns backend objects used by the submitted terminal pass.
+        _composite: Option<SurfaceCompositeOwner<B>>,
         publication: forward::ForwardPublication,
         plan: Arc<crate::graph::ForwardPlan<B>>,
         extent: [u32; 2],
@@ -87,6 +90,13 @@ where
         _present: Option<fluxel_rhi::api::PresentBinding<B>>,
         publication: forward::ForwardPublication,
         plan: Arc<crate::graph::SurfaceForwardPlan<B>>,
+    },
+    ForwardHdrSurface {
+        _frame: Box<crate::residency::ForwardFrame<B>>,
+        _composite: SurfaceCompositeOwner<B>,
+        _present: Option<fluxel_rhi::api::PresentBinding<B>>,
+        publication: forward::ForwardPublication,
+        plan: Arc<crate::graph::ForwardPlan<B>>,
     },
     ForwardOitSurface {
         _frame: Box<crate::residency::ForwardFrame<B>>,

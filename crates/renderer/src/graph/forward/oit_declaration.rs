@@ -195,6 +195,7 @@ where
             shape: spec.shape.clone(),
             uniform_alignment: prefix.uniform_alignment,
             topology: FrameTopology::SortedForward,
+            hdr_terminal: None,
         },
     })
 }

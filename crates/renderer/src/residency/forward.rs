@@ -23,6 +23,7 @@ mod forward_depth;
 pub(crate) use forward_depth::ForwardDepthAttachment;
 #[path = "forward_frame_allocation.rs"]
 mod forward_frame_allocation;
+pub(crate) use forward_frame_allocation::plan_forward_hdr_frame;
 
 #[path = "forward_support.rs"]
 mod forward_support;
@@ -137,6 +138,9 @@ pub(crate) struct ForwardFrameBuffers<B: ResourceBackend> {
     pub(crate) target_view: TextureView<B>,
     pub(crate) target_incoming: TextureUses,
     pub(crate) target_layout: ImageLayout,
+    /// Display-referred terminal target for an HDR scene-color frame.
+    /// Ordinary Forward frames retain no second color owner.
+    pub(crate) output: Option<ForwardTexture<B>>,
     pub(crate) depth: Option<ForwardDepthAttachment<B>>,
     pub(crate) readback: Buffer<B>,
     pub(crate) readback_desc: BufferDesc,
@@ -498,6 +502,7 @@ pub(crate) fn plan_forward_frame(
         upload_desc,
         uniform_desc,
         target_desc,
+        output_desc: None,
         readback_desc,
         uniform_upload: ForwardUniformUpload {
             source: 0..uniform_len,

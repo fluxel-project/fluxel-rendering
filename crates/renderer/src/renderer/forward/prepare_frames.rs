@@ -30,6 +30,7 @@ where
         row_pitch: u32,
         alignment: u64,
         surface: bool,
+        color_format: TextureFormat,
         sampled_target: bool,
         copy_destination: bool,
         attachments: Option<&BorrowedForwardAttachments<B>>,
@@ -90,19 +91,31 @@ where
                 });
             }
         }
-        let mut plan = crate::residency::plan_forward_frame(
-            extent,
-            uniform_len,
-            uniform_len,
-            0..uniform_len,
-            row_pitch,
-            alignment,
-            sampled_target,
-        )
+        let mut plan = if color_format == TextureFormat::Rgba16Float {
+            crate::residency::plan_forward_hdr_frame(
+                extent,
+                uniform_len,
+                uniform_len,
+                0..uniform_len,
+                row_pitch,
+                alignment,
+            )
+        } else {
+            crate::residency::plan_forward_frame(
+                extent,
+                uniform_len,
+                uniform_len,
+                0..uniform_len,
+                row_pitch,
+                alignment,
+                sampled_target,
+            )
+        }
         .map_err(|error| self.observe_forward_error("frame planning", error))?;
         if copy_destination {
             plan.target_desc.usage |= TextureUsage::COPY_DST;
         }
+        let output_texture = u64::from(plan.output_desc.is_some());
         let bytes = plan
             .upload_desc
             .size
@@ -117,7 +130,7 @@ where
             uniform_upload,
             buffers: 3,
             bytes,
-            textures: 1,
+            textures: 1 + output_texture,
         })
     }
 

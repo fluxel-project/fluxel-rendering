@@ -1,12 +1,16 @@
 //! Complete private offscreen Forward graph declarations.
 
 use fluxel_rhi::{
-    api::{BufferUsage, Device, Error, ImageLayout, LaneId, TextureUsage},
+    api::{
+        BufferUsage, Device, Error, ImageLayout, LaneId, SurfaceImage, TextureDesc,
+        TextureDimension, TextureFormat, TextureUsage, TextureUses,
+    },
     backend::ResourceBackend,
 };
 
 use crate::{
     FrameTopology,
+    graph::definition::{BufferHandle, TextureHandle},
     pipeline::{ForwardPhaseContext, PipelineError},
     residency::ForwardFrame,
 };
@@ -46,6 +50,36 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) shape: ForwardShape,
     pub(super) uniform_alignment: u64,
     pub(super) topology: FrameTopology,
+    pub(super) hdr_terminal: Option<HdrForwardTerminal>,
+}
+
+/// The last two Forward HDR operations are declared with the real scene and
+/// display owners.  Native recording consumes the selected terminal only after
+/// ordinary Forward raster work has completed.
+pub(super) enum HdrForwardTerminal {
+    Offscreen {
+        composite_pass: GraphPass,
+        output_slot: TextureSlot,
+        readback_pass: GraphPass,
+    },
+    Surface {
+        composite_pass: GraphPass,
+        surface_slot: TextureSlot,
+        extent: [u32; 2],
+        format: TextureFormat,
+    },
+}
+
+enum ForwardOutput<'a> {
+    Readback,
+    ProcessedOffscreen {
+        desc: &'a TextureDesc,
+        incoming: TextureUses,
+        layout: ImageLayout,
+    },
+    ProcessedSurface {
+        format: TextureFormat,
+    },
 }
 
 pub(super) fn declare_offscreen_with<B, F>(
@@ -67,6 +101,20 @@ pub(super) fn declare_offscreen_spec_with<B, F>(
     device: &Device<B>,
     spec: &ForwardGraphSpec,
     expected: FrameTopology,
+    contribute: F,
+) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+{
+    declare_offscreen_with_output(device, spec, expected, ForwardOutput::Readback, contribute)
+}
+
+fn declare_offscreen_with_output<B, F>(
+    device: &Device<B>,
+    spec: &ForwardGraphSpec,
+    expected: FrameTopology,
+    output: ForwardOutput<'_>,
     contribute: F,
 ) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
 where
@@ -124,28 +172,55 @@ where
             .finish()
             .map_err(|_| ForwardPlanBuildError::Pipeline(PipelineError::InvalidPhaseContribution))?
     };
-    let readback_len = u64::from(spec.readback_row_pitch)
-        .checked_mul(u64::from(spec.extent[1]))
-        .ok_or(Error::InvalidRange)?;
-    let (readback_pass, ()) = graph
-        .add_pass("forward-readback", |pass| {
-            pass.read_texture_with_use(
-                target,
-                whole(),
-                texture_copy_read_uses().uses,
-                ImageLayout::CopySrc,
-                TextureUsage::COPY_SRC,
-            )?;
-            pass.write_with_use(
-                readback,
-                0..readback_len,
-                copy_write_uses().uses,
-                BufferUsage::COPY_DST,
-            )?;
-            pass.side_effect();
-            Ok(())
-        })
-        .map_err(|_| Error::InvalidState)?;
+    let (readback_pass, hdr_terminal) = match output {
+        ForwardOutput::Readback => (declare_readback(&mut graph, spec, target, readback)?, None),
+        ForwardOutput::ProcessedOffscreen {
+            desc,
+            incoming,
+            layout,
+        } => {
+            let output = graph
+                .import_texture_with_state(desc.clone(), incoming, layout)
+                .map_err(|_| Error::InvalidState)?;
+            let (composite_pass, output) =
+                declare_output_composite(&mut graph, target, output, false)?;
+            let readback_pass = declare_readback(&mut graph, spec, output, readback)?;
+            (
+                readback_pass,
+                Some(HdrForwardTerminal::Offscreen {
+                    composite_pass,
+                    output_slot: TextureSlot::from(output),
+                    readback_pass,
+                }),
+            )
+        }
+        ForwardOutput::ProcessedSurface { format } => {
+            let extent = spec.extent;
+            let output = graph
+                .import_surface_texture(TextureDesc {
+                    label: Some("fluxel forward HDR surface lease".into()),
+                    dimension: TextureDimension::D2,
+                    extent: [extent[0], extent[1], 1],
+                    array_layers: 1,
+                    format,
+                    mip_levels: 1,
+                    samples: 1,
+                    usage: TextureUsage::RENDER_ATTACHMENT,
+                    view_formats: Vec::new(),
+                })
+                .map_err(|_| Error::InvalidState)?;
+            let (composite_pass, _) = declare_output_composite(&mut graph, target, output, true)?;
+            (
+                composite_pass,
+                Some(HdrForwardTerminal::Surface {
+                    composite_pass,
+                    surface_slot: TextureSlot::from(output),
+                    extent,
+                    format,
+                }),
+            )
+        }
+    };
     Ok(OffscreenForwardDeclaration {
         graph,
         lane,
@@ -174,5 +249,119 @@ where
         shape: spec.shape.clone(),
         uniform_alignment,
         topology: expected,
+        hdr_terminal,
     })
+}
+
+/// Declares a linear HDR Forward scene followed by a fullscreen terminal.
+pub(super) fn declare_offscreen_hdr_with<B, F>(
+    device: &Device<B>,
+    frame: &ForwardFrame<B>,
+    expected: FrameTopology,
+    image: Option<&SurfaceImage<B>>,
+    contribute: F,
+) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+{
+    validate_resident_texture_devices(&frame.resident, device.id())?;
+    if frame.frame.target_desc.format != TextureFormat::Rgba16Float {
+        return Err(Error::InvalidState.into());
+    }
+    if image.is_some_and(|image| {
+        image.device() != device.id() || !image.is_current() || image.extent() != frame.extent
+    }) {
+        return Err(Error::InvalidState.into());
+    }
+    let spec = ForwardGraphSpec::from_frame(frame)?;
+    let output = match image {
+        Some(image) => ForwardOutput::ProcessedSurface {
+            format: image.format(),
+        },
+        None => {
+            let output = frame.frame.output.as_ref().ok_or(Error::InvalidState)?;
+            if output.desc.format != TextureFormat::Rgba8Unorm
+                || output.desc.extent != [frame.extent[0], frame.extent[1], 1]
+                || output.desc.dimension != TextureDimension::D2
+                || output.desc.array_layers != 1
+                || output.desc.mip_levels != 1
+                || output.desc.samples != 1
+                || !output
+                    .desc
+                    .usage
+                    .contains(TextureUsage::RENDER_ATTACHMENT | TextureUsage::COPY_SRC)
+                || output.instance == frame.frame.target_instance
+            {
+                return Err(Error::InvalidState.into());
+            }
+            ForwardOutput::ProcessedOffscreen {
+                desc: &output.desc,
+                incoming: output.incoming,
+                layout: output.layout,
+            }
+        }
+    };
+    declare_offscreen_with_output(device, &spec, expected, output, contribute)
+}
+
+fn declare_readback(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    color: TextureHandle,
+    readback: BufferHandle,
+) -> Result<GraphPass, Error> {
+    let readback_len = u64::from(spec.readback_row_pitch)
+        .checked_mul(u64::from(spec.extent[1]))
+        .ok_or(Error::InvalidRange)?;
+    let (pass, ()) = graph
+        .add_pass("forward-readback", |pass| {
+            pass.read_texture_with_use(
+                color,
+                whole(),
+                texture_copy_read_uses().uses,
+                ImageLayout::CopySrc,
+                TextureUsage::COPY_SRC,
+            )?;
+            pass.write_with_use(
+                readback,
+                0..readback_len,
+                copy_write_uses().uses,
+                BufferUsage::COPY_DST,
+            )?;
+            pass.side_effect();
+            Ok(())
+        })
+        .map_err(|_| Error::InvalidState)?;
+    Ok(pass)
+}
+
+fn declare_output_composite(
+    graph: &mut GraphBuilder,
+    scene_color: TextureHandle,
+    output: TextureHandle,
+    present: bool,
+) -> Result<(GraphPass, TextureHandle), Error> {
+    graph
+        .add_pass("forward-hdr-output-composite", |pass| {
+            pass.read_texture_with_use(
+                scene_color,
+                whole(),
+                super::texture_read_uses().uses,
+                ImageLayout::ShaderReadOnly,
+                TextureUsage::TEXTURE_BINDING,
+            )?;
+            let output = pass.write_texture_with_use(
+                output,
+                whole(),
+                super::color_write_uses().uses,
+                ImageLayout::ColorAttachment,
+                TextureUsage::RENDER_ATTACHMENT,
+            )?;
+            if present {
+                pass.side_effect();
+            }
+            Ok(output)
+        })
+        .map_err(|_| Error::InvalidState)
 }

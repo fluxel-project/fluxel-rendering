@@ -217,6 +217,7 @@ where
             None => super::PendingWork::Forward {
                 _frame: Box::new(frame),
                 _oit: Some(Box::new(oit)),
+                _composite: None,
                 publication,
                 plan,
                 extent,
