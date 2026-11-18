@@ -253,7 +253,9 @@ fragments even when their depth equals the clear value.
 
 Effects selection is frame-wide. If any material needs effects, every draw
 uses the third-output template, including neutral `AO=1` and `emissive=0` for
-materials without extensions. A two-output draw cannot rely on a cleared effects
+materials without extensions. PBR preserves signed linear emissive values
+through that attachment. Like Babylon's final color composition, the lighting
+consumer adds emissive and then clamps the summed RGB to zero at the low end. A two-output draw cannot rely on a cleared effects
 attachment: its zero alpha would incorrectly remove diffuse irradiance.
 Without effects, multiple draws retain the two-color-attachment requirement.
 

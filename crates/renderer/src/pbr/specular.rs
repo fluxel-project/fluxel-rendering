@@ -448,7 +448,8 @@ fn pbr_directional_light() -> PbrDirectionalLight {{
     let spec = pbr_specular_ibl_bound(world, normal, surface_effects.a, base_metal.rgb, base_metal.a, nr.a, vec3(0.04));
     let terms = pbr_direct_light_components(base_metal.rgb, vec2(base_metal.a, nr.a), normal, view, vec3(0.04));
     let direct = terms.specular * spec.specular_energy + terms.diffuse;
-    return vec4(direct + spec.radiance{indirect} + surface_effects.rgb, 1.0);
+    let color = max(direct + spec.radiance{indirect} + surface_effects.rgb, vec3(0.0));
+    return vec4(color, 1.0);
 }}
 "#
     )
@@ -545,7 +546,7 @@ struct PbrSpecularVertexOutput {
         String::from("let indirect = vec3<f32>(0.0);")
     };
     let emissive = if effects {
-        "let emissive = max(evaluate_emissive_uv0(input.uv0), vec3<f32>(0.0));"
+        "let emissive = evaluate_emissive_uv0(input.uv0);"
     } else {
         "let emissive = vec3<f32>(0.0);"
     };
@@ -580,7 +581,8 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     {refraction}
     {emissive}
     if material_alpha_rejected(material.a) {{ discard; }}
-    return vec4<f32>(direct + spec.radiance + indirect + refraction + emissive, material_output_alpha(material.a));
+    let color = max(direct + spec.radiance + indirect + refraction + emissive, vec3<f32>(0.0));
+    return vec4<f32>(color, material_output_alpha(material.a));
 }}
 "#
     )
