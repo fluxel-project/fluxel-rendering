@@ -2,14 +2,22 @@
 
 use super::*;
 
-pub(super) fn declare_capture_oit_surface<B: ResourceBackend>(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn declare_capture_oit_surface_with_capture_contribution<B, N, C>(
     device: &Device<B>,
     capture: &ForwardFrame<B>,
     receiver: &ForwardFrame<B>,
     capture_oit: Option<&ForwardOitInput<'_, B>>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
     image: &SurfaceImage<B>,
-) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError> {
+    capture_ordinary: N,
+    capture_contribute: C,
+) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
+where
+    B: ResourceBackend,
+    N: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+{
     super::capture_oit_declaration::declare_capture_oit_inner(
         device,
         capture,
@@ -17,5 +25,7 @@ pub(super) fn declare_capture_oit_surface<B: ResourceBackend>(
         capture_oit,
         receiver_oit,
         Some(image),
+        capture_ordinary,
+        capture_contribute,
     )
 }

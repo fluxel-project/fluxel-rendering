@@ -305,6 +305,7 @@ pub(in crate::renderer) use composed::order_draws as order_forward_draws;
 mod capture_composed;
 mod capture_entry;
 mod capture_execute;
+mod capture_oit_composed;
 mod capture_oit_entry;
 mod capture_oit_execute;
 mod captured;

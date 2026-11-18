@@ -45,33 +45,48 @@ pub(super) enum CaptureOitTerminal {
     },
 }
 
-/// Declares the complete capture producer -> receiver chain without a second
-/// scheduler.  `None` keeps that side on its ordinary sorted path; `Some`
-/// appends its bounded OIT material stages and exposes their final product.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn declare_capture_oit<B>(
+pub(super) fn declare_capture_oit_with_capture_contribution<B, N, C>(
     device: &Device<B>,
     capture: &ForwardFrame<B>,
     receiver: &ForwardFrame<B>,
     capture_oit: Option<&ForwardOitInput<'_, B>>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
+    capture_ordinary: N,
+    capture_contribute: C,
 ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
 where
     B: ResourceBackend,
+    N: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
 {
-    declare_capture_oit_inner(device, capture, receiver, capture_oit, receiver_oit, None)
+    declare_capture_oit_inner(
+        device,
+        capture,
+        receiver,
+        capture_oit,
+        receiver_oit,
+        None,
+        capture_ordinary,
+        capture_contribute,
+    )
 }
 
-pub(super) fn declare_capture_oit_inner<B>(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn declare_capture_oit_inner<B, N, C>(
     device: &Device<B>,
     capture: &ForwardFrame<B>,
     receiver: &ForwardFrame<B>,
     capture_oit: Option<&ForwardOitInput<'_, B>>,
     receiver_oit: Option<&ForwardOitInput<'_, B>>,
     image: Option<&SurfaceImage<B>>,
+    capture_ordinary: N,
+    mut capture_contribute: C,
 ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
 where
     B: ResourceBackend,
+    N: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
 {
     validate_resident_texture_devices(&capture.resident, device.id())?;
     validate_resident_texture_devices(&receiver.resident, device.id())?;
@@ -121,13 +136,15 @@ where
     let capture_dependency = capture_mips
         .last()
         .map_or(capture_upload, |generation| generation.pass);
-    let (capture_raster, capture_final, capture_oit_plan) = declare_side(
+    let (capture_raster, capture_final, capture_oit_plan) = declare_side_with_contribution(
         &mut graph,
         &capture_spec,
         &capture_handles,
         capture_upload,
         capture_dependency,
         capture_oit,
+        capture_ordinary,
+        &mut capture_contribute,
     )?;
     let capture_texture_slots = capture_texture_slots(&receiver_spec)?;
     let aliases = capture_texture_slots
@@ -143,13 +160,16 @@ where
     let receiver_dependency = receiver_mips
         .last()
         .map_or(receiver_upload, |generation| generation.pass);
-    let (receiver_raster, receiver_final, receiver_oit_plan) = declare_side(
+    let mut receiver_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
+    let (receiver_raster, receiver_final, receiver_oit_plan) = declare_side_with_contribution(
         &mut graph,
         &receiver_spec,
         &receiver_handles,
         receiver_upload,
         receiver_dependency,
         receiver_oit,
+        ordinary_reads::<B>,
+        &mut receiver_reads,
     )?;
     let terminal = match image {
         None => CaptureOitTerminal::Readback {
@@ -250,10 +270,43 @@ pub(super) fn declare_side<B>(
 where
     B: ResourceBackend,
 {
+    declare_side_with_contribution(
+        graph,
+        spec,
+        handles,
+        upload,
+        dependency,
+        oit,
+        ordinary_reads::<B>,
+        &mut |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads(),
+    )
+}
+
+pub(super) fn declare_side_with_contribution<B, N, C>(
+    graph: &mut GraphBuilder,
+    spec: &ForwardGraphSpec,
+    handles: &FrameHandles,
+    upload: GraphPass,
+    dependency: GraphPass,
+    oit: Option<&ForwardOitInput<'_, B>>,
+    ordinary: N,
+    contribute: &mut C,
+) -> std::result::Result<
+    (
+        GraphPass,
+        crate::graph::definition::TextureHandle,
+        Option<super::oit_plan::ForwardOitPlan>,
+    ),
+    ForwardPlanBuildError,
+>
+where
+    B: ResourceBackend,
+    N: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
+    C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+{
     match oit {
         Some(input) => {
             let reads = super::oit_draw_reads::OitDrawReads::from_capture_handles(handles, spec);
-            let mut all_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
             let stages = super::oit_stages::declare_stages(
                 graph,
                 spec,
@@ -262,7 +315,7 @@ where
                 dependency,
                 handles.target,
                 handles.depth.ok_or(Error::InvalidState)?,
-                &mut all_reads,
+                contribute,
             )?;
             Ok((stages.raster_pass, stages.output, Some(stages.oit)))
         }
@@ -273,7 +326,7 @@ where
                 FrameTopology::SortedForward,
                 upload,
                 handles,
-                ordinary_reads::<B>,
+                ordinary,
             )?;
             Ok((raster, target, None))
         }

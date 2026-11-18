@@ -883,6 +883,12 @@ in the ordinary Forward producer. Scene and Feature draws share the selected
 ordering policy. The producer invokes `contribute_composed` on the same Graph
 that exposes the capture target to the receiver.
 
+`submit_forward_oit_capture_with_feature` and its Surface counterpart declare
+one Feature's draw reads in the producer's opaque, peel and excluded draw
+scopes. When it has no peel candidates, the producer invokes the typed sorted
+contribution on the same capture Graph. The receiver independently selects
+its ordinary or OIT product.
+
 The capture target adds sampled usage only on this route. Ordinary Forward
 targets keep their existing capability requirements. Device format facts and
 the allocation owner's saved descriptor, identity, incoming state and layout

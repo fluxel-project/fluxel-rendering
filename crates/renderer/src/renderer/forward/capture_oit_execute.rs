@@ -16,6 +16,43 @@ where
         target: OitExecutionTarget<B>,
         started: Instant,
     ) -> std::result::Result<Submission, RendererError> {
+        self.execute_capture_oit_with_capture_contribution(
+            capture,
+            receiver,
+            target,
+            started,
+            |context| {
+                context.sorted(|pass| {
+                    pass.depends_on_uploads()?;
+                    pass.read_vertex_streams()?;
+                    pass.read_frame_uniforms()?;
+                    pass.read_sampled_textures()?;
+                    pass.write_selected_depth()?;
+                    pass.read_write_main_color()
+                })
+            },
+            |context| context.all_reads(),
+        )
+        .await
+    }
+
+    pub(in crate::renderer) async fn execute_capture_oit_with_capture_contribution<N, C>(
+        &mut self,
+        capture: CaptureOitSide<B>,
+        receiver: CaptureOitSide<B>,
+        target: OitExecutionTarget<B>,
+        started: Instant,
+        capture_ordinary: N,
+        capture_contribute: C,
+    ) -> std::result::Result<Submission, RendererError>
+    where
+        N: FnOnce(
+            &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+        C: FnMut(
+            &mut crate::graph::ForwardOitReadContext<'_, '_>,
+        ) -> std::result::Result<(), crate::PipelineError>,
+    {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
         match (&capture.retained, &receiver.retained) {
@@ -33,20 +70,24 @@ where
         };
         let image = present.as_ref().map(PresentBinding::image);
         let declaration = match image {
-            Some(image) => crate::graph::CaptureOitPlan::declare_surface(
+            Some(image) => crate::graph::CaptureOitPlan::declare_surface_with_capture_contribution(
                 &self.device,
                 &capture.frame,
                 &receiver.frame,
                 capture_input.as_ref(),
                 receiver_input.as_ref(),
                 image,
+                capture_ordinary,
+                capture_contribute,
             ),
-            None => crate::graph::CaptureOitPlan::declare(
+            None => crate::graph::CaptureOitPlan::declare_with_capture_contribution(
                 &self.device,
                 &capture.frame,
                 &receiver.frame,
                 capture_input.as_ref(),
                 receiver_input.as_ref(),
+                capture_ordinary,
+                capture_contribute,
             ),
         }
         .map_err(|error| self.forward_plan_error("capture OIT declaration", error))?;

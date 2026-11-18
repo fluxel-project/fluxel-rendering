@@ -25,37 +25,65 @@ pub(crate) struct CaptureOitPlan<B: ResourceBackend> {
 }
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
-    pub(crate) fn declare(
+    /// Declares capture work with producer-specific ordinary and OIT reads.
+    ///
+    /// Both callbacks are invoked while constructing this one Graph.  The
+    /// ordinary callback is used only when the producer selected no peeling
+    /// candidates; the OIT callback declares every selected material stage.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn declare_with_capture_contribution<N, C>(
         device: &Device<B>,
         capture: &ForwardFrame<B>,
         receiver: &ForwardFrame<B>,
         capture_oit: Option<&ForwardOitInput<'_, B>>,
         receiver_oit: Option<&ForwardOitInput<'_, B>>,
-    ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError> {
-        super::capture_oit_declaration::declare_capture_oit(
+        capture_ordinary: N,
+        capture_contribute: C,
+    ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
+    where
+        N: FnOnce(
+            &mut ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), PipelineError>,
+        C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+    {
+        super::capture_oit_declaration::declare_capture_oit_with_capture_contribution(
             device,
             capture,
             receiver,
             capture_oit,
             receiver_oit,
+            capture_ordinary,
+            capture_contribute,
         )
     }
 
-    pub(crate) fn declare_surface(
+    /// Surface form of [`Self::declare_with_capture_contribution`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn declare_surface_with_capture_contribution<N, C>(
         device: &Device<B>,
         capture: &ForwardFrame<B>,
         receiver: &ForwardFrame<B>,
         capture_oit: Option<&ForwardOitInput<'_, B>>,
         receiver_oit: Option<&ForwardOitInput<'_, B>>,
         image: &SurfaceImage<B>,
-    ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError> {
-        super::capture_oit_surface_declaration::declare_capture_oit_surface(
+        capture_ordinary: N,
+        capture_contribute: C,
+    ) -> std::result::Result<CaptureOitDeclaration, ForwardPlanBuildError>
+    where
+        N: FnOnce(
+            &mut ForwardPhaseContext<'_, '_, '_, B>,
+        ) -> std::result::Result<(), PipelineError>,
+        C: FnMut(&mut ForwardOitReadContext<'_, '_>) -> std::result::Result<(), PipelineError>,
+    {
+        super::capture_oit_surface_declaration::declare_capture_oit_surface_with_capture_contribution(
             device,
             capture,
             receiver,
             capture_oit,
             receiver_oit,
             image,
+            capture_ordinary,
+            capture_contribute,
         )
     }
 
