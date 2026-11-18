@@ -33,6 +33,11 @@ where
     {
         self.ensure_open()?;
         let slot = self.free_slot().ok_or(RendererError::Backpressure)?;
+        let read_only_producer_depth = preserve_capture_background
+            && !receiver
+                .draws
+                .iter()
+                .any(|draw| draw.compatibility.writes_depth());
         let declaration = crate::graph::CaptureForwardSurfacePlan::declare_with(
             &self.device,
             &capture,
@@ -42,9 +47,7 @@ where
             receiver_topology,
             preserve_capture_background,
             capture_contribute,
-            |context| {
-                receiver_contribution(context, receiver_topology, preserve_capture_background)
-            },
+            |context| receiver_contribution(context, receiver_topology, read_only_producer_depth),
         )
         .map_err(|error| self.forward_plan_error("capture surface graph declaration", error))?;
         let id = self.next_forward_plan_id()?;

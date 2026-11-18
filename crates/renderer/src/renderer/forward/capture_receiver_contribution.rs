@@ -5,7 +5,7 @@ use super::*;
 pub(in crate::renderer) fn receiver_contribution<B: ResourceBackend>(
     context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
     topology: crate::FrameTopology,
-    reads_producer_depth: bool,
+    read_only_producer_depth: bool,
 ) -> std::result::Result<(), crate::PipelineError> {
     match topology {
         crate::FrameTopology::OpaqueForward => context.opaque(|pass| {
@@ -21,7 +21,7 @@ pub(in crate::renderer) fn receiver_contribution<B: ResourceBackend>(
             pass.read_vertex_streams()?;
             pass.read_frame_uniforms()?;
             pass.read_sampled_textures()?;
-            if reads_producer_depth {
+            if read_only_producer_depth {
                 pass.read_selected_depth()?;
             } else {
                 pass.write_selected_depth()?;

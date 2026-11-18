@@ -27,7 +27,6 @@ pub(crate) struct RasterSurfaceState {
     front_face: FrontFaceState,
     cull_back_faces: bool,
     alpha_blending: bool,
-    read_only_depth: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -70,10 +69,9 @@ impl RasterSurfaceState {
         })
     }
 
-    /// Blend draws and capture refraction receivers compare existing depth.
-    /// The selected depth attachment stays available for later consumers.
+    /// Opaque and masked fragments can write the selected depth attachment.
     pub(crate) const fn depth_write_enabled(self) -> bool {
-        !self.alpha_blending && !self.read_only_depth
+        !self.alpha_blending
     }
 }
 
@@ -91,7 +89,6 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
             FrontFaceState::CounterClockwise
         },
         cull_back_faces: policy.back_face_culling,
-        read_only_depth: input.prepared().uses_scene_refraction(),
         alpha_blending: matches!(
             policy.alpha_mode,
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend

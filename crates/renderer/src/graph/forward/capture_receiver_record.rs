@@ -98,6 +98,7 @@ impl ForwardReceiverComposition {
         };
         if pass == self.raster {
             if let Some(oit) = &self.oit {
+                let writable_depth = self.draws_write_depth(0..oit.opaque_count)?;
                 super::shared_record::record_raster_selection(
                     &slots,
                     pass,
@@ -111,22 +112,31 @@ impl ForwardReceiverComposition {
                             texture: &frame.frame.target,
                             view: &frame.frame.target_view,
                             instance: frame.frame.target_instance,
-                            load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
-                            read_write: false,
+                            load: if self.scene_refraction {
+                                LoadOp::Load
+                            } else {
+                                LoadOp::Clear(ClearColor::Float([0.0; 4]))
+                            },
+                            read_write: self.scene_refraction,
                         },
                         depth: Some(super::shared_record::RasterDepthSelection {
                             slot: self.slots.depth.ok_or(Error::InvalidState)?,
                             texture: depth.texture,
                             view: depth.view,
                             instance: depth.instance,
-                            load: LoadOp::Clear(1.0),
+                            load: if self.scene_refraction {
+                                LoadOp::Load
+                            } else {
+                                LoadOp::Clear(1.0)
+                            },
                             store: StoreOp::Store,
                             read_only: false,
-                            read_write: false,
+                            read_write: self.scene_refraction && writable_depth,
                         }),
                     },
                 )?;
             } else if self.scene_refraction {
+                let writable_depth = self.draws_write_depth(0..frame.draws.len())?;
                 super::shared_record::record_raster_selection(
                     &slots,
                     pass,
@@ -150,8 +160,8 @@ impl ForwardReceiverComposition {
                             instance: depth.instance,
                             load: LoadOp::Load,
                             store: StoreOp::Store,
-                            read_only: true,
-                            read_write: false,
+                            read_only: !writable_depth,
+                            read_write: writable_depth,
                         }),
                     },
                 )?;
@@ -221,6 +231,11 @@ impl ForwardReceiverComposition {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    fn draws_write_depth(&self, draws: std::ops::Range<usize>) -> Result<bool> {
+        let shapes = self.shape.draws.get(draws).ok_or(Error::InvalidRange)?;
+        Ok(shapes.iter().any(|draw| draw.compatibility.writes_depth()))
     }
 
     pub(in crate::graph) fn record_final_readback<B: ResourceBackend + ReadbackBackend>(

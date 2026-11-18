@@ -5,7 +5,7 @@
 
 use super::capture_declaration::{
     CaptureFrameSlots, FrameHandles, SharedResidentImports, capture_texture_slots,
-    declare_mip_generations, declare_raster, declare_upload, import_frame_inner, validate_spec,
+    declare_mip_generations, declare_upload, import_frame_inner, validate_spec,
 };
 use super::capture_depth_alias::import_frame_with_depth_alias;
 use super::capture_terminal::declare_capture_background_copy;
@@ -140,52 +140,17 @@ where
     if let Some((_, target)) = background_copy {
         handles.target = target;
     }
-    let (raster, final_handle, oit) =
-        if let (Some(producer_depth), Some(input)) = (scene_refraction, oit_input) {
-            // The background copy establishes the receiver's real opaque color.
-            // The OIT helper must then consume that version and the producer's
-            // original depth read-only; it must not clear or write either one.
-            let (background_copy, target) = background_copy.ok_or(Error::InvalidState)?;
-            let reads = super::oit_draw_reads::OitDrawReads::from_capture_handles(&handles, &spec);
-            let stages = super::oit_stages::declare_scene_refraction_stages(
-                graph,
-                &spec,
-                &reads,
-                input,
-                target,
-                producer_depth,
-                &mut |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads(),
+    let (raster, final_handle, oit) = if let Some((copy, _)) = background_copy {
+        super::oit_stages::declare_projected_receiver(
+            graph, &spec, &handles, dependency, copy, oit_input,
+        )?
+    } else {
+        let (raster, color, _, oit) =
+            super::capture_oit_declaration::declare_side_with_contribution(
+                graph, &spec, &handles, upload, dependency, oit_input, ordinary, contribute,
             )?;
-            // The copied target is the OIT background and is already represented
-            // by `background_copy`; keep it as the namespace raster identity so
-            // the compiled pass sequence never records an empty opaque pass.
-            (background_copy, stages.output, Some(stages.oit))
-        } else if scene_refraction.is_some() {
-            let (pass, color, _) = declare_raster(
-                graph,
-                &spec,
-                FrameTopology::SortedForward,
-                upload,
-                &handles,
-                |context: &mut crate::ForwardPhaseContext<'_, '_, '_, B>| {
-                    context.sorted(|pass| {
-                        pass.depends_on_uploads()?;
-                        pass.read_vertex_streams()?;
-                        pass.read_frame_uniforms()?;
-                        pass.read_sampled_textures()?;
-                        pass.read_selected_depth()?;
-                        pass.read_write_main_color()
-                    })
-                },
-            )?;
-            (pass, color, None)
-        } else {
-            let (raster, color, _, oit) =
-                super::capture_oit_declaration::declare_side_with_contribution(
-                    graph, &spec, &handles, upload, dependency, oit_input, ordinary, contribute,
-                )?;
-            (raster, color, oit)
-        };
+        (raster, color, oit)
+    };
     Ok(ForwardReceiverComposition {
         upload,
         mip_generations,

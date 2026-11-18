@@ -145,7 +145,11 @@ impl<B: ResourceBackend> CaptureForwardPlan<B> {
                 LoadOp::Load,
                 LoadOp::Load,
                 StoreOp::Store,
-                true,
+                !self
+                    .receiver_shape
+                    .draws
+                    .iter()
+                    .any(|draw| draw.compatibility.writes_depth()),
             );
         }
         shared_record::record_raster(

@@ -18,9 +18,7 @@ pub(crate) struct ForwardCompatibilityKey {
 }
 
 impl ForwardCompatibilityKey {
-    /// Whether the selected fixed-function state writes the bound depth
-    /// attachment. Scene-refraction receivers can be unblended yet remain
-    /// read-only, so attachment ownership must use the selected state.
+    /// Whether the selected fixed-function state writes a bound depth attachment.
     pub(crate) const fn writes_depth(&self) -> bool {
         self.surface.depth_write_enabled()
     }

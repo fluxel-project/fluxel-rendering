@@ -20,7 +20,7 @@ where
         + ShaderBackend,
 {
     /// Captures scene meshes and one typed Feature for an offscreen receiver.
-    /// Supplies one prepared receiver or a batch of projected Blend/MaskBlend receivers.
+    /// Supplies one prepared receiver or a batch of projected refraction receivers.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_deferred_capture_with_feature<V, F>(
         &mut self,
@@ -92,7 +92,7 @@ where
     }
 
     /// Captures scene meshes and two distinct typed Features for an offscreen receiver.
-    /// Supplies one prepared receiver or a batch of projected Blend/MaskBlend receivers.
+    /// Supplies one prepared receiver or a batch of projected refraction receivers.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_deferred_capture_with_features<V, F, G>(
         &mut self,

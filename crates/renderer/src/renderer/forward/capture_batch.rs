@@ -5,6 +5,7 @@ use crate::{
     DualDepthPeelingConfig, ForwardAssets, ForwardDrawInput, PreparedCaptureReceiver, RenderView,
     preparation::{OitDrawPartition, partition_oit_draws},
 };
+use fluxel_material::SurfaceAlphaMode;
 use fluxel_rhi::api::Error;
 
 fn prepare_capture_receiver_batch(
@@ -26,9 +27,9 @@ fn prepare_capture_receiver_batch(
             .with_capture_lighting(&mut composer, environment, specular)
             .map_err(RendererError::ForwardPreparation)?
             .into_draw_input();
-        if !draw.prepared().uses_scene_refraction() || !transparent_order::is_transparent(&draw) {
+        if !draw.prepared().uses_scene_refraction() {
             return Err(Error::Unsupported(
-                "refraction batch requires Blend or MaskBlend projected receivers",
+                "refraction batch requires projected scene-refraction receivers",
             )
             .into());
         }
@@ -45,21 +46,57 @@ fn partition_capture_receiver_draws(
     inputs: Vec<ForwardDrawInput>,
     config: Option<&DualDepthPeelingConfig>,
 ) -> Result<OitDrawPartition, RendererError> {
-    let mut partition = match config {
-        Some(config) => partition_oit_draws(inputs, config),
-        None => OitDrawPartition {
-            draws: inputs,
-            opaque_count: 0,
-            peel_count: 0,
-        },
+    let (prefix, peel, excluded) = match config {
+        Some(config) => {
+            let partition = partition_oit_draws(inputs, config);
+            let mut draws = partition.draws;
+            let mut transparent = draws.split_off(partition.opaque_count);
+            let excluded = transparent.split_off(partition.peel_count);
+            (draws, transparent, excluded)
+        }
+        None => {
+            let mut prefix = Vec::new();
+            let mut ordinary = Vec::new();
+            for input in inputs {
+                if transparent_order::is_transparent(&input) {
+                    ordinary.push(input);
+                } else {
+                    prefix.push(input);
+                }
+            }
+            (prefix, Vec::new(), ordinary)
+        }
     };
-    // Ordinary receivers consume their authored alpha indices. Peeling
-    // candidates retain their received order and resolve visibility on the GPU.
-    let ordinary = partition.draws.split_off(partition.peel_count);
-    partition.draws.extend(
-        transparent_order::sort(ordinary, ForwardDrawInput::order)
+    // Babylon renders opaque and alpha-test queues before transparent work.
+    // Preserve submitted order inside either queue. OIT owns visibility for
+    // candidates, while excluded and non-OIT transparent draws retain the
+    // authored alpha-index and camera order.
+    let mut opaque = Vec::with_capacity(prefix.len());
+    let mut mask = Vec::new();
+    for input in prefix {
+        match input.prepared().material().surface_policy().alpha_mode {
+            SurfaceAlphaMode::Opaque => opaque.push(input),
+            SurfaceAlphaMode::Mask => mask.push(input),
+            SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend => {
+                return Err(RendererError::ForwardPipeline(
+                    crate::PipelineError::InvalidDrawOrder,
+                ));
+            }
+        }
+    }
+    let opaque_count = opaque.len() + mask.len();
+    opaque.extend(mask);
+    let peel_count = peel.len();
+    opaque.extend(peel);
+    opaque.extend(
+        transparent_order::sort(excluded, ForwardDrawInput::order)
             .map_err(RendererError::ForwardPipeline)?,
     );
+    let partition = OitDrawPartition {
+        draws: opaque,
+        opaque_count,
+        peel_count,
+    };
     Ok(partition)
 }
 

@@ -1,8 +1,8 @@
 //! Recording one already-compiled capture OIT Graph pass.
 
-use super::shared_record::{self, RasterColorSelection, RasterDepthSelection, RasterSelection};
+use super::shared_record;
 use super::*;
-use crate::graph::oit_record::{OitDepthTargetRef, OitDrawSlots, OitRecordCommands};
+use crate::graph::oit_record::OitRecordCommands;
 
 impl<B: ResourceBackend> CaptureOitPlan<B> {
     #[allow(clippy::too_many_arguments)]
@@ -193,17 +193,26 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                 capture,
                 &self.capture,
                 self.capture_oit.as_ref().ok_or(Error::InvalidState)?,
+                capture.frame.depth.as_ref().ok_or(Error::InvalidState)?,
+                false,
                 pass,
             )?;
             return Ok(None);
         }
-        if pass == self.receiver_raster && self.receiver_oit.is_some() && !self.scene_refraction {
+        if pass == self.receiver_raster && self.receiver_oit.is_some() {
+            let depth = if self.scene_refraction {
+                capture.frame.depth.as_ref().ok_or(Error::InvalidState)?
+            } else {
+                receiver.frame.depth.as_ref().ok_or(Error::InvalidState)?
+            };
             self.record_oit_opaque(
                 &bindings,
                 encoder,
                 receiver,
                 &self.receiver,
                 self.receiver_oit.as_ref().ok_or(Error::InvalidState)?,
+                depth,
+                self.scene_refraction,
                 pass,
             )?;
             return Ok(None);
@@ -235,6 +244,11 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
         }
         if pass == self.receiver_raster {
             if self.scene_refraction {
+                let writable_depth = self
+                    .receiver_shape
+                    .draws
+                    .iter()
+                    .any(|draw| draw.compatibility.writes_depth());
                 shared_record::record_raster_with_loads(
                     &self.slots(&self.receiver),
                     pass,
@@ -245,7 +259,7 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
                     LoadOp::Load,
                     LoadOp::Load,
                     StoreOp::Store,
-                    true,
+                    !writable_depth,
                 )?;
                 return Ok(None);
             }
@@ -403,132 +417,6 @@ impl<B: ResourceBackend> CaptureOitPlan<B> {
             self.receiver_oit.as_ref(),
             receiver_input,
             receiver_commands,
-        )
-    }
-
-    fn record_oit_opaque(
-        &self,
-        bindings: &FrameBindings<'_, B>,
-        encoder: &mut CommandEncoder<B>,
-        frame: &ForwardFrame<B>,
-        slots: &CaptureFrameSlots,
-        oit: &super::oit_plan::ForwardOitPlan,
-        pass: GraphPass,
-    ) -> Result<()>
-    where
-        B: RasterBackend,
-    {
-        let depth = frame.frame.depth.as_ref().ok_or(Error::InvalidState)?;
-        shared_record::record_raster_selection(
-            &self.slots(slots),
-            pass,
-            bindings,
-            encoder,
-            frame,
-            RasterSelection {
-                draws: 0..oit.opaque_count,
-                color: RasterColorSelection {
-                    slot: slots.target,
-                    texture: &frame.frame.target,
-                    view: &frame.frame.target_view,
-                    instance: frame.frame.target_instance,
-                    load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
-                    read_write: false,
-                },
-                depth: Some(RasterDepthSelection {
-                    slot: slots.depth.ok_or(Error::InvalidState)?,
-                    texture: &depth.texture,
-                    view: &depth.view,
-                    instance: depth.instance,
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                    read_only: false,
-                    read_write: false,
-                }),
-            },
-        )
-    }
-
-    fn record_oit_stage(
-        &self,
-        bindings: &FrameBindings<'_, B>,
-        encoder: &mut CommandEncoder<B>,
-        frame: &ForwardFrame<B>,
-        input: &ForwardOitInput<'_, B>,
-        commands: &OitRecordCommands<'_, B>,
-        slots: &CaptureFrameSlots,
-        oit: &super::oit_plan::ForwardOitPlan,
-        opaque_depth: &crate::residency::ForwardDepthAttachment<B>,
-        pass: GraphPass,
-    ) -> Result<()>
-    where
-        B: RasterBackend,
-    {
-        let depth = OitDepthTargetRef::from(opaque_depth);
-        crate::graph::oit_record::record_pass(
-            self.id.device,
-            encoder,
-            bindings,
-            &oit.product,
-            pass,
-            &oit.slots,
-            input.owners,
-            &depth,
-            frame,
-            &OitDrawSlots {
-                streams: &slots.streams,
-                uniform: slots.uniform,
-                textures: &slots.textures,
-                environment: slots.environment,
-                specular_radiance: slots.specular_radiance,
-                specular_brdf_lut: slots.specular_brdf_lut,
-                specular_view_uniform: slots.specular_view_uniform,
-            },
-            commands,
-        )
-    }
-
-    fn record_oit_fallback(
-        &self,
-        bindings: &FrameBindings<'_, B>,
-        encoder: &mut CommandEncoder<B>,
-        frame: &ForwardFrame<B>,
-        input: &ForwardOitInput<'_, B>,
-        slots: &CaptureFrameSlots,
-        oit: &super::oit_plan::ForwardOitPlan,
-        opaque_depth: &crate::residency::ForwardDepthAttachment<B>,
-        pass: GraphPass,
-    ) -> Result<()>
-    where
-        B: RasterBackend,
-    {
-        shared_record::record_raster_selection(
-            &self.slots(slots),
-            pass,
-            bindings,
-            encoder,
-            frame,
-            RasterSelection {
-                draws: (oit.opaque_count + oit.peel_count)..frame.draws.len(),
-                color: RasterColorSelection {
-                    slot: oit.slots.output,
-                    texture: &input.output.texture,
-                    view: &input.output.view,
-                    instance: input.output.instance,
-                    load: LoadOp::Load,
-                    read_write: true,
-                },
-                depth: Some(RasterDepthSelection {
-                    slot: slots.depth.ok_or(Error::InvalidState)?,
-                    texture: &opaque_depth.texture,
-                    view: &opaque_depth.view,
-                    instance: opaque_depth.instance,
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
-                    read_only: true,
-                    read_write: false,
-                }),
-            },
         )
     }
 }

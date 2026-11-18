@@ -197,41 +197,14 @@ where
         receiver_handles.target = target;
     }
     let (receiver_raster, receiver_final, receiver_oit_plan) = if scene_refraction {
-        match receiver_oit {
-            Some(input) => {
-                let reads = super::oit_draw_reads::OitDrawReads::from_capture_handles(
-                    &receiver_handles,
-                    &receiver_spec,
-                );
-                let mut receiver_reads =
-                    |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
-                let stages = super::oit_stages::declare_scene_refraction_stages(
-                    &mut graph,
-                    &receiver_spec,
-                    &reads,
-                    input,
-                    receiver_handles.target,
-                    receiver_handles.depth.ok_or(Error::InvalidState)?,
-                    &mut receiver_reads,
-                )?;
-                // The background-copy is this receiver's opaque stage. It
-                // must run before OIT samples the defined opaque color, but
-                // must not be replayed as a clearing raster pass.
-                let raster = receiver_background_copy.ok_or(Error::InvalidState)?.0;
-                (raster, stages.output, Some(stages.oit))
-            }
-            None => {
-                let (pass, color, _) = declare_raster(
-                    &mut graph,
-                    &receiver_spec,
-                    FrameTopology::SortedForward,
-                    receiver_upload,
-                    &receiver_handles,
-                    scene_refraction_reads::<B>,
-                )?;
-                (pass, color, None)
-            }
-        }
+        super::oit_stages::declare_projected_receiver(
+            &mut graph,
+            &receiver_spec,
+            &receiver_handles,
+            receiver_dependency,
+            receiver_background_copy.ok_or(Error::InvalidState)?.0,
+            receiver_oit,
+        )?
     } else {
         let mut receiver_reads = |context: &mut ForwardOitReadContext<'_, '_>| context.all_reads();
         let (raster, color, _, oit) = declare_side_with_contribution(
@@ -406,19 +379,6 @@ fn ordinary_reads<B: ResourceBackend>(
         pass.read_frame_uniforms()?;
         pass.read_sampled_textures()?;
         pass.write_selected_depth()?;
-        pass.read_write_main_color()
-    })
-}
-
-fn scene_refraction_reads<B: ResourceBackend>(
-    context: &mut ForwardPhaseContext<'_, '_, '_, B>,
-) -> std::result::Result<(), PipelineError> {
-    context.sorted(|pass| {
-        pass.depends_on_uploads()?;
-        pass.read_vertex_streams()?;
-        pass.read_frame_uniforms()?;
-        pass.read_sampled_textures()?;
-        pass.read_selected_depth()?;
         pass.read_write_main_color()
     })
 }

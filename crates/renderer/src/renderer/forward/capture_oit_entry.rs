@@ -56,21 +56,17 @@ pub(in crate::renderer) fn capture_oit_receiver_partition(
     input: crate::ForwardDrawInput,
     config: Option<&crate::DualDepthPeelingConfig>,
 ) -> OitDrawPartition {
-    let scene_refraction = input.prepared().uses_scene_refraction();
-    let mut partition = match config {
+    match config {
         Some(config) => crate::preparation::partition_oit_draws(vec![input], config),
-        None => OitDrawPartition {
-            draws: vec![input],
-            opaque_count: 0,
-            peel_count: 0,
-        },
-    };
-    if scene_refraction {
-        // A projected receiver inherits the producer's background and depth.
-        // Even an unblended receiver must not write into that opaque prefix.
-        partition.opaque_count = 0;
+        None => {
+            let opaque_count = usize::from(!super::transparent_order::is_transparent(&input));
+            OitDrawPartition {
+                draws: vec![input],
+                opaque_count,
+                peel_count: 0,
+            }
+        }
     }
-    partition
 }
 
 impl<B> Renderer<B>
@@ -154,7 +150,7 @@ where
         .await
     }
 
-    /// Submits projected Blend or MaskBlend receivers against the same captured scene.
+    /// Submits projected refraction receivers against the same captured scene.
     /// Each optional config independently selects finite peeling on that side.
     #[allow(clippy::too_many_arguments)]
     pub async fn submit_forward_capture_batch<V>(
