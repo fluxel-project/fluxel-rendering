@@ -70,7 +70,7 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         specular.validate_for_sampling(device.id())?;
     }
     for (texture, format) in frame.gbuffer.iter().zip([
-        TextureFormat::Rgba8Unorm,
+        crate::residency::deferred_albedo_format(frame.pbr),
         TextureFormat::Rgba8Unorm,
         TextureFormat::Depth32Float,
     ]) {

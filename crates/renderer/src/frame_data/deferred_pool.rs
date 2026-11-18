@@ -64,10 +64,11 @@ pub(crate) fn compatible<B: ResourceBackend>(
     extent: [u32; 2],
     uniform_bytes: u64,
     row_pitch: u32,
+    pbr: bool,
     effects: bool,
 ) -> bool {
     pool::compatible(&entry.frame, device, extent, uniform_bytes, row_pitch)
-        && gbuffer_compatible(&entry.gbuffer, device, extent)
+        && gbuffer_compatible(&entry.gbuffer, device, extent, pbr)
         && effect_compatible(&entry.effects, device, extent, effects)
 }
 
@@ -94,9 +95,10 @@ fn gbuffer_compatible<B: ResourceBackend>(
     gbuffer: &[ForwardTexture<B>; 3],
     device: DeviceId,
     extent: [u32; 2],
+    pbr: bool,
 ) -> bool {
     let formats = [
-        TextureFormat::Rgba8Unorm,
+        crate::residency::deferred_albedo_format(pbr),
         TextureFormat::Rgba8Unorm,
         TextureFormat::Depth32Float,
     ];

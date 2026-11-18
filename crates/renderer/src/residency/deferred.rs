@@ -59,6 +59,8 @@ pub(crate) struct DeferredPublication {
 /// their descriptors, incoming state, instances, and views remain together in
 /// [`ForwardTexture`].
 pub(crate) struct DeferredFrame<B: ResourceBackend> {
+    /// Selects the PBR G-buffer encoding and its wider base-color attachment.
+    pub(crate) pbr: bool,
     pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
@@ -90,6 +92,8 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
 /// to a transient surface lease. The lease itself stays in execution ownership;
 /// it is intentionally absent here and cannot enter any reusable cache.
 pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
+    /// Selects the PBR G-buffer encoding and its wider base-color attachment.
+    pub(crate) pbr: bool,
     pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
@@ -156,13 +160,14 @@ impl DeferredGbufferPlan {
 
 /// Validates the Deferred G-buffer resource request without allocating.
 ///
-/// The resulting plan always has two single-sample RGBA8 color attachments and
-/// one single-sample Depth32Float attachment. All attachments must also be
+/// PBR uses a linear RGBA16F albedo attachment; unlit keeps RGBA8 compatibility.
+/// Both use an RGBA8 normal attachment and one single-sample Depth32Float attachment. All attachments must also be
 /// sampled by the later lighting pass, so support is checked for the exact
 /// combined `RENDER_ATTACHMENT | TEXTURE_BINDING` descriptors now.
 pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
     device: &Device<B>,
     extent: [u32; 2],
+    pbr: bool,
     effects: bool,
 ) -> Result<DeferredGbufferPlan> {
     validate_request(
@@ -170,7 +175,7 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
         device.capabilities().limits.max_color_attachments,
         effects,
     )?;
-    let descs = gbuffer_descs(extent);
+    let descs = gbuffer_descs(extent, pbr);
     for desc in &descs {
         require_texture(device, desc)?;
     }
@@ -237,9 +242,21 @@ fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool)
     Ok(())
 }
 
-fn gbuffer_descs(extent: [u32; 2]) -> [TextureDesc; 3] {
+pub(crate) fn deferred_albedo_format(pbr: bool) -> TextureFormat {
+    if pbr {
+        TextureFormat::Rgba16Float
+    } else {
+        TextureFormat::Rgba8Unorm
+    }
+}
+
+fn gbuffer_descs(extent: [u32; 2], pbr: bool) -> [TextureDesc; 3] {
     [
-        gbuffer_desc("fluxel deferred albedo", extent, TextureFormat::Rgba8Unorm),
+        gbuffer_desc(
+            "fluxel deferred albedo",
+            extent,
+            deferred_albedo_format(pbr),
+        ),
         gbuffer_desc("fluxel deferred normal", extent, TextureFormat::Rgba8Unorm),
         gbuffer_desc("fluxel deferred depth", extent, TextureFormat::Depth32Float),
     ]

@@ -182,6 +182,7 @@ fn cached_deferred_plan_refuses_foreign_and_wrong_gbuffer_owners_before_work() {
     let ([_, _, depth], _) = crate::residency::plan_deferred_gbuffer_with_effects(
         &device,
         wrong_descriptor.extent,
+        wrong_descriptor.pbr,
         false,
     )
     .expect("G-buffer plan")

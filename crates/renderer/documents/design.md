@@ -226,6 +226,14 @@ ranges in the shared frame uniform buffer. The geometry pass clears once and
 records each selected draw in order. G-buffer executables are cached as the
 current frame's active set; pending draws retain their own native handles.
 
+PBR uses a linear RGBA16Float base-color/metallic attachment, preserving
+nonnegative base-color values above one up to the format's representable range.
+Unlit uses the RGBA8 attachment. Format admission checks the actual sampled
+and render-attachment usages. Pipeline and frame reuse consume that format.
+The normal/roughness attachment remains RGBA8. The lighting output is still
+RGBA8, so the wider G-buffer preserves input to lighting while HDR output
+requires the later output-composition work.
+
 Effects selection is frame-wide. If any material needs effects, every draw
 uses the third-output template, including neutral `AO=1` and `emissive=0` for
 materials without extensions. A two-output draw cannot rely on a cleared effects

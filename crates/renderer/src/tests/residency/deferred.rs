@@ -4,7 +4,7 @@ use fluxel_rhi::api::{TextureDimension, TextureFormat, TextureUsage};
 
 #[test]
 fn gbuffer_descriptors_require_two_sampled_attachments_and_depth() {
-    let descs = gbuffer_descs([320, 180]);
+    let descs = gbuffer_descs([320, 180], true);
 
     assert_eq!(descs.len(), 3);
     for desc in &descs {
@@ -19,7 +19,7 @@ fn gbuffer_descriptors_require_two_sampled_attachments_and_depth() {
         );
         assert!(desc.view_formats.is_empty());
     }
-    assert_eq!(descs[0].format, TextureFormat::Rgba8Unorm);
+    assert_eq!(descs[0].format, TextureFormat::Rgba16Float);
     assert_eq!(descs[1].format, TextureFormat::Rgba8Unorm);
     assert_eq!(descs[2].format, TextureFormat::Depth32Float);
 }

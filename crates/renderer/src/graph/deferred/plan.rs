@@ -413,7 +413,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || !matches_gbuffer_template(
                 &frame.gbuffer[0].desc,
                 self.extent,
-                fluxel_rhi::api::TextureFormat::Rgba8Unorm,
+                crate::residency::deferred_albedo_format(frame.pbr),
             )
             || !matches_gbuffer_template(
                 &frame.gbuffer[1].desc,

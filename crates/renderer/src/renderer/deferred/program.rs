@@ -23,8 +23,7 @@ mod program_fixed;
 #[path = "program_layout.rs"]
 mod program_layout;
 use program_fixed::{
-    color_target, color_target_with_format, depth_state, opaque_triangles, single_sample,
-    surface_triangles,
+    color_target_with_format, depth_state, opaque_triangles, single_sample, surface_triangles,
 };
 
 use program_layout::{ordinary_sampler, sampled_texture, uniform};
@@ -72,7 +71,11 @@ where
                 program_cache::GbufferProgramKey::for_material(
                     self.device.id(),
                     material,
-                    if pbr { crate::frame_data::forward::PBR_TRANSFORM_BYTES } else { 64 },
+                    if pbr {
+                        crate::frame_data::forward::PBR_TRANSFORM_BYTES
+                    } else {
+                        64
+                    },
                     pbr,
                     effects,
                     crate::renderer::raster_surface_state(input),
@@ -90,7 +93,11 @@ where
         surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
-        let transform_uniform_bytes = if pbr { crate::frame_data::forward::PBR_TRANSFORM_BYTES } else { 64 };
+        let transform_uniform_bytes = if pbr {
+            crate::frame_data::forward::PBR_TRANSFORM_BYTES
+        } else {
+            64
+        };
         let key = program_cache::GbufferProgramKey::for_material(
             self.device.id(),
             prepared,
@@ -179,12 +186,19 @@ where
                 vertex_buffers: prepared.geometry().streams.clone(),
                 color_targets: if effects {
                     vec![
-                        Some(color_target()),
-                        Some(color_target()),
+                        Some(color_target_with_format(
+                            crate::residency::deferred_albedo_format(pbr),
+                        )),
+                        Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
                         Some(color_target_with_format(TextureFormat::Rgba16Float)),
                     ]
                 } else {
-                    vec![Some(color_target()), Some(color_target())]
+                    vec![
+                        Some(color_target_with_format(
+                            crate::residency::deferred_albedo_format(pbr),
+                        )),
+                        Some(color_target_with_format(TextureFormat::Rgba8Unorm)),
+                    ]
                 },
                 primitive: surface_triangles(surface),
                 depth_stencil: Some(depth_state()),

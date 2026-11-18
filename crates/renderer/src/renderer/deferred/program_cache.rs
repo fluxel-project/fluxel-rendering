@@ -54,7 +54,10 @@ impl GbufferProgramKey {
                 .map(crate::preparation::vertex_layout_key)
                 .collect(),
             transform_uniform_bytes,
-            color_formats: [TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Unorm],
+            color_formats: [
+                crate::residency::deferred_albedo_format(pbr),
+                TextureFormat::Rgba8Unorm,
+            ],
             depth_format: TextureFormat::Depth32Float,
             multisample_count: 1,
             pbr,
@@ -88,7 +91,7 @@ impl LightingProgramKey {
             device,
             artifact,
             sampled_formats: [
-                TextureFormat::Rgba8Unorm,
+                crate::residency::deferred_albedo_format(pbr),
                 TextureFormat::Rgba8Unorm,
                 TextureFormat::Depth32Float,
             ],

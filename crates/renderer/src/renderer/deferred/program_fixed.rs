@@ -1,10 +1,6 @@
 //! Fixed raster state shared by realized Deferred programs.
 use fluxel_rhi::api::*;
 
-pub(super) fn color_target() -> ColorTargetState {
-    color_target_with_format(TextureFormat::Rgba8Unorm)
-}
-
 pub(super) fn color_target_with_format(format: TextureFormat) -> ColorTargetState {
     ColorTargetState {
         format,

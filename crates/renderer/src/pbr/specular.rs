@@ -104,7 +104,7 @@ fn pbr_specular_metallic_roughness_f0(
     dielectric_f0: vec3<f32>,
 ) -> vec3<f32> {
     return mix(clamp(dielectric_f0, vec3<f32>(0.0), vec3<f32>(1.0)),
-               clamp(base_color, vec3<f32>(0.0), vec3<f32>(1.0)),
+               max(base_color, vec3<f32>(0.0)),
                vec3<f32>(clamp(metallic, 0.0, 1.0)));
 }
 

@@ -67,12 +67,16 @@ fn deferred_plan_rejects_foreign_actual_gbuffer_owner_before_mapping_or_recordin
     let mut frame = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let plan = plan(&device, 71_001, &frame);
     let (other_device, _) = deferred_device(Script::AcceptedExact);
-    frame.gbuffer =
-        crate::residency::plan_deferred_gbuffer_with_effects(&other_device, frame.extent, false)
-            .expect("other-device G-buffer plan")
-            .allocate_with_effects(&other_device)
-            .expect("other-device G-buffer allocation")
-            .0;
+    frame.gbuffer = crate::residency::plan_deferred_gbuffer_with_effects(
+        &other_device,
+        frame.extent,
+        frame.pbr,
+        false,
+    )
+    .expect("other-device G-buffer plan")
+    .allocate_with_effects(&other_device)
+    .expect("other-device G-buffer allocation")
+    .0;
 
     let before = execution_counts(&native);
     assert!(matches!(
@@ -127,11 +131,15 @@ fn deferred_plan_rejects_actual_gbuffer_format_and_extent_owners_before_executio
 
     let mut wrong_format = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let format_plan = plan(&device, 71_002, &wrong_format);
-    let ([_, _, depth], _) =
-        crate::residency::plan_deferred_gbuffer_with_effects(&device, wrong_format.extent, false)
-            .expect("G-buffer plan")
-            .allocate_with_effects(&device)
-            .expect("G-buffer allocation");
+    let ([_, _, depth], _) = crate::residency::plan_deferred_gbuffer_with_effects(
+        &device,
+        wrong_format.extent,
+        wrong_format.pbr,
+        false,
+    )
+    .expect("G-buffer plan")
+    .allocate_with_effects(&device)
+    .expect("G-buffer allocation");
     wrong_format.gbuffer[0] = depth;
     let before = execution_counts(&native);
     assert!(matches!(
@@ -142,11 +150,15 @@ fn deferred_plan_rejects_actual_gbuffer_format_and_extent_owners_before_executio
 
     let mut wrong_extent = deferred_frame(&mut renderer, &snapshot, view, &assets);
     let extent_plan = plan(&device, 71_003, &wrong_extent);
-    let ([albedo, _, _], _) =
-        crate::residency::plan_deferred_gbuffer_with_effects(&device, [2, 1], false)
-            .expect("different-extent G-buffer plan")
-            .allocate_with_effects(&device)
-            .expect("different-extent G-buffer allocation");
+    let ([albedo, _, _], _) = crate::residency::plan_deferred_gbuffer_with_effects(
+        &device,
+        [2, 1],
+        wrong_extent.pbr,
+        false,
+    )
+    .expect("different-extent G-buffer plan")
+    .allocate_with_effects(&device)
+    .expect("different-extent G-buffer allocation");
     wrong_extent.gbuffer[0] = albedo;
     let before = execution_counts(&native);
     assert!(matches!(

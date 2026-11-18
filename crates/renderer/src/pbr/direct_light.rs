@@ -92,7 +92,7 @@ fn pbr_direct_light_components(
 ) -> PbrDirectLight {
     // Renderer currently supplies one directional light to both pipelines.
     return pbr_direct_light_brdf(
-        base, clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
+        max(base, vec3<f32>(0.0)), clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
         view, dielectric_f0, vec3<f32>(0.6, 0.0, 0.8), vec3<f32>(3.0),
     );
 }

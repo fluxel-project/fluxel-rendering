@@ -19,9 +19,9 @@ fn descriptor(format: TextureFormat) -> TextureDesc {
 #[test]
 fn gbuffer_descriptor_compatibility_requires_the_actual_deferred_shapes() {
     assert!(descriptor_compatible(
-        &descriptor(TextureFormat::Rgba8Unorm),
+        &descriptor(TextureFormat::Rgba16Float),
         [320, 180],
-        TextureFormat::Rgba8Unorm,
+        TextureFormat::Rgba16Float,
     ));
     assert!(descriptor_compatible(
         &descriptor(TextureFormat::Depth32Float),

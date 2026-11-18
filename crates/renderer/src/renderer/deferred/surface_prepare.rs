@@ -97,7 +97,7 @@ where
         )
         .map_err(|error| self.observe_rhi_error(error))?;
         let gbuffer_plan =
-            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), effects)
+            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
                 .map_err(|error| self.observe_rhi_error(error))?;
         for desc in [&frame_plan.upload_desc, &frame_plan.uniform_desc] {
             if let Support::Unsupported(reason) = self.device.buffer_support(desc) {
@@ -271,6 +271,7 @@ where
             .frame_upload_bytes
             .saturating_add(uniform_len);
         Ok(DeferredSurfaceFrame {
+            pbr,
             publication,
             deformation: None,
             resident,

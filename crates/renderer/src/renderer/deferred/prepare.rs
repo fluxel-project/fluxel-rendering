@@ -120,7 +120,7 @@ where
         )
         .map_err(|error| self.observe_rhi_error(error))?;
         let gbuffer_plan =
-            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), effects)
+            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
                 .map_err(|error| self.observe_rhi_error(error))?;
         // All Forward-owner descriptors are known here, before the first of
         // those owners is allocated. The G-buffer plan already performed its
@@ -200,6 +200,7 @@ where
                 input.extent(),
                 uniform_len,
                 row_pitch,
+                pbr,
                 effects,
             )
         });
@@ -340,6 +341,7 @@ where
             .frame_upload_bytes
             .saturating_add(uniform_len);
         Ok(DeferredFrame {
+            pbr,
             publication,
             deformation: None,
             resident: Arc::clone(&resident),

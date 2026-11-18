@@ -195,7 +195,7 @@ fn deferred_probe_composites_scene_color_before_readback_and_retires_after_compl
     assert_eq!(
         facts.gbuffer_formats,
         [
-            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba16Float,
             TextureFormat::Rgba8Unorm,
             TextureFormat::Depth32Float,
         ]
