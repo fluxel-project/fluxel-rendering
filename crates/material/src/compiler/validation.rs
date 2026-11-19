@@ -32,6 +32,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) normal_map_settings: Option<NormalMapSettings>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
+    transmission_texture_configuration: Option<TransmissionTextureConfiguration>,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
     vertex_uv0: Option<super::vertex_uv0::NormalizedVertexUv0>,
@@ -127,6 +128,7 @@ impl NormalizedMaterialIr {
             definition.emissive_configuration(),
             definition.diffuse_roughness_configuration(),
             definition.ambient_occlusion_configuration(),
+            definition.transmission_texture_configuration(),
         )?;
         validate_top_level_names(
             &fragments,
@@ -158,6 +160,9 @@ impl NormalizedMaterialIr {
             normal_map_settings: definition.normal_map_settings(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
+            transmission_texture_configuration: definition
+                .transmission_texture_configuration()
+                .cloned(),
             refraction_environment: definition.refraction_environment().cloned(),
             node_graph,
             vertex_uv0,
@@ -186,6 +191,10 @@ impl NormalizedMaterialIr {
         super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
         super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
+        super::transmission::canonical_textures(
+            self.transmission_texture_configuration.as_ref(),
+            &mut canonical,
+        );
         super::transmission::canonical_environment(
             self.refraction_environment.as_ref(),
             &mut canonical,
@@ -265,6 +274,7 @@ impl NormalizedMaterialIr {
             self.pbr_surface_factors.as_ref(),
             self.diffuse_roughness_configuration.as_ref(),
             self.ambient_occlusion_configuration.as_ref(),
+            self.transmission_texture_configuration.as_ref(),
         );
         super::surface::append_evaluators(
             &mut generated,
@@ -299,6 +309,8 @@ impl NormalizedMaterialIr {
         super::transmission::append_evaluators(
             &mut generated,
             self.transmission_extensions.as_ref(),
+            self.transmission_texture_configuration.as_ref(),
+            &self.texture_uv,
         );
         let variant_key = self.variant_key();
         MaterialShaderContribution::new(

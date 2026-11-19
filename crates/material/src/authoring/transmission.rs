@@ -1,5 +1,37 @@
 //! Static transmission and volume-attenuation facts for PBR surfaces.
 
+/// Channel layout used by one transmission texture.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TransmissionTextureLayout {
+    /// Babylon native packing: thickness red, intensity green.
+    BabylonNative,
+    /// glTF packing: thickness green, intensity red.
+    #[default]
+    Gltf,
+}
+
+/// One linear transmission texture binding.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TransmissionTexture {
+    /// Declared linear `Texture2dF32` resource.
+    pub texture: String,
+    /// Declared non-comparison sampler resource.
+    pub sampler: String,
+}
+
+/// Optional texture sources for transmission extensions.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct TransmissionTextureConfiguration {
+    /// Channel layout used by the selected textures.
+    pub layout: TransmissionTextureLayout,
+    /// Optional thickness source; its channel can also mask intensity.
+    pub thickness: Option<TransmissionTexture>,
+    /// Uses the thickness texture mask when a separate intensity map is absent.
+    pub use_as_intensity_mask: bool,
+    /// Optional separate transmission-intensity source.
+    pub intensity: Option<TransmissionTexture>,
+}
+
 /// A material-local, prefiltered environment used for transmission refraction.
 ///
 /// The texture and sampler name ordinary group-zero material resources. Its

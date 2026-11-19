@@ -478,6 +478,10 @@ pub enum MaterialError {
         /// Selected output.
         output: SurfaceOutput,
     },
+    /// Transmission texture sources require selected transmission extensions.
+    TransmissionTextureConfigurationExtensionsRequired,
+    /// An authored thickness callable and thickness texture cannot both select the source.
+    TransmissionThicknessTextureConflict,
     /// A requested transmission callable was not declared.
     MissingTransmissionExtension {
         /// Requested callable name.

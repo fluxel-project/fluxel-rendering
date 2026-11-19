@@ -11,6 +11,7 @@ mod nodes;
 mod normal_map;
 mod surface_policy;
 mod transmission;
+mod transmission_texture_definition;
 mod types;
 
 pub use ambient_occlusion::{
@@ -30,5 +31,8 @@ pub use normal_map::NormalMapSettings;
 pub use surface_policy::{
     SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
 };
-pub use transmission::{RefractionEnvironment, TransmissionExtensions};
+pub use transmission::{
+    RefractionEnvironment, TransmissionExtensions, TransmissionTexture,
+    TransmissionTextureConfiguration, TransmissionTextureLayout,
+};
 pub use types::*;

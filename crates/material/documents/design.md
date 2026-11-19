@@ -252,6 +252,15 @@ and a finite non-negative ordered thickness interval. It does not allocate a
 refraction source or select environment versus scene capture; those are
 Renderer/Graph choices.
 
+A `TransmissionTextureConfiguration` supplies optional linear thickness and
+intensity maps. In Babylon-native packing the thickness channel is red and
+the intensity channel is green. In glTF packing the thickness channel is
+green and the intensity channel is red. Each map can select its own UV set
+and transform. A separate intensity map takes precedence over the optional
+mask channel in the thickness texture. The selected mask multiplies the
+material's transmission intensity, and the thickness sample is remapped to
+the authored interval.
+
 `RefractionEnvironment` is an optional material-local alternative to the
 Renderer scene-environment fallback. It requires transmission extensions and
 names an ordinary group-zero linear `Texture2dF32` resource and non-comparison

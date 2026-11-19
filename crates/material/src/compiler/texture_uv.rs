@@ -15,6 +15,7 @@ pub(super) fn validate(
     emissive: Option<&EmissiveConfiguration>,
     diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
     ambient_occlusion: Option<&AmbientOcclusionConfiguration>,
+    transmission: Option<&crate::TransmissionTextureConfiguration>,
 ) -> Result<BTreeMap<String, MaterialTextureUv>, MaterialError> {
     let mut generated_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -35,6 +36,17 @@ pub(super) fn validate(
     }
     if let Some(configuration) = ambient_occlusion {
         generated_texture_names.insert(configuration.map.texture.as_str());
+    }
+    if let Some(configuration) = transmission {
+        for texture in [
+            configuration.thickness.as_ref(),
+            configuration.intensity.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            generated_texture_names.insert(texture.texture.as_str());
+        }
     }
     for resource in texture_uv.keys() {
         if !generated_texture_names.contains(resource.as_str()) {
@@ -80,6 +92,7 @@ pub(super) fn requirements(
     factors: Option<&PbrSurfaceFactors>,
     diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
     ambient_occlusion: Option<&AmbientOcclusionConfiguration>,
+    transmission: Option<&crate::TransmissionTextureConfiguration>,
 ) -> Requirements {
     let mut surface_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -97,6 +110,17 @@ pub(super) fn requirements(
     }
     if let Some(configuration) = ambient_occlusion {
         surface_texture_names.insert(configuration.map.texture.as_str());
+    }
+    if let Some(configuration) = transmission {
+        for texture in [
+            configuration.thickness.as_ref(),
+            configuration.intensity.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            surface_texture_names.insert(texture.texture.as_str());
+        }
     }
     let surface = texture_uv.iter().any(|(resource, coordinates)| {
         coordinates.set() == TextureUvSet::Uv1 && surface_texture_names.contains(resource.as_str())

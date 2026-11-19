@@ -100,6 +100,7 @@ pub(super) fn effective_requirements(
     )?;
     super::transmission::effective_texture_encodings(
         definition.refraction_environment(),
+        definition.transmission_texture_configuration(),
         requirements,
     )
 }

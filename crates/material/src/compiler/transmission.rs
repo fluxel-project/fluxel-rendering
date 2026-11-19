@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::MaterialTextureEncoding;
+use crate::{
+    MaterialTextureEncoding, MaterialTextureUv, TransmissionTexture,
+    TransmissionTextureConfiguration, TransmissionTextureLayout,
+};
 
 use super::{
     MaterialError, MaterialResource, MaterialResourceKind, MaterialTextureEncodingRequirement,
@@ -17,12 +20,15 @@ pub(super) fn validate(
     output: &SurfaceOutput,
     extensions: Option<&TransmissionExtensions>,
     environment: Option<&RefractionEnvironment>,
+    textures: Option<&TransmissionTextureConfiguration>,
     functions: &BTreeMap<String, FunctionSignature>,
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
     let Some(extensions) = extensions else {
         return if environment.is_some() {
             Err(MaterialError::RefractionEnvironmentTransmissionRequired)
+        } else if textures.is_some() {
+            Err(MaterialError::TransmissionTextureConfigurationExtensionsRequired)
         } else {
             Ok(())
         };
@@ -35,7 +41,58 @@ pub(super) fn validate(
     validate_callable(extensions.intensity.as_deref(), functions)?;
     validate_callable(extensions.thickness.as_deref(), functions)?;
     validate_static(extensions)?;
-    validate_environment(environment, resources)
+    validate_environment(environment, resources)?;
+    validate_textures(textures, extensions, resources)
+}
+
+fn validate_textures(
+    textures: Option<&TransmissionTextureConfiguration>,
+    extensions: &TransmissionExtensions,
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    let Some(textures) = textures else {
+        return Ok(());
+    };
+    if textures.thickness.is_some() && extensions.thickness.is_some() {
+        return Err(MaterialError::TransmissionThicknessTextureConflict);
+    }
+    for texture in [textures.thickness.as_ref(), textures.intensity.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        validate_texture(texture, resources)?;
+    }
+    Ok(())
+}
+
+fn validate_texture(
+    texture: &TransmissionTexture,
+    resources: &[MaterialResource],
+) -> Result<(), MaterialError> {
+    let resource = resources
+        .iter()
+        .find(|resource| resource.name == texture.texture)
+        .ok_or_else(|| MaterialError::RefractionEnvironmentResourceMissing {
+            field: "transmission texture",
+            resource: texture.texture.clone(),
+        })?;
+    validate_environment_resource(
+        "transmission texture",
+        resource,
+        MaterialResourceKind::Texture2dF32,
+    )?;
+    let sampler = resources
+        .iter()
+        .find(|resource| resource.name == texture.sampler)
+        .ok_or_else(|| MaterialError::RefractionEnvironmentResourceMissing {
+            field: "transmission sampler",
+            resource: texture.sampler.clone(),
+        })?;
+    validate_environment_resource(
+        "transmission sampler",
+        sampler,
+        MaterialResourceKind::Sampler { comparison: false },
+    )
 }
 
 fn validate_environment(
@@ -226,6 +283,46 @@ pub(super) fn canonical(extensions: Option<&TransmissionExtensions>, target: &mu
     );
 }
 
+pub(super) fn canonical_textures(
+    textures: Option<&TransmissionTextureConfiguration>,
+    target: &mut String,
+) {
+    let Some(textures) = textures else {
+        return;
+    };
+    piece(target, "transmission-textures", "present");
+    piece(
+        target,
+        "transmission-texture-layout",
+        match textures.layout {
+            TransmissionTextureLayout::BabylonNative => "babylon",
+            TransmissionTextureLayout::Gltf => "gltf",
+        },
+    );
+    piece(
+        target,
+        "transmission-thickness-mask",
+        &textures.use_as_intensity_mask.to_string(),
+    );
+    for (label, texture) in [
+        ("thickness", textures.thickness.as_ref()),
+        ("intensity", textures.intensity.as_ref()),
+    ] {
+        if let Some(texture) = texture {
+            piece(
+                target,
+                &format!("transmission-{label}-texture"),
+                &texture.texture,
+            );
+            piece(
+                target,
+                &format!("transmission-{label}-sampler"),
+                &texture.sampler,
+            );
+        }
+    }
+}
+
 pub(super) fn canonical_environment(
     environment: Option<&RefractionEnvironment>,
     target: &mut String,
@@ -268,10 +365,11 @@ pub(super) fn canonical_environment(
 
 pub(super) fn effective_texture_encodings(
     environment: Option<&RefractionEnvironment>,
+    textures: Option<&TransmissionTextureConfiguration>,
     mut requirements: Vec<MaterialTextureEncodingRequirement>,
 ) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
     let Some(environment) = environment else {
-        return Ok(requirements);
+        return texture_encodings(textures, requirements);
     };
     match requirements
         .iter()
@@ -289,6 +387,36 @@ pub(super) fn effective_texture_encodings(
             resource: environment.texture.clone(),
             encoding: MaterialTextureEncoding::Linear,
         }),
+    }
+    texture_encodings(textures, requirements)
+}
+
+fn texture_encodings(
+    textures: Option<&TransmissionTextureConfiguration>,
+    mut requirements: Vec<MaterialTextureEncodingRequirement>,
+) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
+    for texture in textures
+        .into_iter()
+        .flat_map(|textures| [textures.thickness.as_ref(), textures.intensity.as_ref()])
+        .flatten()
+    {
+        if let Some(requirement) = requirements
+            .iter()
+            .find(|requirement| requirement.resource == texture.texture)
+        {
+            if requirement.encoding != MaterialTextureEncoding::Linear {
+                return Err(
+                    MaterialError::RefractionEnvironmentTextureEncodingConflict {
+                        resource: texture.texture.clone(),
+                    },
+                );
+            }
+        } else {
+            requirements.push(MaterialTextureEncodingRequirement {
+                resource: texture.texture.clone(),
+                encoding: MaterialTextureEncoding::Linear,
+            });
+        }
     }
     Ok(requirements)
 }
@@ -310,28 +438,73 @@ fn canonical_f32(target: &mut String, label: &str, value: f32) {
 pub(super) fn append_evaluators(
     generated: &mut String,
     extensions: Option<&TransmissionExtensions>,
+    textures: Option<&TransmissionTextureConfiguration>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
-    let intensity = extensions
-        .and_then(|extensions| extensions.intensity.as_deref())
-        .map_or_else(
-            || default_intensity(extensions.is_some()),
-            |name| format!("{name}(uv)"),
-        );
-    let thickness = extensions.map_or_else(
-        || "0.0".to_owned(),
-        |extensions| match extensions.thickness.as_deref() {
-            Some(name) => format!(
-                "{} + ({} - {}) * {name}(uv)",
-                extensions.minimum_thickness,
-                extensions.maximum_thickness,
-                extensions.minimum_thickness,
-            ),
-            None => format!(
-                "{} - {}",
-                extensions.maximum_thickness, extensions.minimum_thickness,
-            ),
-        },
+    let mut symbols: Vec<_> = textures
+        .into_iter()
+        .flat_map(|maps| {
+            maps.thickness
+                .iter()
+                .chain(maps.intensity.iter())
+                .flat_map(|texture| [texture.texture.as_str(), texture.sampler.as_str()])
+        })
+        .collect();
+    let intensity_callable = extensions.and_then(|extension| extension.intensity.as_deref());
+    let thickness_callable = extensions.and_then(|extension| extension.thickness.as_deref());
+    symbols.extend(intensity_callable);
+    symbols.extend(thickness_callable);
+    let mut uv = String::from("uv");
+    while symbols.contains(&uv.as_str()) {
+        uv.push('_');
+    }
+    symbols.push(uv.as_str());
+    let uv1 = super::pbr_factors::uv1_name(texture_uv, symbols);
+    let prefix = super::pbr_factors::uv1_parameter(uv1.as_deref());
+    let layout = textures.map_or(TransmissionTextureLayout::Gltf, |maps| maps.layout);
+    let sample = |texture: &TransmissionTexture, thickness: bool| {
+        let channel = match (layout, thickness) {
+            (TransmissionTextureLayout::BabylonNative, true)
+            | (TransmissionTextureLayout::Gltf, false) => "r",
+            _ => "g",
+        };
+        let sampled =
+            super::pbr_factors::sample_uv(texture_uv, &texture.texture, &uv, uv1.as_deref());
+        format!(
+            "textureSample({}, {}, {sampled}).{channel}",
+            texture.texture, texture.sampler
+        )
+    };
+    let mut intensity = intensity_callable.map_or_else(
+        || default_intensity(extensions.is_some()),
+        |name| format!("{name}({uv})"),
     );
+    let mask = textures.and_then(|maps| {
+        maps.intensity.as_ref().or(maps
+            .thickness
+            .as_ref()
+            .filter(|_| maps.use_as_intensity_mask))
+    });
+    if let Some(mask) = mask {
+        intensity = format!("{intensity} * {}", sample(mask, false));
+    }
+    let thickness_sample = textures
+        .and_then(|maps| maps.thickness.as_ref())
+        .map(|texture| sample(texture, true))
+        .or_else(|| thickness_callable.map(|name| format!("{name}({uv})")));
+    let thickness = match (extensions, thickness_sample) {
+        (Some(extensions), Some(sample)) => format!(
+            "{sample} * ({} - {}) + {}",
+            extensions.maximum_thickness,
+            extensions.minimum_thickness,
+            extensions.minimum_thickness,
+        ),
+        (Some(extensions), None) => format!(
+            "{} - {}",
+            extensions.maximum_thickness, extensions.minimum_thickness,
+        ),
+        (None, _) => String::from("0.0"),
+    };
     let surface_ior = extensions.map_or(SURFACE_IOR_DEFAULT, |value| value.index_of_refraction);
     let volume_ior = extensions.map_or(SURFACE_IOR_DEFAULT, |value| {
         value
@@ -343,10 +516,10 @@ pub(super) fn append_evaluators(
         value.attenuation_distance
     });
     generated.push_str(&format!(
-        "fn evaluate_transmission_uv0(uv: vec2<f32>) -> f32 {{ return {intensity}; }}\n"
+        "fn evaluate_transmission_uv0({prefix}{uv}: vec2<f32>) -> f32 {{ return {intensity}; }}\n"
     ));
     generated.push_str(&format!(
-        "fn evaluate_thickness_uv0(uv: vec2<f32>) -> f32 {{ return {thickness}; }}\n"
+        "fn evaluate_thickness_uv0({prefix}{uv}: vec2<f32>) -> f32 {{ return {thickness}; }}\n"
     ));
     generated.push_str(&format!(
         "fn material_surface_ior() -> f32 {{ return {surface_ior}; }}\n"

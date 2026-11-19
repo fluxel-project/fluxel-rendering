@@ -84,7 +84,7 @@ struct PbrSpecularVertexOutput {
     } else {
         "vec3<f32>(0.04)"
     };
-    let transmission_values = "let transmission_intensity = evaluate_transmission_uv0(input.uv0);\n    let transmission_thickness = evaluate_thickness_uv0(input.uv0);";
+    let transmission_values = "let transmission_intensity = evaluate_transmission_uv0(/* fluxel:uv1-argument */input.uv0);\n    let transmission_thickness = evaluate_thickness_uv0(/* fluxel:uv1-argument */input.uv0);";
     let transmission_values = if transmission {
         transmission_values
     } else {

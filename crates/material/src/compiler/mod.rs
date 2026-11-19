@@ -24,6 +24,7 @@ use crate::{
     MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType, MaterialVariantKey,
     NormalMapSettings, PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode,
     SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    TransmissionTextureConfiguration,
 };
 use fluxel_assets::AssetSnapshot;
 

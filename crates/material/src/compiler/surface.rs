@@ -43,6 +43,7 @@ pub(super) fn validate_definition(
         definition.output(),
         definition.transmission_extensions(),
         definition.refraction_environment(),
+        definition.transmission_texture_configuration(),
         functions,
         resources,
     )
