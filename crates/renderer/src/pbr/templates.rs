@@ -162,7 +162,7 @@ struct PbrUv0VertexOutput {
     @location(3) @interpolate(flat) camera_position: vec3<f32>,
     @location(4) vertex_uv0: vec2<f32>, /* fluxel:vertex-varying-fields-5 */
 };
-fn pbr_uv0_vertex(position: vec3<f32>, normal: vec3<f32> /* instance_basis_parameter */, uv0: vec2<f32>) -> PbrUv0VertexOutput {
+fn pbr_uv0_vertex(position: vec3<f32>, normal: vec3<f32> /* instance_basis_parameter */, uv0: vec2<f32> /* fluxel:uv1-vertex-param */) -> PbrUv0VertexOutput {
     let base = pbr_vertex(position, normal /* instance_basis_argument */);
     var output: PbrUv0VertexOutput;
     output.position = base.position;
@@ -179,7 +179,7 @@ pub(super) const FORWARD_UV0: &str = r#"
 @vertex
 fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
     let surface = evaluate_pbr_surface_uv0(/* fluxel:uv1-argument */input.uv0, input.world_position, pbr_normal(input.world_normal), input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
@@ -199,7 +199,7 @@ struct PbrGbufferUv0Output {
 @vertex
 fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 @fragment
 fn deferred_gbuffer_fs(input: PbrUv0VertexOutput, @builtin(front_facing) front_facing: bool) -> PbrGbufferUv0Output {
@@ -220,7 +220,7 @@ pub(super) const FORWARD_UV0_EFFECT: &str = r#"
 @vertex
 fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
     let surface = evaluate_pbr_surface_uv0(/* fluxel:uv1-argument */input.uv0, input.world_position, pbr_normal(input.world_normal), input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
@@ -240,7 +240,7 @@ pub(super) const FORWARD_UV0_EFFECT_IRRADIANCE: &str = r#"
 @vertex
 fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
     let surface = evaluate_pbr_surface_uv0(/* fluxel:uv1-argument */input.uv0, input.world_position, pbr_normal(input.world_normal), input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
@@ -265,7 +265,7 @@ struct PbrUv0EffectGbufferOutput {
 @vertex
 fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 @fragment
 fn deferred_gbuffer_fs(input: PbrUv0VertexOutput, @builtin(front_facing) front_facing: bool) -> PbrUv0EffectGbufferOutput {
@@ -439,7 +439,7 @@ pub(super) const FORWARD_UV0_IRRADIANCE: &str = r#"
 @vertex
 fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */) -> PbrUv0VertexOutput {
     /* instance_setup */
-    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0);
+    return pbr_uv0_vertex(position, normal /* instance_basis_argument */, uv0 /* fluxel:uv1-vertex-argument */);
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
     let surface = evaluate_pbr_surface_uv0(/* fluxel:uv1-argument */input.uv0, input.world_position, pbr_normal(input.world_normal), input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);

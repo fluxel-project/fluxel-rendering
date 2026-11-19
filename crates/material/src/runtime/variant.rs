@@ -41,6 +41,7 @@ pub struct CompiledMaterialVariant {
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
     uses_diffuse_roughness: bool,
+    uses_ambient_occlusion_color: bool,
 }
 
 impl CompiledMaterialVariant {
@@ -55,6 +56,7 @@ impl CompiledMaterialVariant {
         surface_policy: SurfacePolicy,
         transmission_extensions: Option<TransmissionExtensions>,
         uses_diffuse_roughness: bool,
+        uses_ambient_occlusion_color: bool,
     ) -> Self {
         Self {
             material: None,
@@ -68,6 +70,7 @@ impl CompiledMaterialVariant {
             surface_policy,
             transmission_extensions,
             uses_diffuse_roughness,
+            uses_ambient_occlusion_color,
         }
     }
 
@@ -123,6 +126,12 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub const fn uses_diffuse_roughness(&self) -> bool {
         self.uses_diffuse_roughness
+    }
+
+    /// Returns whether this variant emits colored ambient-occlusion evaluation.
+    #[must_use]
+    pub const fn uses_ambient_occlusion_color(&self) -> bool {
+        self.uses_ambient_occlusion_color
     }
 
     /// Returns optional asset transfer-encoding requirements by resource name.

@@ -1054,6 +1054,17 @@ presents the acquired lease without a readback pass.
 The setting applies to ordinary Forward entry points. Forward OIT and capture
 use single-sample attachments shared between their passes.
 
+### Deferred ambient occlusion
+
+A material with an explicit ambient occlusion map adds a `Rgba32Float`
+attachment to its Deferred scene. It stores RGB occlusion and the analytical
+light weight. Diffuse irradiance multiplies by RGB, while direct diffuse
+uses the weight to mix RGB with white. Direct specular retains its existing
+lighting input. The effects attachment uses `Rgba32Float` in this layout
+so its alpha preserves the specular environment occlusion input computed
+from the material's grayscale or luminance branch. Both attachments
+participate in the same Graph and sample-zero resolve.
+
 ### Deferred diffuse roughness
 
 A Deferred scene with a diffuse roughness configuration adds a single

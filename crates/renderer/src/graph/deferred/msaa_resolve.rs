@@ -12,11 +12,14 @@ pub(super) fn declare(
     destination_effects: Option<TextureHandle>,
     source_diffuse_roughness: Option<TextureHandle>,
     destination_diffuse_roughness: Option<TextureHandle>,
+    source_ambient_occlusion: Option<TextureHandle>,
+    destination_ambient_occlusion: Option<TextureHandle>,
 ) -> std::result::Result<
     (
         GraphPass,
         (
             [TextureHandle; 3],
+            Option<TextureHandle>,
             Option<TextureHandle>,
             Option<TextureHandle>,
         ),
@@ -51,6 +54,15 @@ pub(super) fn declare(
             if let Some(diffuse_roughness) = source_diffuse_roughness {
                 pass.read_texture_with_use(
                     diffuse_roughness,
+                    whole_color(),
+                    sampled_read().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )?;
+            }
+            if let Some(ambient_occlusion) = source_ambient_occlusion {
+                pass.read_texture_with_use(
+                    ambient_occlusion,
                     whole_color(),
                     sampled_read().uses,
                     ImageLayout::ShaderReadOnly,
@@ -101,7 +113,18 @@ pub(super) fn declare(
                     )
                 })
                 .transpose()?;
-            Ok((gbuffer, effects, diffuse_roughness))
+            let ambient_occlusion = destination_ambient_occlusion
+                .map(|texture| {
+                    pass.write_texture_with_use(
+                        texture,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                })
+                .transpose()?;
+            Ok((gbuffer, effects, diffuse_roughness, ambient_occlusion))
         })
         .map_err(|_| ())
 }

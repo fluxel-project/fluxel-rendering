@@ -30,7 +30,10 @@ impl DeferredLightingPass<'_, '_> {
                 )
                 .map_err(|_| ())?;
         }
-        for texture in [self.effects, self.diffuse_roughness].into_iter().flatten() {
+        for texture in [self.effects, self.diffuse_roughness, self.ambient_occlusion]
+            .into_iter()
+            .flatten()
+        {
             self.pass
                 .read_texture_with_use(
                     texture,

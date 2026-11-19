@@ -124,11 +124,13 @@ pub(super) fn declare_terminal(
         gbuffer_slots: std::array::from_fn(|index| TextureSlot::from(prefix.gbuffer[index])),
         effects_slot: prefix.effects.map(TextureSlot::from),
         diffuse_roughness_slot: prefix.diffuse_roughness.map(TextureSlot::from),
+        ambient_occlusion_slot: prefix.ambient_occlusion.map(TextureSlot::from),
         msaa_gbuffer_slots: prefix
             .msaa_gbuffer
             .map(|items| items.map(TextureSlot::from)),
         msaa_effects_slot: prefix.msaa_effects.map(TextureSlot::from),
         msaa_diffuse_roughness_slot: prefix.msaa_diffuse_roughness.map(TextureSlot::from),
+        msaa_ambient_occlusion_slot: prefix.msaa_ambient_occlusion.map(TextureSlot::from),
         // This remains the lighting owner/version.  A final OIT source needs
         // its own actual owner, view, and composite binding before it can be
         // recorded; terminal selection alone must not retarget this slot.

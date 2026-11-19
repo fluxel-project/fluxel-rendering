@@ -187,6 +187,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         }),
                 )
                 .chain(
+                    self.ambient_occlusion_slot
+                        .zip(frame.ambient_occlusion.as_ref())
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
                     self.msaa_gbuffer_slots
                         .into_iter()
                         .flatten()
@@ -223,6 +237,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                                 .msaa
                                 .as_ref()
                                 .and_then(|msaa| msaa.diffuse_roughness.as_ref()),
+                        )
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.msaa_ambient_occlusion_slot
+                        .zip(
+                            frame
+                                .msaa
+                                .as_ref()
+                                .and_then(|msaa| msaa.ambient_occlusion.as_ref()),
                         )
                         .map(|(slot, texture)| {
                             BoundTexture::new(

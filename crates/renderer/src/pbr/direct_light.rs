@@ -128,6 +128,17 @@ fn pbr_direct_light_view(
     return pbr_direct_light_view_with_diffuse_roughness(base, properties, world_normal, view, dielectric_f0, 0.0);
 }
 
+fn pbr_direct_light_view_with_diffuse_occlusion(
+    base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
+    diffuse_roughness: f32, ambient_occlusion: vec4<f32>,
+) -> vec3<f32> {
+    let terms = pbr_direct_light_components_with_diffuse_roughness(
+        base, properties, world_normal, view, dielectric_f0, diffuse_roughness,
+    );
+    let direct_ao = mix(vec3<f32>(1.0), ambient_occlusion.rgb, ambient_occlusion.a);
+    return terms.specular + terms.diffuse * direct_ao;
+}
+
 fn pbr_gbuffer_is_covered(normal: vec3<f32>) -> bool {
     // The all-zero clear value cannot be a unit surface normal.
     return any(normal != vec3<f32>(0.0));

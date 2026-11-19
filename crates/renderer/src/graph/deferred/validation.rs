@@ -24,7 +24,9 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
         || device.capabilities().limits.max_color_attachments
-            < 2 + u32::from(frame.effects.is_some()) + u32::from(frame.diffuse_roughness.is_some())
+            < 2 + u32::from(frame.effects.is_some())
+                + u32::from(frame.diffuse_roughness.is_some())
+                + u32::from(frame.ambient_occlusion.is_some())
         || device.capabilities().limits.uniform_offset_alignment == 0
         || frame.resident.streams.is_empty()
         || frame.draws.is_empty()
@@ -132,7 +134,11 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     if let Some(effects) = &frame.effects {
         if effects.texture.device() != device.id()
             || effects.view.device() != device.id()
-            || !matches_gbuffer_template(&effects.desc, frame.extent, TextureFormat::Rgba16Float)
+            || !matches_gbuffer_template(
+                &effects.desc,
+                frame.extent,
+                crate::residency::deferred_effects_format(frame.ambient_occlusion.is_some()),
+            )
         {
             return Err(Error::InvalidRange);
         }
@@ -144,6 +150,21 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
                 &diffuse_roughness.desc,
                 frame.extent,
                 TextureFormat::R32Float,
+            )
+        {
+            return Err(Error::InvalidRange);
+        }
+    }
+    if frame.ambient_occlusion.is_some() && frame.effects.is_none() {
+        return Err(Error::InvalidRange);
+    }
+    if let Some(ambient_occlusion) = &frame.ambient_occlusion {
+        if ambient_occlusion.texture.device() != device.id()
+            || ambient_occlusion.view.device() != device.id()
+            || !matches_gbuffer_template(
+                &ambient_occlusion.desc,
+                frame.extent,
+                TextureFormat::Rgba32Float,
             )
         {
             return Err(Error::InvalidRange);
@@ -181,13 +202,18 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
                 (&frame.diffuse_roughness, &msaa.diffuse_roughness),
                 (Some(_), None) | (None, Some(_))
             )
+            || matches!(
+                (&frame.ambient_occlusion, &msaa.ambient_occlusion),
+                (Some(_), None) | (None, Some(_))
+            )
         {
             return Err(Error::InvalidRange);
         }
         if let Some(effects) = &msaa.effects {
             if effects.texture.device() != device.id()
                 || effects.view.device() != device.id()
-                || effects.desc.format != TextureFormat::Rgba16Float
+                || effects.desc.format
+                    != crate::residency::deferred_effects_format(frame.ambient_occlusion.is_some())
                 || effects.desc.extent != [frame.extent[0], frame.extent[1], 1]
                 || effects.desc.samples != msaa.gbuffer[0].desc.samples
                 || !effects.desc.usage.contains(
@@ -204,6 +230,19 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
                 || diffuse_roughness.desc.extent != [frame.extent[0], frame.extent[1], 1]
                 || diffuse_roughness.desc.samples != msaa.gbuffer[0].desc.samples
                 || !diffuse_roughness.desc.usage.contains(
+                    super::TextureUsage::RENDER_ATTACHMENT | super::TextureUsage::TEXTURE_BINDING,
+                )
+            {
+                return Err(Error::InvalidRange);
+            }
+        }
+        if let Some(ambient_occlusion) = &msaa.ambient_occlusion {
+            if ambient_occlusion.texture.device() != device.id()
+                || ambient_occlusion.view.device() != device.id()
+                || ambient_occlusion.desc.format != TextureFormat::Rgba32Float
+                || ambient_occlusion.desc.extent != [frame.extent[0], frame.extent[1], 1]
+                || ambient_occlusion.desc.samples != msaa.gbuffer[0].desc.samples
+                || !ambient_occlusion.desc.usage.contains(
                     super::TextureUsage::RENDER_ATTACHMENT | super::TextureUsage::TEXTURE_BINDING,
                 )
             {

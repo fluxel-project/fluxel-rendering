@@ -315,6 +315,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         let raster_diffuse_roughness_slot = self
             .msaa_diffuse_roughness_slot
             .or(self.diffuse_roughness_slot);
+        let raster_ambient_occlusion_slot = self
+            .msaa_ambient_occlusion_slot
+            .or(self.ambient_occlusion_slot);
         let raster_gbuffer = frame
             .msaa
             .map(|msaa| &msaa.gbuffer)
@@ -327,6 +330,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .msaa
             .and_then(|msaa| msaa.diffuse_roughness.as_ref())
             .or(frame.diffuse_roughness);
+        let raster_ambient_occlusion = frame
+            .msaa
+            .and_then(|msaa| msaa.ambient_occlusion.as_ref())
+            .or(frame.ambient_occlusion);
         pass.texture(
             raster_gbuffer_slots[0],
             whole_color(),
@@ -343,6 +350,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
         }
         if let (Some(slot), Some(_)) = (raster_diffuse_roughness_slot, raster_diffuse_roughness) {
+            pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
+        }
+        if let (Some(slot), Some(_)) = (raster_ambient_occlusion_slot, raster_ambient_occlusion) {
             pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
         }
         pass.texture(
@@ -377,6 +387,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(diffuse_roughness) = raster_diffuse_roughness {
             colors.push(Some(ColorAttachment {
                 view: AttachmentView::Texture(&diffuse_roughness.view),
+                resolve_target: None,
+                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                store: StoreOp::Store,
+            }));
+        }
+        if let Some(ambient_occlusion) = raster_ambient_occlusion {
+            colors.push(Some(ColorAttachment {
+                view: AttachmentView::Texture(&ambient_occlusion.view),
                 resolve_target: None,
                 load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
                 store: StoreOp::Store,
@@ -520,64 +538,5 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         raster.set_bind_group(0, &frame.composite_group, &[])?;
         raster.draw(0..3, 0..1)?;
         raster.finish()
-    }
-
-    pub(crate) fn record_readback(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredFrame<B>,
-    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
-    where
-        B: ReadbackBackend,
-    {
-        let bindings = self.bindings(frame)?;
-        self.record_readback_with_bindings(encoder, frame, &bindings)
-    }
-
-    pub(super) fn record_readback_with_bindings(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredFrame<B>,
-        bindings: &FrameBindings<'_, B>,
-    ) -> Result<fluxel_rhi::api::ReadbackTicket<B>>
-    where
-        B: ReadbackBackend,
-    {
-        let target_slot = self.target_slot.ok_or(Error::InvalidState)?;
-        let readback_slot = self.readback_slot.ok_or(Error::InvalidState)?;
-        let length = u64::from(frame.readback_row_pitch)
-            .checked_mul(u64::from(frame.extent[1]))
-            .ok_or(Error::InvalidRange)?;
-        let readback_pass = match self.output {
-            DeferredOutputPlan::Offscreen { readback_pass } => readback_pass,
-            DeferredOutputPlan::Capture | DeferredOutputPlan::Surface { .. } => {
-                return Err(Error::InvalidState);
-            }
-        };
-        let pass = bindings.pass(readback_pass)?;
-        let target = pass.texture(
-            target_slot,
-            whole_color(),
-            AccessKind::Read,
-            texture_copy_read(),
-        )?;
-        let readback = pass.buffer(readback_slot, 0..length, AccessKind::Write, copy_write())?;
-        pass.transition(encoder)?;
-        encoder.texture_to_buffer(
-            TextureRegion {
-                texture: target,
-                mip: 0,
-                origin: [0, 0, 0],
-                extent: [frame.extent[0], frame.extent[1], 1],
-                aspect: TextureAspects::COLOR,
-            },
-            readback,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: frame.readback_row_pitch,
-                rows_per_image: frame.extent[1],
-            },
-        )?;
-        encoder.readback_buffer(readback, 0..length)
     }
 }

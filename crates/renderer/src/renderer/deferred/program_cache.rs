@@ -33,6 +33,7 @@ pub(super) struct GbufferProgramKey {
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
     surface: crate::renderer::RasterSurfaceState,
 }
 
@@ -44,6 +45,7 @@ impl GbufferProgramKey {
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         surface: crate::renderer::RasterSurfaceState,
         multisample_count: u32,
     ) -> Self {
@@ -66,6 +68,7 @@ impl GbufferProgramKey {
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             surface,
         }
     }
@@ -82,6 +85,7 @@ pub(super) struct LightingProgramKey {
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
 }
 
 impl LightingProgramKey {
@@ -91,6 +95,7 @@ impl LightingProgramKey {
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         color_format: TextureFormat,
     ) -> Self {
         Self {
@@ -106,6 +111,7 @@ impl LightingProgramKey {
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
         }
     }
 }
@@ -118,7 +124,7 @@ impl LightingProgramKey {
 pub(crate) struct DeferredProgramCache<B: ResourceBackend> {
     gbuffer: HashMap<GbufferProgramKey, Arc<GbufferProgram<B>>>,
     lighting: HashMap<LightingProgramKey, Arc<LightingProgram<B>>>,
-    msaa_resolve: HashMap<(bool, bool, bool), Arc<MsaaResolveProgram<B>>>,
+    msaa_resolve: HashMap<(bool, bool, bool, bool), Arc<MsaaResolveProgram<B>>>,
 }
 
 impl<B: ResourceBackend> Default for DeferredProgramCache<B> {
@@ -141,9 +147,10 @@ impl<B: ResourceBackend> DeferredProgramCache<B> {
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
     ) -> Option<Arc<MsaaResolveProgram<B>>> {
         self.msaa_resolve
-            .get(&(pbr, effects, diffuse_roughness))
+            .get(&(pbr, effects, diffuse_roughness, ambient_occlusion))
             .cloned()
     }
 
@@ -152,10 +159,13 @@ impl<B: ResourceBackend> DeferredProgramCache<B> {
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         program: Arc<MsaaResolveProgram<B>>,
     ) {
-        self.msaa_resolve
-            .insert((pbr, effects, diffuse_roughness), program);
+        self.msaa_resolve.insert(
+            (pbr, effects, diffuse_roughness, ambient_occlusion),
+            program,
+        );
     }
 
     pub(super) fn get_lighting(&self, key: &LightingProgramKey) -> Option<Arc<LightingProgram<B>>> {

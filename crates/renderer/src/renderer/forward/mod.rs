@@ -251,6 +251,7 @@ where
                     frame.gbuffer,
                     frame.effects,
                     frame.diffuse_roughness,
+                    frame.ambient_occlusion,
                 ));
             }
             _ => {}

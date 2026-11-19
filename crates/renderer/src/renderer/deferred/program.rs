@@ -68,6 +68,7 @@ where
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
     ) {
         let active = inputs
             .iter()
@@ -84,6 +85,7 @@ where
                     pbr,
                     effects,
                     diffuse_roughness,
+                    ambient_occlusion,
                     crate::renderer::raster_surface_state(input),
                     self.deferred_sample_count(),
                 )
@@ -98,6 +100,7 @@ where
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
@@ -114,6 +117,7 @@ where
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             surface,
             multisample_count,
         );
@@ -200,8 +204,9 @@ where
                 crate::residency::deferred_normal_format(pbr),
             ]
             .into_iter()
-            .chain(effects.then_some(TextureFormat::Rgba16Float))
+            .chain(effects.then_some(crate::residency::deferred_effects_format(ambient_occlusion)))
             .chain(diffuse_roughness.then_some(TextureFormat::R32Float))
+            .chain(ambient_occlusion.then_some(TextureFormat::Rgba32Float))
             .map(|format| Some(color_target_with_format(format)))
             .collect(),
             primitive,

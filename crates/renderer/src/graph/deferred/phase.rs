@@ -21,6 +21,7 @@ type DeferredPhaseDeclaration = (
     [super::super::definition::TextureHandle; 3],
     Option<super::super::definition::TextureHandle>,
     Option<super::super::definition::TextureHandle>,
+    Option<super::super::definition::TextureHandle>,
     GraphPass,
     Option<super::super::definition::TextureHandle>,
 );
@@ -79,9 +80,11 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) effects: Option<super::super::definition::TextureHandle>,
     pub(super) diffuse_roughness: Option<super::super::definition::TextureHandle>,
+    pub(super) ambient_occlusion: Option<super::super::definition::TextureHandle>,
     pub(super) msaa_gbuffer: Option<[super::super::definition::TextureHandle; 3]>,
     pub(super) msaa_effects: Option<super::super::definition::TextureHandle>,
     pub(super) msaa_diffuse_roughness: Option<super::super::definition::TextureHandle>,
+    pub(super) msaa_ambient_occlusion: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
     pub(super) indirect: Vec<(usize, super::super::indirect::IndirectGraph)>,
@@ -109,6 +112,7 @@ pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
     gbuffer: [super::super::definition::TextureHandle; 3],
     effects: Option<super::super::definition::TextureHandle>,
     diffuse_roughness: Option<super::super::definition::TextureHandle>,
+    ambient_occlusion: Option<super::super::definition::TextureHandle>,
     declared: u8,
 }
 
@@ -118,6 +122,7 @@ pub(crate) struct DeferredLightingPass<'pass, 'builder> {
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) effects: Option<super::super::definition::TextureHandle>,
     pub(super) diffuse_roughness: Option<super::super::definition::TextureHandle>,
+    pub(super) ambient_occlusion: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) environment: Option<super::super::definition::TextureHandle>,
     pub(super) specular_radiance: Option<super::super::definition::TextureHandle>,
@@ -193,6 +198,7 @@ impl DeferredPhaseDriver<'_> {
         let gbuffer = self.msaa_gbuffer.unwrap_or(self.gbuffer);
         let effects = self.msaa_effects.or(self.effects);
         let diffuse_roughness = self.msaa_diffuse_roughness.or(self.diffuse_roughness);
+        let ambient_occlusion = self.msaa_ambient_occlusion.or(self.ambient_occlusion);
         let (pass, output) = self
             .graph
             .add_pass("deferred-geometry", |pass| {
@@ -216,6 +222,7 @@ impl DeferredPhaseDriver<'_> {
                     gbuffer,
                     effects,
                     diffuse_roughness,
+                    ambient_occlusion,
                     declared: 0,
                 };
                 declare(&mut geometry).map_err(|_| GraphError::InvalidRange)?;
@@ -225,9 +232,11 @@ impl DeferredPhaseDriver<'_> {
         if self.msaa_gbuffer.is_some() {
             self.msaa_effects = output.1;
             self.msaa_diffuse_roughness = output.2;
+            self.msaa_ambient_occlusion = output.3;
         } else {
             self.effects = output.1;
             self.diffuse_roughness = output.2;
+            self.ambient_occlusion = output.3;
         }
         self.geometry = Some((pass, output.0));
         Ok(())
@@ -251,35 +260,48 @@ impl DeferredPhaseDriver<'_> {
         let specular_brdf_lut = self.specular_brdf_lut;
         let specular_view_uniform = self.specular_view_uniform;
         let specular_mip_levels = self.specular_mip_levels;
-        let (dependency, gbuffer, effects, diffuse_roughness) = if self.msaa_gbuffer.is_some() {
-            let resolved_gbuffer = self.gbuffer;
-            let resolved_effects = self.effects;
-            let msaa_effects = self.msaa_effects;
-            let resolved_diffuse_roughness = self.diffuse_roughness;
-            let msaa_diffuse_roughness = self.msaa_diffuse_roughness;
-            let (resolve, output) = super::msaa_resolve::declare(
-                self.graph,
-                geometry,
-                raster_gbuffer,
-                msaa_effects,
-                resolved_gbuffer,
-                resolved_effects,
-                msaa_diffuse_roughness,
-                resolved_diffuse_roughness,
-            )?;
-            self.resolve = Some(resolve);
-            self.gbuffer = output.0;
-            self.effects = output.1;
-            self.diffuse_roughness = output.2;
-            (resolve, self.gbuffer, self.effects, self.diffuse_roughness)
-        } else {
-            (
-                geometry,
-                raster_gbuffer,
-                self.effects,
-                self.diffuse_roughness,
-            )
-        };
+        let (dependency, gbuffer, effects, diffuse_roughness, ambient_occlusion) =
+            if self.msaa_gbuffer.is_some() {
+                let resolved_gbuffer = self.gbuffer;
+                let resolved_effects = self.effects;
+                let msaa_effects = self.msaa_effects;
+                let resolved_diffuse_roughness = self.diffuse_roughness;
+                let msaa_diffuse_roughness = self.msaa_diffuse_roughness;
+                let resolved_ambient_occlusion = self.ambient_occlusion;
+                let msaa_ambient_occlusion = self.msaa_ambient_occlusion;
+                let (resolve, output) = super::msaa_resolve::declare(
+                    self.graph,
+                    geometry,
+                    raster_gbuffer,
+                    msaa_effects,
+                    resolved_gbuffer,
+                    resolved_effects,
+                    msaa_diffuse_roughness,
+                    resolved_diffuse_roughness,
+                    msaa_ambient_occlusion,
+                    resolved_ambient_occlusion,
+                )?;
+                self.resolve = Some(resolve);
+                self.gbuffer = output.0;
+                self.effects = output.1;
+                self.diffuse_roughness = output.2;
+                self.ambient_occlusion = output.3;
+                (
+                    resolve,
+                    self.gbuffer,
+                    self.effects,
+                    self.diffuse_roughness,
+                    self.ambient_occlusion,
+                )
+            } else {
+                (
+                    geometry,
+                    raster_gbuffer,
+                    self.effects,
+                    self.diffuse_roughness,
+                    self.ambient_occlusion,
+                )
+            };
         let view = self
             .lighting_view
             .clone()
@@ -294,6 +316,7 @@ impl DeferredPhaseDriver<'_> {
                     gbuffer,
                     effects,
                     diffuse_roughness,
+                    ambient_occlusion,
                     target,
                     environment,
                     specular_radiance,
@@ -324,6 +347,7 @@ impl DeferredPhaseDriver<'_> {
             self.gbuffer,
             self.effects,
             self.diffuse_roughness,
+            self.ambient_occlusion,
             lighting,
             target,
         ))
@@ -465,6 +489,19 @@ impl DeferredGeometryPass<'_, '_> {
                     .map_err(|_| ())?,
             );
         }
+        if let Some(ambient_occlusion) = self.ambient_occlusion {
+            self.ambient_occlusion = Some(
+                self.pass
+                    .write_texture_with_use(
+                        ambient_occlusion,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .map_err(|_| ())?,
+            );
+        }
         self.gbuffer[2] = self
             .pass
             .write_texture_with_use(
@@ -484,6 +521,7 @@ impl DeferredGeometryPass<'_, '_> {
             [super::super::definition::TextureHandle; 3],
             Option<super::super::definition::TextureHandle>,
             Option<super::super::definition::TextureHandle>,
+            Option<super::super::definition::TextureHandle>,
         ),
         (),
     > {
@@ -495,7 +533,12 @@ impl DeferredGeometryPass<'_, '_> {
         if self.declared & (UPLOAD | GBUFFER) != UPLOAD | GBUFFER || !reads_complete {
             return Err(());
         }
-        Ok((self.gbuffer, self.effects, self.diffuse_roughness))
+        Ok((
+            self.gbuffer,
+            self.effects,
+            self.diffuse_roughness,
+            self.ambient_occlusion,
+        ))
     }
 }
 

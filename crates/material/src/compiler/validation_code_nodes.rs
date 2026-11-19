@@ -1,8 +1,15 @@
 //! Code-node source identity validation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{MaterialCodeNode, MaterialError};
+use crate::{FragmentCall, FragmentInput, MaterialCodeNode, MaterialError, MaterialType};
+
+#[derive(Clone, Debug)]
+pub(super) struct FunctionSignature {
+    pub(super) inputs: Vec<FragmentInput>,
+    pub(super) output: MaterialType,
+    pub(super) calls: Vec<FragmentCall>,
+}
 
 pub(super) fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {
     let mut ids = BTreeSet::new();
@@ -18,5 +25,27 @@ pub(super) fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(
             });
         }
     }
+    Ok(())
+}
+
+pub(super) fn visit(
+    name: &str,
+    functions: &BTreeMap<String, FunctionSignature>,
+    visiting: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
+) -> Result<(), MaterialError> {
+    if visited.contains(name) {
+        return Ok(());
+    }
+    if !visiting.insert(name.to_owned()) {
+        return Err(MaterialError::CallCycle {
+            fragment: name.to_owned(),
+        });
+    }
+    for call in &functions.get(name).expect("validated function name").calls {
+        visit(&call.fragment, functions, visiting, visited)?;
+    }
+    visiting.remove(name);
+    visited.insert(name.to_owned());
     Ok(())
 }

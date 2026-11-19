@@ -5,10 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::MaterialNodeInputSource;
 
 use super::{
-    DiffuseRoughnessConfiguration, EmissiveConfiguration, MaterialDefinition, MaterialError,
-    MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType, PbrSurfaceFactors,
-    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
-    validation::FunctionSignature,
+    AmbientOcclusionConfiguration, DiffuseRoughnessConfiguration, EmissiveConfiguration,
+    MaterialDefinition, MaterialError, MaterialParameter, MaterialResource, MaterialResourceKind,
+    MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
+    SurfacePolicy, validation::FunctionSignature,
 };
 
 #[path = "surface_emission.rs"]
@@ -31,6 +31,7 @@ pub(super) fn validate_definition(
         definition.emissive_configuration(),
         definition.pbr_surface_factors(),
         definition.diffuse_roughness_configuration(),
+        definition.ambient_occlusion_configuration(),
         root,
         functions,
         root_name,
@@ -93,6 +94,7 @@ pub(super) fn validate(
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
     diffuse_roughness_configuration: Option<&DiffuseRoughnessConfiguration>,
+    ambient_occlusion_configuration: Option<&AmbientOcclusionConfiguration>,
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
@@ -122,6 +124,12 @@ pub(super) fn validate(
     super::pbr_factors::validate(pbr_surface_factors, output, parameters, resources)?;
     super::diffuse_roughness::validate(
         diffuse_roughness_configuration,
+        output,
+        parameters,
+        resources,
+    )?;
+    super::ambient_occlusion::validate(
+        ambient_occlusion_configuration,
         output,
         parameters,
         resources,
@@ -156,7 +164,11 @@ pub(super) fn validate(
         }
         SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => (None, true, normal.as_deref()),
     };
-    let reserved = reserved_names(output, diffuse_roughness_configuration.is_some());
+    let reserved = reserved_names(
+        output,
+        diffuse_roughness_configuration.is_some(),
+        ambient_occlusion_configuration.is_some(),
+    );
     for name in std::iter::once(root_name).chain(properties).chain(normal) {
         if reserved.contains(name) {
             return Err(MaterialError::TopLevelNameConflict { name: name.into() });
@@ -380,6 +392,7 @@ fn has_evaluator_inputs(signature: &FunctionSignature, expects_uv0: bool) -> boo
 pub(super) fn reserved_names(
     output: &SurfaceOutput,
     uses_diffuse_roughness: bool,
+    uses_ambient_occlusion_color: bool,
 ) -> BTreeSet<String> {
     let mut names = match output {
         SurfaceOutput::Color => BTreeSet::from([String::from("evaluate_material")]),
@@ -425,6 +438,12 @@ pub(super) fn reserved_names(
         } else {
             String::from("evaluate_diffuse_roughness")
         });
+    }
+    if uses_ambient_occlusion_color {
+        names.extend([
+            String::from("evaluate_ambient_occlusion_uv0"),
+            String::from("evaluate_ambient_occlusion_monochrome"),
+        ]);
     }
     names.extend([
         String::from("material_alpha_rejected"),

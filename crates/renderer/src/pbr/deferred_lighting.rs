@@ -7,6 +7,65 @@ use fluxel_shader::{
 use super::{direct_light, templates};
 
 pub(crate) const DIFFUSE_ROUGHNESS_BINDING: u32 = 12;
+pub(crate) const AMBIENT_OCCLUSION_BINDING: u32 = 13;
+
+pub(crate) fn with_deferred_ambient_occlusion(
+    mut request: ShaderCompositionRequest,
+) -> ShaderCompositionRequest {
+    for unit in &mut request.source_units {
+        if !unit.id.0.starts_with("pbr-deferred-lighting") && unit.id.0 != "pbr-basic-light-view" {
+            continue;
+        }
+        unit.source = unit
+            .source
+            .replace(
+                "fn pbr_directional_light()",
+                &format!("@group(0) @binding({AMBIENT_OCCLUSION_BINDING}) var pbr_ambient_occlusion: texture_2d<f32>;\nfn pbr_directional_light()"),
+            )
+            .replace(
+                "let normal = normal_roughness.xyz;",
+                "let normal = normal_roughness.xyz;\n    let ambient_occlusion = textureLoad(pbr_ambient_occlusion, coordinate, 0);",
+            )
+            .replace(
+                "let normal = nr.xyz;",
+                "let normal = nr.xyz;\n    let ambient_occlusion = textureLoad(pbr_ambient_occlusion, coordinate, 0);",
+            )
+            .replace(
+                "pbr_direct_light_view_with_diffuse_roughness(",
+                "pbr_direct_light_view_with_diffuse_occlusion(",
+            )
+            .replace(
+                "vec3<f32>(0.04), diffuse_roughness)",
+                "vec3<f32>(0.04), diffuse_roughness, ambient_occlusion)",
+            )
+            .replace(
+                "pbr_direct_light_view(",
+                "pbr_direct_light_view_with_diffuse_occlusion(",
+            )
+            .replace(
+                "vec3<f32>(0.04))",
+                "vec3<f32>(0.04), 0.0, ambient_occlusion)",
+            )
+            .replace(
+                "pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * effect.a",
+                "pbr_diffuse_irradiance(base_metal.rgb, base_metal.a, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * ambient_occlusion.rgb",
+            )
+            .replace("* surface_effects.a", "* ambient_occlusion.rgb")
+            .replace(
+                " + terms.diffuse;",
+                " + terms.diffuse * mix(vec3<f32>(1.0), ambient_occlusion.rgb, vec3<f32>(ambient_occlusion.a));",
+            );
+    }
+    request.bindings.push(
+        BindingDeclaration::new(0, AMBIENT_OCCLUSION_BINDING, BindingKind::Texture)
+            .with_visibility([ShaderStage::Fragment]),
+    );
+    request.static_options.insert(
+        "renderer.deferred_ambient_occlusion".into(),
+        "rgba32float-v1".into(),
+    );
+    request
+}
 
 pub(crate) fn basic_deferred_view_binding(effects: bool) -> u32 {
     if effects { 4 } else { 3 }

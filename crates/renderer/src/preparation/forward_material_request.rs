@@ -36,7 +36,10 @@ pub(super) fn material_request(
             crate::pbr::forward_request(geometry)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
-        SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } if has_effects => {
+        SurfaceOutput::MetallicRoughnessUv0 { .. }
+        | SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. }
+            if has_effects =>
+        {
             (if environment {
                 crate::pbr::forward_uv0_effect_irradiance_request(geometry)
             } else {

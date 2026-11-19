@@ -27,6 +27,7 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
             .iter()
             .chain(frame.effects.iter())
             .chain(frame.diffuse_roughness.iter())
+            .chain(frame.ambient_occlusion.iter())
             .chain([&frame.scene_color])
         {
             if owner.device != device
@@ -155,6 +156,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
                 .iter()
                 .map(|owner| owner.instance),
         )
+        .chain(
+            producer
+                .ambient_occlusion
+                .iter()
+                .map(|owner| owner.instance),
+        )
         .chain([
             producer.scene_color.instance,
             product.instance,
@@ -173,6 +180,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
         .chain(
             receiver
                 .diffuse_roughness
+                .iter()
+                .map(|owner| owner.instance),
+        )
+        .chain(
+            receiver
+                .ambient_occlusion
                 .iter()
                 .map(|owner| owner.instance),
         )
@@ -209,6 +222,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
         .chain(
             receiver
                 .diffuse_roughness
+                .iter()
+                .map(|owner| owner.instance),
+        )
+        .chain(
+            receiver
+                .ambient_occlusion
                 .iter()
                 .map(|owner| owner.instance),
         )
@@ -348,6 +367,12 @@ fn validate_oit_input<B: ResourceBackend>(
     owners.extend(
         producer
             .diffuse_roughness
+            .iter()
+            .map(|owner| owner.instance),
+    );
+    owners.extend(
+        producer
+            .ambient_occlusion
             .iter()
             .map(|owner| owner.instance),
     );

@@ -23,6 +23,7 @@ impl MaterialCompiler {
             ir.surface_policy,
             ir.transmission_extensions,
             ir.diffuse_roughness_configuration.is_some(),
+            ir.ambient_occlusion_configuration.is_some(),
         ))
     }
 

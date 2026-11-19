@@ -91,6 +91,10 @@ pub(super) fn validate_owners<B: ResourceBackend>(
             .diffuse_roughness
             .as_ref()
             .is_some_and(|owner| owner.instance == instance)
+        || receiver
+            .ambient_occlusion
+            .as_ref()
+            .is_some_and(|owner| owner.instance == instance)
     {
         return Err(Error::InvalidState);
     }

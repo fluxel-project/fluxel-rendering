@@ -94,6 +94,10 @@ pub(super) fn effective_requirements(
         definition.diffuse_roughness_configuration(),
         requirements,
     )?;
+    let requirements = super::ambient_occlusion::effective_texture_encodings(
+        definition.ambient_occlusion_configuration(),
+        requirements,
+    )?;
     super::transmission::effective_texture_encodings(
         definition.refraction_environment(),
         requirements,

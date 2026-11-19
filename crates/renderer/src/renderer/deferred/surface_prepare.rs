@@ -40,13 +40,15 @@ where
         self.ensure_open()?;
         crate::renderer::require_opaque_or_mask(inputs)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let (prepared, pbr, effects, diffuse_roughness) = super::scene_prepare::materials(inputs)?;
+        let (prepared, pbr, effects, diffuse_roughness, ambient_occlusion) =
+            super::scene_prepare::materials(inputs)?;
         self.prepare_deferred_surface_resources(
             inputs,
             &prepared,
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             color_format,
         )
         .await
@@ -59,6 +61,7 @@ where
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<DeferredSurfaceFrame<B>, RendererError> {
         let input = inputs.first().ok_or(Error::InvalidState)?;
@@ -81,6 +84,7 @@ where
         let lighting_bindings = 3
             + u32::from(effects)
             + u32::from(diffuse_roughness)
+            + u32::from(ambient_occlusion)
             + u32::from(pbr && specular.is_none());
         if limits.max_bindings_per_group < lighting_bindings {
             return Err(self.observe_rhi_error(Error::Unsupported("Deferred lighting bindings")));
@@ -123,6 +127,7 @@ where
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
         )
         .map_err(|error| self.observe_rhi_error(error))?;
         let msaa_plan = plan_deferred_msaa_with_aux(
@@ -131,6 +136,7 @@ where
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             self.deferred_sample_count(),
         )
         .map_err(|error| self.observe_rhi_error(error))?;
@@ -139,7 +145,14 @@ where
                 return Err(self.observe_rhi_error(Error::Unsupported(reason)));
             }
         }
-        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects, diffuse_roughness);
+        self.retain_deferred_gbuffer_programs(
+            inputs,
+            prepared,
+            pbr,
+            effects,
+            diffuse_roughness,
+            ambient_occlusion,
+        );
         let mut geometry_programs = Vec::with_capacity(prepared.len());
         for (input, material) in inputs.iter().zip(prepared) {
             geometry_programs.push(
@@ -148,6 +161,7 @@ where
                     pbr,
                     effects,
                     diffuse_roughness,
+                    ambient_occlusion,
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?,
@@ -179,6 +193,7 @@ where
                 specular.is_some(),
                 effects,
                 diffuse_roughness,
+                ambient_occlusion,
                 scene_color_desc.format,
             )
             .await?;
@@ -199,13 +214,20 @@ where
         let (frame, uniform_upload) =
             SurfaceForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
                 .map_err(|error| self.observe_rhi_error(error))?;
-        let (gbuffer, effects_attachment, roughness_attachment) = gbuffer_plan
-            .allocate_with_aux(&self.device)
-            .map_err(|error| self.observe_rhi_error(error))?;
+        let (gbuffer, effects_attachment, roughness_attachment, occlusion_attachment) =
+            gbuffer_plan
+                .allocate_with_aux(&self.device)
+                .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
         let msaa = self
-            .realize_deferred_msaa(msaa_plan, pbr, effects, diffuse_roughness)
+            .realize_deferred_msaa(
+                msaa_plan,
+                pbr,
+                effects,
+                diffuse_roughness,
+                ambient_occlusion,
+            )
             .await?;
         let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
         let scene_color_sampler = self
@@ -269,6 +291,12 @@ where
                 resource: BindingResource::TextureView(&roughness.view),
             });
         }
+        if let Some(occlusion) = &occlusion_attachment {
+            lighting_entries.push(BindGroupEntry {
+                binding: crate::pbr::AMBIENT_OCCLUSION_BINDING,
+                resource: BindingResource::TextureView(&occlusion.view),
+            });
+        }
         let lighting_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -321,7 +349,10 @@ where
             .saturating_add(2 + resident_buffers);
         self.deferred_stats.texture_allocations =
             self.deferred_stats.texture_allocations.saturating_add(
-                4 + u64::from(effects) + u64::from(diffuse_roughness) + resident_textures,
+                4 + u64::from(effects)
+                    + u64::from(diffuse_roughness)
+                    + u64::from(ambient_occlusion)
+                    + resident_textures,
             );
         self.deferred_stats.resident_upload_bytes = self
             .deferred_stats
@@ -346,6 +377,7 @@ where
             gbuffer,
             effects: effects_attachment,
             diffuse_roughness: roughness_attachment,
+            ambient_occlusion: occlusion_attachment,
             msaa,
             scene_color,
             scene_color_sampler,

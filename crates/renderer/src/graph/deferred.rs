@@ -40,6 +40,7 @@ mod raster;
 mod record;
 mod record_lighting;
 mod record_msaa;
+mod record_readback;
 mod record_view;
 mod reverse_capture_bindings;
 mod reverse_capture_declaration;
@@ -48,6 +49,7 @@ mod reverse_capture_plan;
 mod reverse_capture_record;
 mod shared_imports;
 mod surface;
+mod surface_composite;
 mod surface_indirect;
 mod surface_record;
 mod surface_recording;
@@ -136,9 +138,11 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
     diffuse_roughness_slot: Option<TextureSlot>,
+    ambient_occlusion_slot: Option<TextureSlot>,
     msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
     msaa_effects_slot: Option<TextureSlot>,
     msaa_diffuse_roughness_slot: Option<TextureSlot>,
+    msaa_ambient_occlusion_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
@@ -180,9 +184,11 @@ pub(crate) struct DeferredDeclaration {
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
     diffuse_roughness_slot: Option<TextureSlot>,
+    ambient_occlusion_slot: Option<TextureSlot>,
     msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
     msaa_effects_slot: Option<TextureSlot>,
     msaa_diffuse_roughness_slot: Option<TextureSlot>,
+    msaa_ambient_occlusion_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,

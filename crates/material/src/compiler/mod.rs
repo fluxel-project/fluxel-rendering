@@ -1,5 +1,6 @@
 //! Material normalization and generic shader-contribution compilation.
 
+mod ambient_occlusion;
 mod canonical;
 mod compile;
 mod contribution;
@@ -16,12 +17,13 @@ mod validation_code_nodes;
 mod vertex_uv0;
 
 use crate::{
-    BindingLocation, CompiledMaterialVariant, DiffuseRoughnessConfiguration, EmissiveConfiguration,
-    FragmentCall, FragmentInput, MaterialAsset, MaterialAssetRef, MaterialCodeNode,
-    MaterialDefinition, MaterialError, MaterialFragment, MaterialParameter, MaterialResource,
-    MaterialResourceKind, MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType,
-    MaterialVariantKey, NormalMapSettings, PbrSurfaceFactors, RefractionEnvironment, StaticValue,
-    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    AmbientOcclusionConfiguration, BindingLocation, CompiledMaterialVariant,
+    DiffuseRoughnessConfiguration, EmissiveConfiguration, FragmentCall, FragmentInput,
+    MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
+    MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
+    MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType, MaterialVariantKey,
+    NormalMapSettings, PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode,
+    SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
 };
 use fluxel_assets::AssetSnapshot;
 

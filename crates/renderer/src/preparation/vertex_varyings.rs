@@ -48,6 +48,19 @@ pub(super) fn specialize(
                     &mut uv1_input_replaced,
                 )?;
             }
+            *source = source
+                .replace(
+                    "/* fluxel:uv1-vertex-param */",
+                    if uv1_input {
+                        ", fluxel_uv1: vec2<f32>"
+                    } else {
+                        ""
+                    },
+                )
+                .replace(
+                    "/* fluxel:uv1-vertex-argument */",
+                    if uv1_input { ", fluxel_uv1" } else { "" },
+                );
             const UV1_ARG: &str = "/* fluxel:uv1-argument */";
             uv1_argument_replaced |= source.contains(UV1_ARG);
             *source = source

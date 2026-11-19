@@ -370,6 +370,14 @@ variant identity; conflicting explicit metadata is rejected before publication.
 No renderer pass, coordinate transform, binding owner, or texture allocation is
 introduced by this configuration.
 
+An `AmbientOcclusionConfiguration` binds a separate linear map and selects
+either RGB or red replicated to RGB. The sampled color is multiplied by the
+map level and mixed with authored occlusion using the configured strength.
+A packed AO channel, when present, is mixed into that result afterward.
+The direct diffuse weight is independent and defaults to zero. The
+environment specular input uses the raw red value in red mode and saturated
+linear luminance in RGB mode.
+
 `DiffuseRoughnessConfiguration` supplies the independent roughness of the PBR
 diffuse lobe. Its finite base value defaults to zero. A UV surface can multiply
 that value by the red channel of a linear texture and its optional scalar

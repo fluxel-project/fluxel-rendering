@@ -36,14 +36,15 @@ where
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
     ) -> std::result::Result<Option<DeferredMsaa<B>>, RendererError> {
         let Some(plan) = plan else {
             return Ok(None);
         };
         let program = self
-            .deferred_msaa_resolve_program(pbr, effects, diffuse_roughness)
+            .deferred_msaa_resolve_program(pbr, effects, diffuse_roughness, ambient_occlusion)
             .await?;
-        let (gbuffer, effects, diffuse_roughness) = plan
+        let (gbuffer, effects, diffuse_roughness, ambient_occlusion) = plan
             .allocate_with_aux(&self.device)
             .map_err(|error| self.observe_rhi_error(error))?;
         let entries = gbuffer
@@ -61,6 +62,10 @@ where
                 binding: 4,
                 resource: BindingResource::TextureView(&texture.view),
             }))
+            .chain(ambient_occlusion.iter().map(|texture| BindGroupEntry {
+                binding: 5,
+                resource: BindingResource::TextureView(&texture.view),
+            }))
             .collect::<Vec<_>>();
         let group = self
             .device
@@ -72,12 +77,15 @@ where
             .map_err(|error| self.observe_rhi_error(error))?;
         self.deferred_stats.texture_allocations =
             self.deferred_stats.texture_allocations.saturating_add(
-                3 + u64::from(effects.is_some()) + u64::from(diffuse_roughness.is_some()),
+                3 + u64::from(effects.is_some())
+                    + u64::from(diffuse_roughness.is_some())
+                    + u64::from(ambient_occlusion.is_some()),
             );
         Ok(Some(DeferredMsaa {
             gbuffer,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             pipeline: program.pipeline.clone(),
             group,
         }))
@@ -88,14 +96,17 @@ where
         pbr: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
     ) -> std::result::Result<Arc<MsaaResolveProgram<B>>, RendererError> {
-        if let Some(program) =
-            self.deferred_programs
-                .get_msaa_resolve(pbr, effects, diffuse_roughness)
-        {
+        if let Some(program) = self.deferred_programs.get_msaa_resolve(
+            pbr,
+            effects,
+            diffuse_roughness,
+            ambient_occlusion,
+        ) {
             return Ok(program);
         }
-        let request = resolve_request(effects, diffuse_roughness);
+        let request = resolve_request(effects, diffuse_roughness, ambient_occlusion);
         let artifact = ShaderComposer::new()
             .compose(&request)
             .map_err(RendererError::DeferredShader)?;
@@ -136,6 +147,7 @@ where
                 entries: (0..3)
                     .chain(effects.then_some(3))
                     .chain(diffuse_roughness.then_some(4))
+                    .chain(ambient_occlusion.then_some(5))
                     .map(|binding| BindGroupLayoutEntry {
                         binding,
                         visibility: vec![ShaderStage::Fragment],
@@ -175,10 +187,15 @@ where
             )),
         ];
         if effects {
-            colors.push(Some(color_target_with_format(TextureFormat::Rgba16Float)));
+            colors.push(Some(color_target_with_format(
+                crate::residency::deferred_effects_format(ambient_occlusion),
+            )));
         }
         if diffuse_roughness {
             colors.push(Some(color_target_with_format(TextureFormat::R32Float)));
+        }
+        if ambient_occlusion {
+            colors.push(Some(color_target_with_format(TextureFormat::Rgba32Float)));
         }
         let mut depth = depth_state();
         depth.depth_compare = CompareFunction::Always;
@@ -212,13 +229,18 @@ where
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             Arc::clone(&program),
         );
         Ok(program)
     }
 }
 
-fn resolve_request(effects: bool, diffuse_roughness: bool) -> ShaderCompositionRequest {
+fn resolve_request(
+    effects: bool,
+    diffuse_roughness: bool,
+    ambient_occlusion: bool,
+) -> ShaderCompositionRequest {
     let (effects_binding, effects_member, effects_load) = if effects {
         (
             "@group(0) @binding(3) var effects_msaa: texture_multisampled_2d<f32>;",
@@ -239,6 +261,17 @@ fn resolve_request(effects: bool, diffuse_roughness: bool) -> ShaderCompositionR
         } else {
             ("", String::new(), "")
         };
+    let ambient_occlusion_location = 2 + u32::from(effects) + u32::from(diffuse_roughness);
+    let (ambient_occlusion_binding, ambient_occlusion_member, ambient_occlusion_load) =
+        if ambient_occlusion {
+            (
+                "@group(0) @binding(5) var ambient_occlusion_msaa: texture_multisampled_2d<f32>;",
+                format!("@location({ambient_occlusion_location}) ambient_occlusion: vec4<f32>,"),
+                "output.ambient_occlusion = textureLoad(ambient_occlusion_msaa, pixel, 0);",
+            )
+        } else {
+            ("", String::new(), "")
+        };
     // Babylon WebGPU resolves depth from sample zero by default. Load all
     // G-buffer fields from that same surface so lighting never reconstructs a
     // position from one sample while shading a different sample's material.
@@ -249,6 +282,7 @@ fn resolve_request(effects: bool, diffuse_roughness: bool) -> ShaderCompositionR
 @group(0) @binding(2) var depth_msaa: texture_depth_multisampled_2d;
 {effects_binding}
 {diffuse_roughness_binding}
+{ambient_occlusion_binding}
 
 @vertex fn deferred_resolve_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {{
     let positions = array<vec2<f32>, 3>(
@@ -261,6 +295,7 @@ struct ResolveOutput {{
     @location(1) normal: vec4<f32>,
     {effects_member}
     {diffuse_roughness_member}
+    {ambient_occlusion_member}
     @builtin(frag_depth) depth: f32,
 }}
 
@@ -272,6 +307,7 @@ struct ResolveOutput {{
     output.depth = textureLoad(depth_msaa, pixel, 0);
     {effects_load}
     {diffuse_roughness_load}
+    {ambient_occlusion_load}
     return output;
 }}
 "#
@@ -286,6 +322,7 @@ struct ResolveOutput {{
     for binding in (0..3)
         .chain(effects.then_some(3))
         .chain(diffuse_roughness.then_some(4))
+        .chain(ambient_occlusion.then_some(5))
     {
         request = request.with_binding(
             BindingDeclaration::new(0, binding, BindingKind::Texture)

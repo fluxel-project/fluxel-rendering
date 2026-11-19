@@ -21,6 +21,7 @@ pub(in crate::compiler) fn append_evaluators(
     policy: SurfacePolicy,
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
+    ambient_occlusion_color: bool,
 ) {
     match output {
         SurfaceOutput::Color => generated.push_str(&format!(
@@ -37,15 +38,15 @@ pub(in crate::compiler) fn append_evaluators(
                 "fn evaluate_metallic_roughness() -> vec2<f32> {{\n    return {properties}();\n}}\n"
             ));
         }
-        SurfaceOutput::MetallicRoughnessUv0 { properties } => pbr_factors::append_uv0_evaluators(
-            generated,
-            root_fragment,
-            root_pbr_inputs,
-            Some(properties),
-            pbr_surface_factors,
-            vertex_varyings,
-            texture_uv,
-        ),
+        SurfaceOutput::MetallicRoughnessUv0 { properties } => {
+            pbr_factors::append_uv0_evaluators(
+                generated, root_fragment, root_pbr_inputs, Some(properties), pbr_surface_factors,
+                vertex_varyings, texture_uv,
+            );
+            if ambient_occlusion_color {
+                append_neutral_effects(generated, texture_uv);
+            }
+        }
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
             pbr_factors::append_uv0_evaluators(
                 generated,

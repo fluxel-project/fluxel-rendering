@@ -19,6 +19,7 @@ where
         use_specular: bool,
         effects: bool,
         diffuse_roughness: bool,
+        ambient_occlusion: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<Arc<LightingProgram<B>>, RendererError> {
         self.ensure_open()?;
@@ -68,6 +69,11 @@ where
         } else {
             request
         };
+        let request = if ambient_occlusion {
+            crate::pbr::with_deferred_ambient_occlusion(request)
+        } else {
+            request
+        };
         let artifact = fluxel_shader::ShaderComposer::new()
             .compose(&request)
             .map_err(RendererError::DeferredShader)?;
@@ -77,6 +83,7 @@ where
             pbr,
             effects,
             diffuse_roughness,
+            ambient_occlusion,
             color_format,
         );
         if let Some(program) = self.deferred_programs.get_lighting(&key) {
@@ -142,7 +149,14 @@ where
                         sampled_texture(2, TextureSampleType::Depth),
                     ];
                     if effects {
-                        entries.push(sampled_texture(3, TextureSampleType::Float));
+                        entries.push(sampled_texture(
+                            3,
+                            if ambient_occlusion {
+                                TextureSampleType::UnfilterableFloat
+                            } else {
+                                TextureSampleType::Float
+                            },
+                        ));
                     }
                     if pbr && !use_specular {
                         entries.push(BindGroupLayoutEntry {
@@ -161,6 +175,12 @@ where
                     if diffuse_roughness {
                         entries.push(sampled_texture(
                             crate::pbr::DIFFUSE_ROUGHNESS_BINDING,
+                            TextureSampleType::UnfilterableFloat,
+                        ));
+                    }
+                    if ambient_occlusion {
+                        entries.push(sampled_texture(
+                            crate::pbr::AMBIENT_OCCLUSION_BINDING,
                             TextureSampleType::UnfilterableFloat,
                         ));
                     }

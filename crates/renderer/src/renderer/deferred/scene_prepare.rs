@@ -6,7 +6,7 @@ use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
 pub(super) fn materials(
     inputs: &[ForwardDrawInput],
-) -> Result<(Vec<PreparedMaterial>, bool, bool, bool), RendererError> {
+) -> Result<(Vec<PreparedMaterial>, bool, bool, bool, bool), RendererError> {
     let first = inputs
         .first()
         .ok_or(Error::Unsupported("Deferred requires visible geometry"))?;
@@ -55,12 +55,16 @@ pub(super) fn materials(
     let diffuse_roughness = inputs
         .iter()
         .any(|input| input.prepared().material().uses_diffuse_roughness());
+    let ambient_occlusion = inputs
+        .iter()
+        .any(|input| input.prepared().material().uses_ambient_occlusion_color());
     let mut prepared = Vec::with_capacity(inputs.len());
     for input in inputs {
         let layout = &input.geometry().value().layout;
         let mesh_layout = crate::preparation::mesh_vertex_layout(layout);
         let request = match input.material().value().output() {
-            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. }
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. }
+            | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. }
                 if effects =>
             {
                 crate::pbr::gbuffer_uv0_effect_request(&mesh_layout)
@@ -105,6 +109,11 @@ pub(super) fn materials(
         } else {
             request
         };
+        let request = if ambient_occlusion {
+            crate::pbr::with_gbuffer_ambient_occlusion(request, effects, diffuse_roughness)
+        } else {
+            request
+        };
         let request = if input.has_instance_transforms() {
             crate::preparation::with_instance_transform(request, input.source())
                 .map_err(RendererError::ForwardPreparation)?
@@ -129,7 +138,7 @@ pub(super) fn materials(
         }
         prepared.push(material.with_binding_schema(schema));
     }
-    Ok((prepared, pbr, effects, diffuse_roughness))
+    Ok((prepared, pbr, effects, diffuse_roughness, ambient_occlusion))
 }
 
 pub(super) fn uniforms(

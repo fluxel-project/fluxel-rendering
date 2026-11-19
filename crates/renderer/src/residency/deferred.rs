@@ -102,6 +102,7 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) diffuse_roughness: Option<ForwardTexture<B>>,
+    pub(crate) ambient_occlusion: Option<ForwardTexture<B>>,
     /// Optional multisample G-buffer inputs and their resolve program.
     pub(crate) msaa: Option<DeferredMsaa<B>>,
     /// Frame-local lighting output. It is sampled by the composite pass before
@@ -144,6 +145,7 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) diffuse_roughness: Option<ForwardTexture<B>>,
+    pub(crate) ambient_occlusion: Option<ForwardTexture<B>>,
     /// Optional multisample G-buffer inputs and their resolve program.
     pub(crate) msaa: Option<DeferredMsaa<B>>,
     pub(crate) scene_color: ForwardTexture<B>,
@@ -168,6 +170,7 @@ pub(crate) struct DeferredMsaa<B: ResourceBackend> {
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) diffuse_roughness: Option<ForwardTexture<B>>,
+    pub(crate) ambient_occlusion: Option<ForwardTexture<B>>,
     pub(crate) pipeline: RasterPipeline<B>,
     pub(crate) group: BindGroup<B>,
 }
@@ -182,10 +185,12 @@ pub(crate) struct DeferredGbufferPlan {
     descs: [TextureDesc; 3],
     effects: Option<TextureDesc>,
     diffuse_roughness: Option<TextureDesc>,
+    ambient_occlusion: Option<TextureDesc>,
 }
 
 type AllocatedGbuffer<B> = (
     [ForwardTexture<B>; 3],
+    Option<ForwardTexture<B>>,
     Option<ForwardTexture<B>>,
     Option<ForwardTexture<B>>,
 );
@@ -197,7 +202,7 @@ impl DeferredGbufferPlan {
         device: &Device<B>,
     ) -> Result<([ForwardTexture<B>; 3], Option<ForwardTexture<B>>)> {
         self.allocate_with_aux(device)
-            .map(|(gbuffer, effects, _)| (gbuffer, effects))
+            .map(|(gbuffer, effects, _, _)| (gbuffer, effects))
     }
 
     pub(crate) fn allocate_with_aux<B: ResourceBackend>(
@@ -210,7 +215,12 @@ impl DeferredGbufferPlan {
         for desc in &self.descs {
             require_texture(device, desc)?;
         }
-        for desc in self.effects.iter().chain(self.diffuse_roughness.iter()) {
+        for desc in self
+            .effects
+            .iter()
+            .chain(self.diffuse_roughness.iter())
+            .chain(self.ambient_occlusion.iter())
+        {
             require_texture(device, desc)?;
         }
         let [albedo_desc, normal_desc, depth_desc] = self.descs;
@@ -227,6 +237,7 @@ impl DeferredGbufferPlan {
             gbuffer,
             allocate_aux(self.effects)?,
             allocate_aux(self.diffuse_roughness)?,
+            allocate_aux(self.ambient_occlusion)?,
         ))
     }
 }
@@ -245,7 +256,7 @@ pub(crate) fn plan_deferred_gbuffer_with_effects<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
 ) -> Result<DeferredGbufferPlan> {
-    plan_gbuffer(device, extent, pbr, effects, false, 1)
+    plan_gbuffer(device, extent, pbr, effects, false, false, 1)
 }
 
 pub(crate) fn plan_deferred_gbuffer_with_aux<B: ResourceBackend>(
@@ -254,8 +265,17 @@ pub(crate) fn plan_deferred_gbuffer_with_aux<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
 ) -> Result<DeferredGbufferPlan> {
-    plan_gbuffer(device, extent, pbr, effects, diffuse_roughness, 1)
+    plan_gbuffer(
+        device,
+        extent,
+        pbr,
+        effects,
+        diffuse_roughness,
+        ambient_occlusion,
+        1,
+    )
 }
 
 fn plan_gbuffer<B: ResourceBackend>(
@@ -264,6 +284,7 @@ fn plan_gbuffer<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
     samples: u32,
 ) -> Result<DeferredGbufferPlan> {
     validate_gbuffer_request(
@@ -271,6 +292,7 @@ fn plan_gbuffer<B: ResourceBackend>(
         device.capabilities().limits.max_color_attachments,
         effects,
         diffuse_roughness,
+        ambient_occlusion,
     )?;
     let descs = gbuffer_descs(extent, pbr, samples);
     for desc in &descs {
@@ -280,7 +302,7 @@ fn plan_gbuffer<B: ResourceBackend>(
         gbuffer_desc(
             "fluxel deferred surface effects",
             extent,
-            TextureFormat::Rgba16Float,
+            deferred_effects_format(ambient_occlusion),
             samples,
         )
     });
@@ -292,7 +314,19 @@ fn plan_gbuffer<B: ResourceBackend>(
             samples,
         )
     });
-    for desc in effects.iter().chain(diffuse_roughness.iter()) {
+    let ambient_occlusion = ambient_occlusion.then(|| {
+        gbuffer_desc(
+            "fluxel deferred ambient occlusion",
+            extent,
+            TextureFormat::Rgba32Float,
+            samples,
+        )
+    });
+    for desc in effects
+        .iter()
+        .chain(diffuse_roughness.iter())
+        .chain(ambient_occlusion.iter())
+    {
         require_texture(device, desc)?;
     }
     Ok(DeferredGbufferPlan {
@@ -300,6 +334,7 @@ fn plan_gbuffer<B: ResourceBackend>(
         descs,
         effects,
         diffuse_roughness,
+        ambient_occlusion,
     })
 }
 
@@ -315,12 +350,22 @@ pub(crate) fn plan_deferred_msaa_with_aux<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
     samples: u32,
 ) -> Result<Option<DeferredGbufferPlan>> {
     match samples {
         0 => Err(Error::InvalidRange),
         1 => Ok(None),
-        _ => plan_gbuffer(device, extent, pbr, effects, diffuse_roughness, samples).map(Some),
+        _ => plan_gbuffer(
+            device,
+            extent,
+            pbr,
+            effects,
+            diffuse_roughness,
+            ambient_occlusion,
+            samples,
+        )
+        .map(Some),
     }
 }
 
@@ -368,7 +413,7 @@ pub(crate) fn deferred_scene_color_desc_with_format(
 
 #[cfg(test)]
 fn validate_request(extent: [u32; 2], max_color_attachments: u32, effects: bool) -> Result<()> {
-    validate_gbuffer_request(extent, max_color_attachments, effects, false)
+    validate_gbuffer_request(extent, max_color_attachments, effects, false, false)
 }
 
 fn validate_gbuffer_request(
@@ -376,11 +421,19 @@ fn validate_gbuffer_request(
     max_color_attachments: u32,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
 ) -> Result<()> {
     if extent.contains(&0) {
         return Err(Error::InvalidRange);
     }
-    if max_color_attachments < 2 + u32::from(effects) + u32::from(diffuse_roughness) {
+    if max_color_attachments
+        < 2 + u32::from(effects) + u32::from(diffuse_roughness) + u32::from(ambient_occlusion)
+    {
+        if ambient_occlusion {
+            return Err(Error::Unsupported(
+                "deferred ambient occlusion color attachments",
+            ));
+        }
         if diffuse_roughness {
             return Err(Error::Unsupported(
                 "deferred diffuse roughness color attachments",
@@ -400,6 +453,14 @@ pub(crate) fn deferred_albedo_format(pbr: bool) -> TextureFormat {
         TextureFormat::Rgba16Float
     } else {
         TextureFormat::Rgba8Unorm
+    }
+}
+
+pub(crate) const fn deferred_effects_format(ambient_occlusion: bool) -> TextureFormat {
+    if ambient_occlusion {
+        TextureFormat::Rgba32Float
+    } else {
+        TextureFormat::Rgba16Float
     }
 }
 

@@ -29,6 +29,7 @@ pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
     pub(super) gbuffer: &'a [ForwardTexture<B>; 3],
     pub(super) effects: Option<&'a ForwardTexture<B>>,
     pub(super) diffuse_roughness: Option<&'a ForwardTexture<B>>,
+    pub(super) ambient_occlusion: Option<&'a ForwardTexture<B>>,
     /// The raster-only G-buffer source.  Lighting and every downstream depth
     /// consumer deliberately continue to use the resolved owners above.
     pub(super) msaa: Option<&'a crate::residency::DeferredMsaa<B>>,
@@ -64,6 +65,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
             diffuse_roughness: frame.diffuse_roughness.as_ref(),
+            ambient_occlusion: frame.ambient_occlusion.as_ref(),
             msaa: frame.msaa.as_ref(),
             draws: &frame.draws,
             extent: frame.extent,
@@ -90,6 +92,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
             diffuse_roughness: frame.diffuse_roughness.as_ref(),
+            ambient_occlusion: frame.ambient_occlusion.as_ref(),
             msaa: frame.msaa.as_ref(),
             draws: &frame.draws,
             extent: frame.extent,

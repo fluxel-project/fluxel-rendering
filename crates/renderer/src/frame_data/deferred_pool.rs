@@ -25,6 +25,7 @@ pub(crate) struct DeferredFramePoolEntry<B: ResourceBackend> {
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
     pub(crate) diffuse_roughness: Option<ForwardTexture<B>>,
+    pub(crate) ambient_occlusion: Option<ForwardTexture<B>>,
 }
 
 /// Records the actual post-readback states for a completed Deferred allocation.
@@ -37,12 +38,14 @@ pub(crate) fn recycle<B: ResourceBackend>(
     mut gbuffer: [ForwardTexture<B>; 3],
     mut effects: Option<ForwardTexture<B>>,
     mut diffuse_roughness: Option<ForwardTexture<B>>,
+    mut ambient_occlusion: Option<ForwardTexture<B>>,
 ) -> DeferredFramePoolEntry<B> {
-    for texture in &mut gbuffer {
-        texture.incoming = sampled_fragment_uses();
-        texture.layout = pooled_layout();
-    }
-    for texture in effects.iter_mut().chain(diffuse_roughness.iter_mut()) {
+    for texture in gbuffer
+        .iter_mut()
+        .chain(effects.iter_mut())
+        .chain(diffuse_roughness.iter_mut())
+        .chain(ambient_occlusion.iter_mut())
+    {
         texture.incoming = sampled_fragment_uses();
         texture.layout = pooled_layout();
     }
@@ -51,6 +54,7 @@ pub(crate) fn recycle<B: ResourceBackend>(
         gbuffer,
         effects,
         diffuse_roughness,
+        ambient_occlusion,
     }
 }
 
@@ -70,6 +74,7 @@ pub(crate) fn compatible<B: ResourceBackend>(
     pbr: bool,
     effects: bool,
     diffuse_roughness: bool,
+    ambient_occlusion: bool,
 ) -> bool {
     pool::compatible(&entry.frame, device, extent, uniform_bytes, row_pitch)
         && gbuffer_compatible(&entry.gbuffer, device, extent, pbr)
@@ -78,7 +83,7 @@ pub(crate) fn compatible<B: ResourceBackend>(
             device,
             extent,
             effects,
-            TextureFormat::Rgba16Float,
+            crate::residency::deferred_effects_format(ambient_occlusion),
         )
         && aux_compatible(
             &entry.diffuse_roughness,
@@ -86,6 +91,13 @@ pub(crate) fn compatible<B: ResourceBackend>(
             extent,
             diffuse_roughness,
             TextureFormat::R32Float,
+        )
+        && aux_compatible(
+            &entry.ambient_occlusion,
+            device,
+            extent,
+            ambient_occlusion,
+            TextureFormat::Rgba32Float,
         )
 }
 

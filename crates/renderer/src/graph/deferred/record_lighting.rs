@@ -43,6 +43,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         ) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
+        if let (Some(slot), Some(_)) = (
+            self.ambient_occlusion_slot,
+            frame.ambient_occlusion.as_ref(),
+        ) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
         pass.texture(
             scene_color_slot,
             whole_color(),

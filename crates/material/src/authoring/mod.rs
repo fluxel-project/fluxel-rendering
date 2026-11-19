@@ -1,5 +1,7 @@
 //! Author-facing material descriptions.
 
+mod ambient_occlusion;
+mod ambient_occlusion_definition;
 mod assets;
 mod code_node;
 mod definition;
@@ -11,6 +13,9 @@ mod surface_policy;
 mod transmission;
 mod types;
 
+pub use ambient_occlusion::{
+    AmbientOcclusionConfiguration, AmbientOcclusionMap, AmbientOcclusionMapChannels,
+};
 pub use assets::{MaterialAsset, MaterialAssetId, MaterialAssetRef};
 pub use code_node::MaterialCodeNode;
 pub(crate) use definition::VertexUv0;

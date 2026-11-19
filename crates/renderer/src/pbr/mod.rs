@@ -27,15 +27,17 @@ mod templates;
 mod uv0_effects;
 
 pub(crate) use deferred_lighting::{
-    DIFFUSE_ROUGHNESS_BINDING, basic_deferred_view_binding, lighting_effect_irradiance_request,
-    lighting_effect_request, lighting_irradiance_request, lighting_request,
-    with_deferred_diffuse_roughness,
+    AMBIENT_OCCLUSION_BINDING, DIFFUSE_ROUGHNESS_BINDING, basic_deferred_view_binding,
+    lighting_effect_irradiance_request, lighting_effect_request, lighting_irradiance_request,
+    lighting_request, with_deferred_ambient_occlusion, with_deferred_diffuse_roughness,
 };
 use request_options::{
-    VIEW_FACING, install_diffuse_roughness_evaluator, install_emissive_evaluator,
+    VIEW_FACING, install_ambient_occlusion_evaluator, install_diffuse_roughness_evaluator,
+    install_emissive_evaluator,
 };
 pub(crate) use request_options::{
-    with_gbuffer_diffuse_roughness, with_mirrored_view, without_emissive,
+    with_gbuffer_ambient_occlusion, with_gbuffer_diffuse_roughness, with_mirrored_view,
+    without_emissive,
 };
 
 pub(crate) fn specialize_diffuse_roughness(request: &mut ShaderCompositionRequest, enabled: bool) {
@@ -51,6 +53,20 @@ pub(crate) fn specialize_diffuse_roughness(request: &mut ShaderCompositionReques
         .get("renderer.material_context")
         .is_some();
     install_diffuse_roughness_evaluator(request, enabled, material_uses_uv0);
+}
+
+pub(crate) fn specialize_ambient_occlusion(request: &mut ShaderCompositionRequest, enabled: bool) {
+    if !request
+        .source_units
+        .iter()
+        .any(|unit| unit.id.0.starts_with("pbr-forward") || unit.id.0.starts_with("pbr-gbuffer"))
+    {
+        return;
+    }
+    let material_uses_uv0 = request
+        .static_options
+        .contains_key("renderer.material_context");
+    install_ambient_occlusion_evaluator(request, enabled, material_uses_uv0);
 }
 
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {

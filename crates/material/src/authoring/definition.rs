@@ -3,10 +3,10 @@
 use std::collections::BTreeMap;
 
 use super::{
-    DiffuseRoughnessConfiguration, MaterialCodeNode, MaterialFragment, MaterialNodeGraph,
-    MaterialNodeInputSource, MaterialParameter, MaterialResource, MaterialTextureEncoding,
-    MaterialTextureEncodingRequirement, NormalMapSettings, RefractionEnvironment, StaticValue,
-    SurfacePolicy, TransmissionExtensions,
+    AmbientOcclusionConfiguration, DiffuseRoughnessConfiguration, MaterialCodeNode,
+    MaterialFragment, MaterialNodeGraph, MaterialNodeInputSource, MaterialParameter,
+    MaterialResource, MaterialTextureEncoding, MaterialTextureEncodingRequirement,
+    NormalMapSettings, RefractionEnvironment, StaticValue, SurfacePolicy, TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -282,6 +282,7 @@ pub struct MaterialDefinition {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pub(super) ambient_occlusion_configuration: Option<AmbientOcclusionConfiguration>,
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
@@ -331,6 +332,7 @@ impl MaterialDefinition {
             surface_extensions: SurfaceExtensions::default(),
             emissive_configuration: None,
             pbr_surface_factors: None,
+            ambient_occlusion_configuration: None,
             diffuse_roughness_configuration: None,
             normal_map_settings: None,
             surface_policy: SurfacePolicy::default(),
@@ -503,6 +505,7 @@ impl MaterialDefinition {
         self.surface_extensions.occlusion.is_some()
             || self.surface_extensions.emissive.is_some()
             || self.emissive_configuration.is_some()
+            || self.ambient_occlusion_configuration.is_some()
             || matches!(
                 &self.output,
                 SurfaceOutput::MetallicRoughnessUv0Graph {

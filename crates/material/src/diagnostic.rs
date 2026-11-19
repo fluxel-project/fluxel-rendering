@@ -407,6 +407,11 @@ pub enum MaterialError {
         /// Texture resource name.
         resource: String,
     },
+    /// Colored ambient-occlusion controls require a UV-capable PBR surface.
+    AmbientOcclusionUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
     /// PBR factors require UV0 and packed occlusion also requires the normal-surface interface.
     PbrSurfaceFactorsUnsupported {
         /// Selected output.

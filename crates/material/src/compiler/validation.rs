@@ -9,7 +9,8 @@ use super::canonical::{
 use super::names::{
     shader_resource_name, validate_generated_node_references, validate_top_level_names,
 };
-use super::validation_code_nodes::validate_code_node_sources;
+pub(super) use super::validation_code_nodes::FunctionSignature;
+use super::validation_code_nodes::{validate_code_node_sources, visit};
 use super::*;
 use fluxel_shader::CallableDeclaration;
 #[derive(Clone, Debug)]
@@ -26,6 +27,7 @@ pub(super) struct NormalizedMaterialIr {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pub(super) ambient_occlusion_configuration: Option<AmbientOcclusionConfiguration>,
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     pub(super) normal_map_settings: Option<NormalMapSettings>,
     pub(super) surface_policy: SurfacePolicy,
@@ -34,13 +36,6 @@ pub(super) struct NormalizedMaterialIr {
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
     vertex_uv0: Option<super::vertex_uv0::NormalizedVertexUv0>,
 }
-#[derive(Clone, Debug)]
-pub(super) struct FunctionSignature {
-    pub(super) inputs: Vec<FragmentInput>,
-    pub(super) output: MaterialType,
-    calls: Vec<FragmentCall>,
-}
-
 impl NormalizedMaterialIr {
     pub(super) fn from_definition(definition: &MaterialDefinition) -> Result<Self, MaterialError> {
         if !definition.surface_policy().alpha_cutoff.is_finite() {
@@ -131,6 +126,7 @@ impl NormalizedMaterialIr {
             definition.pbr_surface_factors(),
             definition.emissive_configuration(),
             definition.diffuse_roughness_configuration(),
+            definition.ambient_occlusion_configuration(),
         )?;
         validate_top_level_names(
             &fragments,
@@ -140,6 +136,7 @@ impl NormalizedMaterialIr {
             definition.static_options(),
             definition.output(),
             definition.diffuse_roughness_configuration().is_some(),
+            definition.ambient_occlusion_configuration().is_some(),
             graphs,
         )?;
         validate_calls(&functions)?;
@@ -156,6 +153,7 @@ impl NormalizedMaterialIr {
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
+            ambient_occlusion_configuration: definition.ambient_occlusion_configuration().cloned(),
             diffuse_roughness_configuration: definition.diffuse_roughness_configuration().cloned(),
             normal_map_settings: definition.normal_map_settings(),
             surface_policy: definition.surface_policy(),
@@ -179,6 +177,10 @@ impl NormalizedMaterialIr {
         );
         super::diffuse_roughness::canonical(
             self.diffuse_roughness_configuration.as_ref(),
+            &mut canonical,
+        );
+        super::ambient_occlusion::canonical(
+            self.ambient_occlusion_configuration.as_ref(),
             &mut canonical,
         );
         super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
@@ -262,6 +264,7 @@ impl NormalizedMaterialIr {
             &self.texture_uv,
             self.pbr_surface_factors.as_ref(),
             self.diffuse_roughness_configuration.as_ref(),
+            self.ambient_occlusion_configuration.as_ref(),
         );
         super::surface::append_evaluators(
             &mut generated,
@@ -277,11 +280,19 @@ impl NormalizedMaterialIr {
             self.surface_policy,
             vertex_varyings,
             &self.texture_uv,
+            self.ambient_occlusion_configuration.is_some(),
         );
         super::diffuse_roughness::append_evaluator(
             &mut generated,
             self.diffuse_roughness_configuration.as_ref(),
             &self.output,
+            &self.texture_uv,
+        );
+        super::ambient_occlusion::append_evaluator(
+            &mut generated,
+            self.ambient_occlusion_configuration.as_ref(),
+            &self.surface_extensions,
+            self.pbr_surface_factors.as_ref(),
             &self.texture_uv,
         );
         super::vertex_uv0::append_evaluator(&self.output, self.vertex_uv0.as_ref(), &mut generated);
@@ -567,27 +578,4 @@ fn callable_declarations<'a>(
         callables.extend(graph.callables.iter().cloned());
     }
     callables
-}
-
-fn visit(
-    name: &str,
-    functions: &BTreeMap<String, FunctionSignature>,
-    visiting: &mut BTreeSet<String>,
-    visited: &mut BTreeSet<String>,
-) -> Result<(), MaterialError> {
-    if visited.contains(name) {
-        return Ok(());
-    }
-    if !visiting.insert(name.to_owned()) {
-        return Err(MaterialError::CallCycle {
-            fragment: name.to_owned(),
-        });
-    }
-    let function = functions.get(name).expect("validated function name");
-    for call in &function.calls {
-        visit(&call.fragment, functions, visiting, visited)?;
-    }
-    visiting.remove(name);
-    visited.insert(name.to_owned());
-    Ok(())
 }
