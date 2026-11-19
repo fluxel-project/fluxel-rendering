@@ -229,11 +229,15 @@ fn material_texture_properties(
             *generated_mips,
             LayeredTextureView::Cube,
         ),
-        ResolvedForwardTexture::VolumeAsset(texture) => {
-            let data = texture.value();
+        ResolvedForwardTexture::VolumeAsset {
+            asset,
+            generated_mips,
+        } => {
+            let data = asset.value();
             MaterialTextureProperties {
                 extent: Some(data.extent),
-                mip_levels: data.mip_levels,
+                mip_levels: generated_mips.unwrap_or(data.mip_levels),
+                generate_mips: generated_mips.is_some(),
                 view_dimension: TextureViewDimension::D3,
                 ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
             }

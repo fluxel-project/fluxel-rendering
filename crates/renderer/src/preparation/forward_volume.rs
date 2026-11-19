@@ -1,8 +1,8 @@
 //! Immutable sampled 3D color-texture authoring data for Forward preparation.
 
-use fluxel_assets::AssetKind;
+use fluxel_assets::{AssetKind, AssetSnapshot};
 
-use super::TextureEncoding;
+use super::{ForwardTextureBinding, ForwardTextureSource, TextureEncoding};
 
 /// Marker for immutable RGBA8 volume texture assets consumed by Forward.
 pub struct ColorTextureVolumeAsset;
@@ -26,7 +26,39 @@ pub struct ColorTextureVolumeData {
     pub rgba8: Vec<u8>,
 }
 
+impl ForwardTextureBinding {
+    /// Binds one immutable authored 3D color-texture asset to `resource`.
+    #[must_use]
+    pub fn volume_asset(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::VolumeAsset(asset),
+        }
+    }
+
+    /// Binds a base-only 3D color texture with a renderer-generated mip chain.
+    #[must_use]
+    pub fn volume_asset_with_generated_mips(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>,
+        mip_levels: u32,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::VolumeAssetWithGeneratedMips { asset, mip_levels },
+        }
+    }
+}
+
 impl ColorTextureVolumeData {
+    pub(super) fn maximum_mip_levels(&self) -> Option<u32> {
+        let [width, height, depth] = self.extent;
+        (width != 0 && height != 0 && depth != 0).then(|| 1 + width.max(height).max(depth).ilog2())
+    }
+
     /// Returns every validated authored mip as its extent and complete packed
     /// Z-slice payload.
     ///
@@ -34,12 +66,7 @@ impl ColorTextureVolumeData {
     /// This is the only parser for the volume mip layout, so staging consumers
     /// do not independently infer mip offsets or 3D physical footprints.
     pub(crate) fn mip_payloads(&self) -> Option<impl Iterator<Item = ([u32; 3], &[u8])>> {
-        let [width, height, depth] = self.extent;
-        if width == 0 || height == 0 || depth == 0 || self.mip_levels == 0 {
-            return None;
-        }
-        let maximum_mips = 1 + width.max(height).max(depth).ilog2();
-        if self.mip_levels > maximum_mips {
+        if self.mip_levels == 0 || self.mip_levels > self.maximum_mip_levels()? {
             return None;
         }
 

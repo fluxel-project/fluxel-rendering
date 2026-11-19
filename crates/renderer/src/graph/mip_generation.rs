@@ -1,4 +1,4 @@
-//! Graph-declared GPU mip generation for resident D2 material textures.
+//! Graph-declared GPU mip generation for resident material textures.
 //!
 //! Each blit receives its own pass because a middle mip is a CopyDst in one
 //! blit and a CopySrc in the next.  That makes its state transition explicit
@@ -66,9 +66,7 @@ pub(crate) fn declare_chain(
     graph.texture_version(texture)?;
     if levels == 0
         || levels != desc.mip_levels
-        || desc.dimension != TextureDimension::D2
-        || desc.extent[2] != 1
-        || desc.array_layers == 0
+        || !supports_mip_dimension(&desc)
         || !desc
             .usage
             .contains(TextureUsage::COPY_SRC | TextureUsage::COPY_DST)
@@ -190,6 +188,8 @@ pub(crate) fn record<B: ResourceBackend + CommandBackend>(
         copy_write(),
     )?;
     pass.transition(encoder)?;
+    // D3 has one subresource per mip. A single blit spans its full Z
+    // extent; layered D2 images still blit each array layer independently.
     for layer in 0..layers {
         let source = TextureRegion {
             texture: source,
@@ -221,11 +221,10 @@ fn validate_actual<B: ResourceBackend>(
     let desc = &generation.desc;
     if actual.texture.device() != actual.device
         || !same_texture_desc(&actual.desc, desc)
-        || desc.dimension != TextureDimension::D2
-        || desc.extent[2] != 1
-        || desc.array_layers == 0
+        || !supports_mip_dimension(desc)
         || desc.samples != 1
-        || (generation.seed_source.is_some() && desc.array_layers != 1)
+        || (generation.seed_source.is_some()
+            && (desc.dimension != TextureDimension::D2 || desc.array_layers != 1))
         || (generation.seed_source.is_none() && generation.source_mip >= generation.destination_mip)
         || generation.destination_mip >= desc.mip_levels
     {
@@ -245,15 +244,20 @@ fn same_texture_desc(left: &TextureDesc, right: &TextureDesc) -> bool {
         && left.view_formats == right.view_formats
 }
 
+fn supports_mip_dimension(desc: &TextureDesc) -> bool {
+    !desc.extent.contains(&0)
+        && match desc.dimension {
+            TextureDimension::D2 => desc.extent[2] == 1 && desc.array_layers != 0,
+            TextureDimension::D3 => desc.array_layers == 1,
+            _ => false,
+        }
+}
+
 fn mip_extent(desc: &TextureDesc, mip: u32) -> Result<[u32; 3]> {
-    if mip >= desc.mip_levels {
+    if mip >= desc.mip_levels || mip >= u32::BITS {
         return Err(Error::InvalidRange);
     }
-    Ok([
-        (desc.extent[0] >> mip).max(1),
-        (desc.extent[1] >> mip).max(1),
-        1,
-    ])
+    Ok(desc.extent.map(|axis| (axis >> mip).max(1)))
 }
 
 fn one_color_mip(mip: u32) -> TextureRange {

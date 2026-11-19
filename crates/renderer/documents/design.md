@@ -310,7 +310,12 @@ A 3D color asset supplies explicit RGBA8 levels in mip order, with ascending Z
 slices and row-major texels within each slice. All three dimensions shrink with
 the mip level. The upload declares one Graph subresource per mip and copies its
 full volume from the staging buffer. The sampled view covers all supplied levels
-and uses a three-component texture coordinate.
+and uses a three-component texture coordinate. A base-only volume can use
+`ForwardTextureBinding::volume_asset_with_generated_mips`. Each Graph pass
+blits one whole mip to the next with linear XYZ filtering at destination texel
+centers, matching the Babylon.js 3D mip sampler for both even and odd extents.
+The image format carries the transfer encoding through each pass, and the
+requested mip count participates in the resident cache key.
 
 UV0 PBR programs can carry typed Material varyings from a shared vertex graph
 to the fragment evaluator. Preparation assigns locations after the template's

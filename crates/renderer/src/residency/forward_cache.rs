@@ -67,6 +67,7 @@ pub(crate) enum ForwardTextureCacheKey {
         asset: AssetId<ColorTextureVolumeAsset>,
         generation: u64,
         device: DeviceId,
+        generated_mips: Option<u32>,
     },
     RefractionRadiance {
         asset: AssetId<RefractionRadianceAsset>,
@@ -189,14 +190,18 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 *generated_mips,
                 LayeredTextureView::Cube,
             )),
-            ResolvedForwardTexture::VolumeAsset(texture) => {
+            ResolvedForwardTexture::VolumeAsset {
+                asset,
+                generated_mips,
+            } => {
                 let key = ForwardTextureCacheKey::ColorVolume {
-                    asset: texture.id(),
-                    generation: texture.generation().get(),
+                    asset: asset.id(),
+                    generation: asset.generation().get(),
                     device,
+                    generated_mips: *generated_mips,
                 };
                 self.color_volumes
-                    .insert(key, Arc::downgrade(&texture.value_arc()));
+                    .insert(key, Arc::downgrade(&asset.value_arc()));
                 Some(key)
             }
             ResolvedForwardTexture::RefractionRadiance(texture) => {

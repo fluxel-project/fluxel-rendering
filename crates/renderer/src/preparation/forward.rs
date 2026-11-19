@@ -209,18 +209,6 @@ impl ForwardTextureBinding {
         }
     }
 
-    /// Binds one immutable authored 3D color-texture asset to `resource`.
-    #[must_use]
-    pub fn volume_asset(
-        resource: impl Into<String>,
-        asset: AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>,
-    ) -> Self {
-        Self {
-            resource: resource.into(),
-            source: ForwardTextureSource::VolumeAsset(asset),
-        }
-    }
-
     /// Binds a packed cube asset to `resource`.
     ///
     /// The asset layers are physical faces in `+X, -X, +Y, -Y, +Z, -Z`

@@ -391,7 +391,6 @@ where
             .textures
             .iter()
             .any(|upload| upload.texture == index)
-            && owner.desc.dimension == fluxel_rhi::api::TextureDimension::D2
             && owner.desc.usage.contains(TextureUsage::COPY_SRC)
         {
             let (texture, passes) = super::super::mip_generation::declare_chain(

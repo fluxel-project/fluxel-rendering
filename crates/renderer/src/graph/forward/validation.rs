@@ -384,11 +384,9 @@ fn validate_texture_uploads<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
         let any_uploaded = mips.iter().flatten().any(|uploaded| *uploaded);
-        if texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
-            && texture.desc.usage.contains(TextureUsage::COPY_SRC)
-        {
-            // COPY_SRC selects Graph mip production: every array layer seeds
-            // mip zero, and no authored higher-mip copy may race that chain.
+        if texture.desc.usage.contains(TextureUsage::COPY_SRC) {
+            // Graph generation starts from the complete base mip, including
+            // every array layer or the full depth of a volume.
             if any_uploaded
                 && (!mips
                     .first()
@@ -398,8 +396,7 @@ fn validate_texture_uploads<B: ResourceBackend>(
                 return Err(Error::InvalidRange);
             }
         } else if any_uploaded && mips.iter().flatten().any(|uploaded| !uploaded) {
-            // Only D2 COPY_SRC selects Graph mip production; every other
-            // material texture supplies each physical subresource.
+            // Without COPY_SRC every physical subresource is authored.
             return Err(Error::InvalidRange);
         }
     }

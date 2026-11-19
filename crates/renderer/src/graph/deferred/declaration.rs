@@ -322,10 +322,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         let mut mip_generation = Vec::new();
         for (index, (texture, fresh)) in materials.iter_mut().zip(&fresh_mip_chains).enumerate() {
             let desc = &frame.resident.textures[index].desc;
-            if *fresh
-                && desc.dimension == fluxel_rhi::api::TextureDimension::D2
-                && desc.usage.contains(TextureUsage::COPY_SRC)
-            {
+            if *fresh && desc.usage.contains(TextureUsage::COPY_SRC) {
                 let (generated, passes) = super::super::mip_generation::declare_chain(
                     &mut graph,
                     *texture,

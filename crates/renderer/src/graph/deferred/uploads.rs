@@ -101,16 +101,14 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
             {
                 return false;
             }
-            // Mip generation uses the D2 descriptor family: layered textures
-            // seed every base layer and let the Graph fill the rest.
-            (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
-                && texture.desc.usage.contains(TextureUsage::COPY_SRC)
+            // Generation starts from the complete base mip, whether it
+            // contains array layers or a full volume.
+            (texture.desc.usage.contains(TextureUsage::COPY_SRC)
                 && uploaded
                     .first()
                     .is_some_and(|layers| layers.iter().all(|layer| *layer))
                 && uploaded.iter().skip(1).flatten().all(|uploaded| !uploaded))
-                || ((texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
-                    || !texture.desc.usage.contains(TextureUsage::COPY_SRC))
+                || (!texture.desc.usage.contains(TextureUsage::COPY_SRC)
                     && uploaded.iter().flatten().all(|uploaded| *uploaded))
                 || (texture.incoming
                     == TextureUses {

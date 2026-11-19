@@ -58,8 +58,11 @@ pub(in crate::renderer) fn stage(
             max_buffer_bytes,
         )
         .map(ForwardResidentTextureInput::Array),
-        ResolvedForwardTexture::VolumeAsset(texture) => {
-            let data = texture.value();
+        ResolvedForwardTexture::VolumeAsset {
+            asset,
+            generated_mips,
+        } => {
+            let data = asset.value();
             let payloads = data.mip_payloads().ok_or(Error::InvalidRange)?;
             let mip_count = data.mip_levels as usize;
             let mut mips = Vec::with_capacity(mip_count);
@@ -77,6 +80,7 @@ pub(in crate::renderer) fn stage(
             Ok(ForwardResidentTextureInput::Volume {
                 mips,
                 encoding: data.encoding,
+                generated_mips: *generated_mips,
             })
         }
         ResolvedForwardTexture::RefractionRadiance(texture) => {

@@ -106,11 +106,30 @@ pub(super) fn resolve_texture_asset(
                 mip_levels: *mip_levels,
             })
         }
-        ForwardTextureSource::VolumeAsset(asset) => {
+        ForwardTextureSource::VolumeAsset(asset)
+        | ForwardTextureSource::VolumeAssetWithGeneratedMips { asset, .. } => {
             require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D3, source)?;
-            validate_texture_volume(asset.value(), source)?;
-            validate_texture_encoding(expected, asset.value().encoding, source)?;
-            Ok(ResolvedForwardTexture::VolumeAsset(asset.clone()))
+            let generated_mips = match binding {
+                ForwardTextureSource::VolumeAssetWithGeneratedMips { mip_levels, .. } => {
+                    Some(*mip_levels)
+                }
+                _ => None,
+            };
+            let data = asset.value();
+            validate_texture_volume(data, source)?;
+            if let Some(levels) = generated_mips {
+                if data.mip_levels != 1
+                    || levels < 2
+                    || data.maximum_mip_levels().is_none_or(|max| levels > max)
+                {
+                    return Err(ForwardPreparationError::InvalidTexture { source });
+                }
+            }
+            validate_texture_encoding(expected, data.encoding, source)?;
+            Ok(ResolvedForwardTexture::VolumeAsset {
+                asset: asset.clone(),
+                generated_mips,
+            })
         }
         ForwardTextureSource::CubeAsset {
             asset,
