@@ -48,6 +48,11 @@ where
             ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, SurfaceForwardFrame,
         };
         self.ensure_open()?;
+        let limits = self.device.capabilities().limits;
+        for input in &prepared_inputs {
+            validate_material_binding_limit(input.prepared(), limits.max_bindings_per_group)
+                .map_err(|error| self.observe_forward_error("material binding admission", error))?;
+        }
         let scene_refraction = prepared_inputs
             .iter()
             .any(|input| input.prepared().uses_scene_refraction());
@@ -128,17 +133,6 @@ where
                 directional_light: input.view().directional_light,
             })
             .collect();
-        let limits = self.device.capabilities().limits;
-        if inputs
-            .iter()
-            .any(|input| material_requires_ordinary_sampler(input.prepared()))
-            && limits.max_bindings_per_group < 3
-        {
-            return Err(self.observe_forward_error(
-                "ordinary sampler binding admission",
-                Error::Unsupported("three Forward material bindings"),
-            ));
-        }
         let uniforms = pack_forward_uniforms(
             &uniform_inputs,
             limits.uniform_offset_alignment,
@@ -429,8 +423,12 @@ where
                 });
             }
             for binding in &schema.samplers {
-                let expected =
-                    material_sampler_for_input(input, binding.binding, capture_mip_levels)?;
+                let expected = material_sampler_for_input(
+                    input,
+                    binding.binding,
+                    binding.comparison,
+                    capture_mip_levels,
+                )?;
                 let sampler = resident
                     .samplers
                     .iter()
@@ -439,7 +437,7 @@ where
                             && same_material_sampler(&sampler.desc, &expected)
                     })
                     .ok_or(Error::InvalidState)?;
-                validate_material_sampler(&sampler.desc)?;
+                validate_material_sampler(&sampler.desc, binding.comparison)?;
                 material_entries.push(BindGroupEntry {
                     binding: binding.binding,
                     resource: BindingResource::Sampler(&sampler.sampler),

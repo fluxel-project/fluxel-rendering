@@ -30,7 +30,8 @@ use program_fixed::{
 };
 
 use program_layout::{
-    material_uniform, ordinary_sampler, sampled_texture, sampled_texture_with_dimension,
+    material_sampler, material_uniform, ordinary_sampler, sampled_texture,
+    sampled_texture_with_dimension,
 };
 
 pub(crate) use program_cache::DeferredProgramCache;
@@ -412,7 +413,7 @@ where
             schema
                 .samplers
                 .iter()
-                .map(|sampler| ordinary_sampler(sampler.binding)),
+                .map(|sampler| material_sampler(sampler.binding, sampler.comparison)),
         );
         entries.sort_by_key(|entry| entry.binding);
         self.device

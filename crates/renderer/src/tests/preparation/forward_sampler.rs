@@ -1,4 +1,4 @@
-//! Forward ordinary-sampler CPU input admission regressions.
+//! Forward material-sampler CPU input admission regressions.
 
 use super::*;
 use crate::FeatureIssuer;
@@ -6,7 +6,7 @@ use crate::preparation::forward_schema::MaterialSamplerBinding;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
 use fluxel_rhi::api::{AddressMode, FilterMode, SamplerDesc, TextureSampleType};
 
-fn schema(samplers: &[(&str, u32)]) -> MaterialBindingSchema {
+fn schema(samplers: &[(&str, u32, bool)]) -> MaterialBindingSchema {
     MaterialBindingSchema {
         uniforms: Vec::new(),
         textures: vec![MaterialTextureBinding {
@@ -18,9 +18,10 @@ fn schema(samplers: &[(&str, u32)]) -> MaterialBindingSchema {
         }],
         samplers: samplers
             .iter()
-            .map(|(name, binding)| MaterialSamplerBinding {
+            .map(|(name, binding, comparison)| MaterialSamplerBinding {
                 binding: *binding,
                 name: (*name).into(),
+                comparison: *comparison,
             })
             .collect(),
         unused_textures: Vec::new(),
@@ -59,7 +60,7 @@ fn named_sampler_policy_is_retained_separately_from_image_schema() {
     let binding = ForwardSamplerBinding::new("image_sampler", descriptor());
     let actual = super::super::forward_sampler::resolve_sampler_bindings(
         std::slice::from_ref(&binding),
-        &schema(&[("image_sampler", 2)]),
+        &schema(&[("image_sampler", 2, false)]),
         source(),
     )
     .expect("valid named sampler policy");
@@ -71,7 +72,7 @@ fn omitted_policy_preserves_legacy_renderer_default_selection() {
     assert!(
         super::super::forward_sampler::resolve_sampler_bindings(
             &[],
-            &schema(&[("image_sampler", 2)]),
+            &schema(&[("image_sampler", 2, false)]),
             source(),
         )
         .unwrap()
@@ -86,7 +87,7 @@ fn sampler_name_and_descriptor_fail_before_runtime_admission() {
     assert!(matches!(
         super::super::forward_sampler::resolve_sampler_bindings(
             std::slice::from_ref(&wrong_name),
-            &schema(&[("image_sampler", 2)]),
+            &schema(&[("image_sampler", 2, false)]),
             source,
         ),
         Err(ForwardPreparationError::SamplerResourceMismatch { .. })
@@ -107,7 +108,7 @@ fn sampler_name_and_descriptor_fail_before_runtime_admission() {
     assert!(matches!(
         super::super::forward_sampler::resolve_sampler_bindings(
             std::slice::from_ref(&invalid),
-            &schema(&[("image_sampler", 2)]),
+            &schema(&[("image_sampler", 2, false)]),
             source,
         ),
         Err(ForwardPreparationError::InvalidSamplerDescriptor { .. })

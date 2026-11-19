@@ -226,7 +226,7 @@ pub enum ForwardPreparationError {
         /// Sample type provided by the supplied source kind.
         actual: fluxel_rhi::api::TextureSampleType,
     },
-    /// A draw supplied sampler state for a material without an ordinary sampler.
+    /// A draw supplied sampler state for a material without a matching sampler.
     UnexpectedSamplerResource {
         /// Draw requesting the binding.
         source: ForwardDrawSource,
@@ -249,7 +249,14 @@ pub enum ForwardPreparationError {
         /// Supplied sampler resource name.
         actual: String,
     },
-    /// An explicit ordinary sampler descriptor violates the portable contract.
+    /// A material-declared comparison sampler has no explicit descriptor.
+    MissingSamplerResource {
+        /// Draw requesting the binding.
+        source: ForwardDrawSource,
+        /// Missing material sampler resource name.
+        resource: String,
+    },
+    /// An explicit sampler descriptor violates the portable contract.
     InvalidSamplerDescriptor {
         /// Draw requesting the binding.
         source: ForwardDrawSource,

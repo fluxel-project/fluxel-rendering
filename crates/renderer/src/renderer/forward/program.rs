@@ -128,7 +128,7 @@ where
             visibility: vec![ShaderStage::Fragment],
             ty: BindingType::Sampler {
                 filtering: true,
-                comparison: false,
+                comparison: sampler.comparison,
             },
             count: BindingCount::One,
             partially_bound: false,

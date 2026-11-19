@@ -102,6 +102,7 @@ pub(super) fn draws<B: ResourceBackend>(
             let expected = crate::renderer::forward::material_sampler_for_input(
                 &inputs[index],
                 binding.binding,
+                binding.comparison,
                 capture_mip_levels,
             )?;
             let sampler = resident
@@ -112,7 +113,10 @@ pub(super) fn draws<B: ResourceBackend>(
                         && crate::renderer::forward::same_material_sampler(&sampler.desc, &expected)
                 })
                 .ok_or(Error::InvalidState)?;
-            crate::renderer::forward::validate_material_sampler(&sampler.desc)?;
+            crate::renderer::forward::validate_material_sampler(
+                &sampler.desc,
+                binding.comparison,
+            )?;
             entries.push(BindGroupEntry {
                 binding: binding.binding,
                 resource: BindingResource::Sampler(&sampler.sampler),

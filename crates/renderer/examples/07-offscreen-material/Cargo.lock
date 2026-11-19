@@ -155,7 +155,7 @@ dependencies = [
 [[package]]
 name = "fluxel-naga"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=8400f8f35933a5d0464014a8671799890f67ff49#8400f8f35933a5d0464014a8671799890f67ff49"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=cb977839237c29fc556918c8b4c2833a54ef1be6#cb977839237c29fc556918c8b4c2833a54ef1be6"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -190,7 +190,7 @@ dependencies = [
 [[package]]
 name = "fluxel-rhi"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=8400f8f35933a5d0464014a8671799890f67ff49#8400f8f35933a5d0464014a8671799890f67ff49"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=cb977839237c29fc556918c8b4c2833a54ef1be6#cb977839237c29fc556918c8b4c2833a54ef1be6"
 dependencies = [
  "fluxel-rhi-core",
  "fluxel-rhi-dx12",
@@ -207,12 +207,12 @@ dependencies = [
 [[package]]
 name = "fluxel-rhi-core"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=8400f8f35933a5d0464014a8671799890f67ff49#8400f8f35933a5d0464014a8671799890f67ff49"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=cb977839237c29fc556918c8b4c2833a54ef1be6#cb977839237c29fc556918c8b4c2833a54ef1be6"
 
 [[package]]
 name = "fluxel-rhi-dx12"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=8400f8f35933a5d0464014a8671799890f67ff49#8400f8f35933a5d0464014a8671799890f67ff49"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=cb977839237c29fc556918c8b4c2833a54ef1be6#cb977839237c29fc556918c8b4c2833a54ef1be6"
 dependencies = [
  "fluxel-naga",
  "fluxel-rhi-core",
@@ -223,7 +223,7 @@ dependencies = [
 [[package]]
 name = "fluxel-rhi-gl"
 version = "0.1.0"
-source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=8400f8f35933a5d0464014a8671799890f67ff49#8400f8f35933a5d0464014a8671799890f67ff49"
+source = "git+https://github.com/fluxel-project/fluxel-rhi?rev=cb977839237c29fc556918c8b4c2833a54ef1be6#cb977839237c29fc556918c8b4c2833a54ef1be6"
 dependencies = [
  "fluxel-rhi-core",
  "futures-timer",

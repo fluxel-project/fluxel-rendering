@@ -24,12 +24,15 @@ pub(super) fn resolve_sampler_bindings(
                 resource: binding.resource.clone(),
             });
         }
-        validate_descriptor(&binding.descriptor, source)?;
     }
     let mut resolved = Vec::with_capacity(supplied.len());
+    let mut missing_comparison = None;
     for binding in &schema.samplers {
         if let Some(supplied) = by_name.remove(binding.name.as_str()) {
+            validate_descriptor(&supplied.descriptor, binding.comparison, source)?;
             resolved.push((binding.binding, supplied.descriptor.clone()));
+        } else if binding.comparison {
+            missing_comparison = Some(binding.name.clone());
         }
     }
     if let Some(binding) = supplied
@@ -48,11 +51,15 @@ pub(super) fn resolve_sampler_bindings(
             actual: binding.resource.clone(),
         });
     }
+    if let Some(resource) = missing_comparison {
+        return Err(ForwardPreparationError::MissingSamplerResource { source, resource });
+    }
     Ok(resolved)
 }
 
 fn validate_descriptor(
     descriptor: &SamplerDesc,
+    comparison: bool,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     let valid_anisotropy = descriptor.anisotropy != 0;
@@ -63,7 +70,7 @@ fn validate_descriptor(
         || (descriptor.mag_filter == FilterMode::Linear
             && descriptor.min_filter == FilterMode::Linear
             && descriptor.mip_filter == FilterMode::Linear);
-    if descriptor.compare.is_some()
+    if descriptor.compare.is_some() != comparison
         || descriptor.border.is_some()
         || descriptor.address.contains(&AddressMode::ClampToBorder)
         || !valid_anisotropy

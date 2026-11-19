@@ -299,8 +299,8 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
-2D depth textures, and independently named ordinary samplers in material group
-zero.
+2D depth textures, and independently named ordinary and comparison samplers in
+material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -989,7 +989,7 @@ reconstruction and subsequent raster depth tests. This mode resolves a
 representative surface. Coverage antialiasing requires lighting more than one
 sample and combining scene color.
 
-### Per-draw ordinary sampler policy
+### Per-draw sampler policy
 
 `ForwardResources::samplers` supplies zero or more named
 `ForwardSamplerBinding` values. Preparation resolves their names and optional
@@ -997,11 +997,14 @@ Material instance aliases against the actual reflected sampler bindings.
 A sampler and a sampled image may be bound independently, as in Babylon.js
 WebGPU. A shader may use several sampler policies with the same image.
 
-CPU preparation rejects duplicate or unexpected names, comparison and border
-policies, nonfinite or reversed LOD ranges, zero anisotropy, and incompatible
-anisotropic filters. The selected RHI admits the exact descriptor at creation.
-Each omitted policy retains the default derived from the draw's image mip
-counts.
+CPU preparation rejects duplicate or unexpected names, mismatched comparison
+modes, border policies, nonfinite or reversed LOD ranges, zero anisotropy, and
+incompatible anisotropic filters. The selected RHI admits the exact descriptor
+at creation. An omitted ordinary policy uses the default from the draw's image
+mip counts. A comparison binding requires an explicit comparison function.
+WGSL pairs it with a depth texture through `textureSampleCompare` or
+`textureSampleCompareLevel`, as in Babylon.js. The shader supplies reference
+depth in the existing RHI coordinate convention.
 
 Sampling state belongs to a draw binding, independently of immutable image
 bytes, encoding and generation. Equal image references share their texture/view

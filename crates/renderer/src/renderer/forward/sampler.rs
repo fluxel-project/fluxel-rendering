@@ -7,8 +7,26 @@ use crate::{
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
     prepared
         .binding_schema()
-        .is_some_and(|schema| !schema.samplers.is_empty())
+        .is_some_and(|schema| schema.samplers.iter().any(|sampler| !sampler.comparison))
 }
+
+pub(crate) fn validate_material_binding_limit(
+    prepared: &PreparedMaterial,
+    limit: u32,
+) -> std::result::Result<(), Error> {
+    let schema = prepared.binding_schema().ok_or(Error::InvalidState)?;
+    let locations = schema
+        .uniforms
+        .iter()
+        .map(|binding| binding.binding)
+        .chain(schema.textures.iter().map(|binding| binding.binding))
+        .chain(schema.samplers.iter().map(|binding| binding.binding));
+    if locations.into_iter().any(|location| location >= limit) {
+        return Err(Error::Unsupported("material binding locations"));
+    }
+    Ok(())
+}
+
 pub(crate) fn default_material_sampler() -> SamplerDesc {
     SamplerDesc {
         label: Some("Fluxel material sampler".into()),
@@ -44,11 +62,15 @@ pub(crate) fn material_sampler(mip_levels: u32) -> std::result::Result<SamplerDe
 pub(crate) fn material_sampler_for_input(
     input: &crate::ForwardDrawInput,
     binding: u32,
+    comparison: bool,
     capture_mip_levels: Option<u32>,
 ) -> std::result::Result<SamplerDesc, Error> {
     if let Some(desc) = input.sampler_descriptor(binding) {
-        validate_material_sampler(desc)?;
+        validate_material_sampler(desc, comparison)?;
         return Ok(desc.clone());
+    }
+    if comparison {
+        return Err(Error::InvalidState);
     }
     let mip_levels = input
         .resolved_textures()
@@ -81,7 +103,12 @@ pub(crate) fn material_sampler_descriptors(
             continue;
         };
         for sampler in &schema.samplers {
-            let desc = material_sampler_for_input(input, sampler.binding, capture_mip_levels)?;
+            let desc = material_sampler_for_input(
+                input,
+                sampler.binding,
+                sampler.comparison,
+                capture_mip_levels,
+            )?;
             if !descriptors
                 .iter()
                 .any(|existing| same_material_sampler(existing, &desc))
@@ -107,17 +134,18 @@ pub(crate) fn same_material_sampler(left: &SamplerDesc, right: &SamplerDesc) -> 
         && left.border == right.border
 }
 
-/// Validates the bounded ordinary float-sampler contract consumed by material
-/// bind groups. It intentionally permits nearest filtering and non-clamp
-/// addressing; scene-composite users retain `validate_ordinary_sampler`.
-pub(crate) fn validate_material_sampler(desc: &SamplerDesc) -> std::result::Result<(), Error> {
-    let ordinary_filter = |filter| matches!(filter, FilterMode::Nearest | FilterMode::Linear);
-    if desc.compare.is_some()
+/// Validates the concrete descriptor against the reflected sampler mode.
+pub(crate) fn validate_material_sampler(
+    desc: &SamplerDesc,
+    comparison: bool,
+) -> std::result::Result<(), Error> {
+    let supported_filter = |filter| matches!(filter, FilterMode::Nearest | FilterMode::Linear);
+    if desc.compare.is_some() != comparison
         || desc.border.is_some()
         || desc.address.contains(&AddressMode::ClampToBorder)
-        || !ordinary_filter(desc.mag_filter)
-        || !ordinary_filter(desc.min_filter)
-        || !ordinary_filter(desc.mip_filter)
+        || !supported_filter(desc.mag_filter)
+        || !supported_filter(desc.min_filter)
+        || !supported_filter(desc.mip_filter)
         || desc.anisotropy == 0
         || !desc.lod.start.is_finite()
         || !desc.lod.end.is_finite()

@@ -38,11 +38,13 @@ pub(crate) struct MaterialTextureBinding {
     pub(crate) encoding: Option<MaterialTextureEncoding>,
 }
 
-/// One material-declared ordinary sampler location, ordered by binding.
+/// One material-declared sampler location, ordered by binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MaterialSamplerBinding {
     pub(crate) binding: u32,
     pub(crate) name: String,
+    /// Whether this binding declares WGSL comparison-sampler semantics.
+    pub(crate) comparison: bool,
 }
 
 pub(crate) fn material_binding_schema(
@@ -80,6 +82,7 @@ pub(crate) fn material_binding_schema(
             | MaterialResourceKind::Texture3dF32
             | MaterialResourceKind::Texture2dDepth => original_textures += 1,
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
+            MaterialResourceKind::Sampler { comparison: true } => {}
             kind if kind.uniform_material_type().is_some() => {
                 original_uniforms += 1;
                 original_vec4 |= kind.uniform_material_type() == Some(MaterialType::Vec4);
@@ -166,13 +169,14 @@ pub(crate) fn material_binding_schema(
                     encoding,
                 });
             }
-            MaterialResourceKind::Sampler { comparison: false }
+            MaterialResourceKind::Sampler { comparison }
                 if matches!(actual.kind, BindingKind::Sampler)
-                    && actual.shape == Some(BindingShape::Sampler { comparison: false }) =>
+                    && actual.shape == Some(BindingShape::Sampler { comparison }) =>
             {
                 schema.samplers.push(MaterialSamplerBinding {
                     binding: location,
                     name: binding.name.clone(),
+                    comparison,
                 });
             }
             kind if matches!(actual.kind, BindingKind::Uniform) => {

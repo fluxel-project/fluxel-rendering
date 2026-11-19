@@ -47,12 +47,16 @@ pub(super) fn sampled_texture_with_dimension(
 }
 
 pub(super) fn ordinary_sampler(binding: u32) -> BindGroupLayoutEntry {
+    material_sampler(binding, false)
+}
+
+pub(super) fn material_sampler(binding: u32, comparison: bool) -> BindGroupLayoutEntry {
     BindGroupLayoutEntry {
         binding,
         visibility: vec![ShaderStage::Fragment],
         ty: BindingType::Sampler {
             filtering: true,
-            comparison: false,
+            comparison,
         },
         count: BindingCount::One,
         partially_bound: false,

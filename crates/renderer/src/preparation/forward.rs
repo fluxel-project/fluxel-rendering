@@ -135,11 +135,12 @@ pub struct ForwardResources {
     /// Named material texture sources. Names must exactly match the material
     /// contribution's texture resource names.
     pub textures: Vec<ForwardTextureBinding>,
-    /// Named ordinary sampler states for this draw's material bindings.
+    /// Named sampler states for this draw's material bindings.
     ///
     /// Image assets deliberately do not own sampler state: one immutable image
     /// generation may be sampled by different draws with different policies.
-    /// When omitted, the built-in consumer retains its existing default policy.
+    /// Omitted ordinary samplers retain the built-in default policy; comparison
+    /// samplers always require an explicit matching descriptor.
     pub samplers: Vec<ForwardSamplerBinding>,
     /// Per-record vec4 value uploaded to the schema's material uniform binding.
     pub tint: [f32; 4],
@@ -154,15 +155,16 @@ pub struct ForwardTextureBinding {
     pub source: ForwardTextureSource,
 }
 
-/// One named ordinary sampler binding supplied by a Forward draw.
+/// One named sampler binding supplied by a Forward draw.
 ///
 /// The descriptor is immutable CPU input. Native sampler ownership is created
 /// by the selected renderer backend and retained with the submitted frame.
 #[derive(Clone, Debug)]
 pub struct ForwardSamplerBinding {
-    /// Exact material resource name declared for the ordinary sampler.
+    /// Exact material resource name declared for the sampler.
     pub resource: String,
-    /// Requested ordinary sampler state.
+    /// Requested sampler state. The declared material binding determines
+    /// whether this must carry a comparison function.
     pub descriptor: fluxel_rhi::api::SamplerDesc,
 }
 

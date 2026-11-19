@@ -70,17 +70,16 @@ where
             None
         };
         let limits = self.device.capabilities().limits;
-        let ordinary_sampler = prepared
-            .iter()
-            .any(crate::renderer::forward::material_requires_ordinary_sampler);
         let lighting_bindings = 3 + u32::from(effects) + u32::from(pbr && specular.is_none());
         if limits.max_bindings_per_group < lighting_bindings {
             return Err(self.observe_rhi_error(Error::Unsupported("Deferred lighting bindings")));
         }
-        if ordinary_sampler && limits.max_bindings_per_group < 3 {
-            return Err(
-                self.observe_rhi_error(Error::Unsupported("three Deferred material bindings"))
-            );
+        for material in prepared {
+            crate::renderer::forward::validate_material_binding_limit(
+                material,
+                limits.max_bindings_per_group,
+            )
+            .map_err(|error| self.observe_rhi_error(error))?;
         }
         let mut uniforms = super::scene_prepare::uniforms(
             inputs,
