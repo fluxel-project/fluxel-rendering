@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use fluxel_shader::{BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, SourceUnit};
+use fluxel_shader::{
+    BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, SourceUnit,
+};
 
 use crate::{BindingLocation, MaterialResourceKind, MaterialType, StaticValue};
 
@@ -118,6 +120,9 @@ impl MaterialShaderContribution {
                     MaterialResourceKind::Texture2dF32 => {
                         (BindingKind::Texture, BindingShape::Texture2dF32)
                     }
+                    MaterialResourceKind::Texture2dArrayF32 => {
+                        (BindingKind::Texture, BindingShape::Texture2dArrayF32)
+                    }
                     MaterialResourceKind::Sampler { comparison } => {
                         (BindingKind::Sampler, BindingShape::Sampler { comparison })
                     }
@@ -125,7 +130,10 @@ impl MaterialShaderContribution {
                         let ty = uniform
                             .uniform_material_type()
                             .expect("all remaining resource kinds are uniforms");
-                        (BindingKind::Uniform, BindingShape::Uniform(ty.shader_type()))
+                        (
+                            BindingKind::Uniform,
+                            BindingShape::Uniform(ty.shader_type()),
+                        )
                     }
                 };
                 BindingDeclaration::new(binding.location.group, binding.location.binding, kind)

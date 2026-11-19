@@ -29,7 +29,10 @@ pub(super) fn validate(
             .ok_or_else(|| MaterialError::TextureEncodingResourceMissing {
                 resource: requirement.resource.clone(),
             })?;
-        if resource.kind != MaterialResourceKind::Texture2dF32 {
+        if !matches!(
+            resource.kind,
+            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32
+        ) {
             return Err(MaterialError::TextureEncodingResourceTypeMismatch {
                 resource: requirement.resource.clone(),
                 actual: resource.kind,
