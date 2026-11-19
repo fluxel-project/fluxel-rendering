@@ -241,7 +241,7 @@ pub enum MaterialError {
         property: &'static str,
     },
     /// A graph PBR property did not resolve to its required type: `F32` for
-    /// metallic/roughness or `Vec3` for `world_normal`.
+    /// metallic/roughness/occlusion or `Vec3` for `world_normal`.
     PbrGraphPropertyType {
         /// Property being selected.
         property: &'static str,

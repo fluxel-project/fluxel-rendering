@@ -348,13 +348,13 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
             String::from("evaluate_emissive_uv0"),
         ]),
         SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
-            let mut names = BTreeSet::from([String::from("FluxelPbrGraphValues")]);
+            let mut names = BTreeSet::from([
+                String::from("FluxelPbrGraphValues"),
+                String::from("evaluate_occlusion_uv0"),
+                String::from("evaluate_emissive_uv0"),
+            ]);
             if normal.is_some() {
-                names.extend([
-                    String::from("evaluate_normal_uv0"),
-                    String::from("evaluate_occlusion_uv0"),
-                    String::from("evaluate_emissive_uv0"),
-                ]);
+                names.extend([String::from("evaluate_normal_uv0")]);
             }
             names
         }

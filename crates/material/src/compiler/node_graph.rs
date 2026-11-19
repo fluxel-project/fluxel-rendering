@@ -68,6 +68,7 @@ struct PbrGraphRoots<T> {
     metallic: T,
     roughness: T,
     world_normal: Option<T>,
+    occlusion: Option<T>,
 }
 
 pub(super) fn normalize_surface(
@@ -88,11 +89,13 @@ pub(super) fn normalize_surface(
             metallic,
             roughness,
             world_normal,
+            occlusion,
             ..
         } => Some(PbrGraphRoots {
             metallic: *metallic,
             roughness: *roughness,
             world_normal: *world_normal,
+            occlusion: *occlusion,
         }),
         _ => None,
     };
@@ -159,6 +162,10 @@ fn normalize(
                     .world_normal
                     .map(|normal| property("world_normal", normal, MaterialType::Vec3))
                     .transpose()?,
+                occlusion: roots
+                    .occlusion
+                    .map(|occlusion| property("occlusion", occlusion, MaterialType::F32))
+                    .transpose()?,
             })
         })
         .transpose()?;
@@ -166,6 +173,7 @@ fn normalize(
     if let Some(roots) = &properties {
         output_roots.extend([roots.metallic.0, roots.roughness.0]);
         output_roots.extend(roots.world_normal.map(|(node, _)| node));
+        output_roots.extend(roots.occlusion.map(|(node, _)| node));
     }
     let order = evaluation_order(output_roots, &nodes)?;
 
@@ -209,7 +217,7 @@ fn normalize(
         .collect::<BTreeMap<_, _>>();
     let mut source = String::from("// Generated material node graph.\n");
     let result_type = if properties.is_some() {
-        source.push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool };\n");
+        source.push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, occlusion: f32 };\n");
         "FluxelPbrGraphValues"
     } else {
         output.wgsl()
@@ -264,8 +272,12 @@ fn normalize(
             || "vec3<f32>(0.0)".into(),
             |normal| property_expression(normal, &locals),
         );
+        let occlusion = roots.occlusion.map_or_else(
+            || "1.0".into(),
+            |occlusion| property_expression(occlusion, &locals),
+        );
         source.push_str(&format!(
-            "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}), {normal}, {has_world_normal});\n}}\n"
+            "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}), {normal}, {has_world_normal}, {occlusion});\n}}\n"
         ));
     } else {
         source.push_str(&format!("    return {base};\n}}\n"));

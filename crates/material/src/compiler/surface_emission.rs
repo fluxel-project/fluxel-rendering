@@ -1,10 +1,10 @@
 //! Generated WGSL emission for validated material surface outputs.
 
+use super::super::pbr_factors;
 use crate::{
     EmissiveConfiguration, MaterialNodeInputSource, PbrSurfaceFactors, SurfaceAlphaMode,
     SurfaceExtensions, SurfaceOutput, SurfacePolicy,
 };
-use super::super::pbr_factors;
 
 pub(in crate::compiler) fn append_evaluators(
     generated: &mut String,
@@ -70,10 +70,19 @@ pub(in crate::compiler) fn append_evaluators(
                     emissive_configuration,
                     pbr_surface_factors,
                 );
+            } else {
+                append_neutral_effects(generated);
             }
         }
     }
     append_policy_helpers(generated, policy);
+}
+
+fn append_neutral_effects(generated: &mut String) {
+    generated.push_str(
+        "fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 1.0; }\n\
+fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n",
+    );
 }
 
 fn append_normal_extensions(
@@ -103,8 +112,14 @@ fn append_normal_extensions(
 }
 
 fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {
-    let color = configuration.color_parameter.as_deref().unwrap_or("vec3<f32>(0.0)");
-    let intensity = configuration.intensity_parameter.as_deref().unwrap_or("1.0");
+    let color = configuration
+        .color_parameter
+        .as_deref()
+        .unwrap_or("vec3<f32>(0.0)");
+    let intensity = configuration
+        .intensity_parameter
+        .as_deref()
+        .unwrap_or("1.0");
     let texture = configuration.texture.as_ref();
     let level = texture
         .and_then(|texture| texture.level_parameter.as_deref())
@@ -115,9 +130,14 @@ fn append_emissive_configuration(generated: &mut String, configuration: &Emissiv
         bindings[4] = &texture.sampler;
     }
     let uv = unique_emissive_local("emissive_uv", &bindings);
-    generated.push_str(&format!("fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"));
+    generated.push_str(&format!(
+        "fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"
+    ));
     if let Some(texture) = texture {
-        let sample = format!("textureSample({}, {}, {uv}).rgb", texture.texture, texture.sampler);
+        let sample = format!(
+            "textureSample({}, {}, {uv}).rgb",
+            texture.texture, texture.sampler
+        );
         let linear = match texture.encoding {
             crate::MaterialTextureEncoding::Linear | crate::MaterialTextureEncoding::Srgb => sample,
             crate::MaterialTextureEncoding::SrgbEncodedUnorm => {
@@ -133,7 +153,9 @@ fn append_emissive_configuration(generated: &mut String, configuration: &Emissiv
                 }
             }
         };
-        generated.push_str(&format!("    return {color} * {linear} * {level} * {intensity};\n"));
+        generated.push_str(&format!(
+            "    return {color} * {linear} * {level} * {intensity};\n"
+        ));
     } else {
         generated.push_str(&format!("    return {color} * {intensity};\n"));
     }

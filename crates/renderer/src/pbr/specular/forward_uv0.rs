@@ -107,9 +107,9 @@ struct PbrSpecularVertexOutput {
         "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * {specular_energy} + terms.diffuse{diffuse_weight};"
     );
     let ambient_occlusion = if effects {
-        "clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
+        "clamp(surface.occlusion * evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
     } else {
-        "1.0"
+        "surface.occlusion"
     };
     let indirect = if diffuse {
         format!(

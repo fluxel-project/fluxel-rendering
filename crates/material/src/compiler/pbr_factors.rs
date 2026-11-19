@@ -188,16 +188,17 @@ pub(super) fn append_uv0_evaluators(
             factors,
         );
     }
-    generated.push_str("struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool };\n");
+    generated.push_str("struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, occlusion: f32 };\n");
     generated.push_str(&format!(
         "fn evaluate_pbr_surface_uv0({parameters}) -> FluxelPbrSurface {{\n"
     ));
-    let (base, properties, world_normal, has_world_normal) = if properties.is_some() {
+    let (base, properties, world_normal, has_world_normal, occlusion) = if properties.is_some() {
         (
             format!("evaluate_pbr_material_uv0({full_arguments})"),
             format!("evaluate_metallic_roughness_uv0({uv})"),
             "vec3<f32>(0.0)".into(),
             "false".into(),
+            "1.0".into(),
         )
     } else {
         let values = unique_local("pbr_graph_values", forbidden.iter().copied());
@@ -215,10 +216,11 @@ pub(super) fn append_uv0_evaluators(
             properties,
             format!("{values}.world_normal"),
             format!("{values}.has_world_normal"),
+            format!("{values}.occlusion"),
         )
     };
     generated.push_str(&format!(
-        "    return FluxelPbrSurface({base}, {properties}, {world_normal}, {has_world_normal});\n}}\n"
+        "    return FluxelPbrSurface({base}, {properties}, {world_normal}, {has_world_normal}, {occlusion});\n}}\n"
     ));
 }
 

@@ -44,6 +44,11 @@ pub enum SurfaceOutput {
         metallic: MaterialNodeInputSource,
         /// Node graph source yielding one scalar perceptual-roughness value.
         roughness: MaterialNodeInputSource,
+        /// Optional node graph source yielding one scalar occlusion value.
+        ///
+        /// This must resolve to `F32`. When absent, graph PBR evaluation uses
+        /// the neutral unit occlusion value.
+        occlusion: Option<MaterialNodeInputSource>,
         /// Optional UV0 tangent-space normal callable.
         normal: Option<String>,
         /// Optional graph source yielding a world-space pre-orientation normal.
@@ -389,6 +394,13 @@ impl MaterialDefinition {
         self.surface_extensions.occlusion.is_some()
             || self.surface_extensions.emissive.is_some()
             || self.emissive_configuration.is_some()
+            || matches!(
+                &self.output,
+                SurfaceOutput::MetallicRoughnessUv0Graph {
+                    occlusion: Some(_),
+                    ..
+                }
+            )
             || match &self.pbr_surface_factors {
                 Some(factors) => match &factors.packed_metallic_roughness {
                     Some(packed) => packed.occlusion.is_some(),

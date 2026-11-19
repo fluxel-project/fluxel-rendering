@@ -201,7 +201,7 @@ SurfaceOutput::ColorUv0
 SurfaceOutput::MetallicRoughness { properties }
 SurfaceOutput::MetallicRoughnessUv0 { properties }
 SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal }
-SurfaceOutput::MetallicRoughnessUv0Graph { metallic, roughness, normal, world_normal }
+SurfaceOutput::MetallicRoughnessUv0Graph { metallic, roughness, occlusion, normal, world_normal }
 ```
 
 Every surface also has a static `SurfacePolicy`. Its alpha mode is `Opaque`,
@@ -274,7 +274,11 @@ UV-only roots also expose `evaluate_material_uv0(uv)`. Existing
 property callables still expose `evaluate_metallic_roughness_uv0(uv)`.
 Renderer reads both values from one `evaluate_pbr_surface_uv0` call.
 `MetallicRoughnessUv0Graph` connects metallic and roughness to separate
-`f32` node values or vector output ports within the same fragment graph.
+`f32` node values or vector output ports within the same fragment graph. Its
+optional `occlusion` source selects another `f32` graph value; absence means
+unit occlusion. The graph's occlusion is multiplied by any valid legacy
+occlusion effect, so either source can remain neutral without changing the
+other.
 The graph's selected output supplies the `vec4<f32>` base color. The
 compiler evaluates the union of their dependencies once, so multiple ports
 of a texture sample share its result. Each root can consume the same UV0,
@@ -382,7 +386,8 @@ supply a custom `SurfaceExtensions::emissive` callable as an exclusive
 alternative.
 Renderer selects its effects route through
 `MaterialDefinition::requires_surface_effects()`, which includes either
-emissive form and occlusion.
+emissive form, legacy occlusion, packed occlusion, and graph-selected
+occlusion.
 
 Material resources describe generic shader-visible requirements. The current
 public subset has f32, i32, u32, float vector and column-major

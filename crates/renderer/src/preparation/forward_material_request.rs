@@ -4,8 +4,8 @@ use fluxel_material::{MaterialDefinition, SurfaceOutput};
 use fluxel_shader::ShaderCompositionRequest;
 
 use super::{
-    color_uv0_template, forward_template, ForwardDrawSource, ForwardPreparationError,
-    GeometryLayout, RenderView,
+    ForwardDrawSource, ForwardPreparationError, GeometryLayout, RenderView, color_uv0_template,
+    forward_template,
 };
 
 pub(super) fn material_request(
@@ -36,6 +36,14 @@ pub(super) fn material_request(
             crate::pbr::forward_request(geometry)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
+        SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } if has_effects => {
+            (if environment {
+                crate::pbr::forward_uv0_effect_irradiance_request(geometry)
+            } else {
+                crate::pbr::forward_uv0_effect_request(geometry)
+            })
+            .ok_or(ForwardPreparationError::MissingUv0 { source })?
+        }
         SurfaceOutput::MetallicRoughnessUv0 { .. }
         | SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } => (if environment {
             crate::pbr::forward_uv0_irradiance_request(geometry)

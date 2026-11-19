@@ -21,6 +21,7 @@ mod request_options;
 mod scene_refraction;
 pub(crate) mod specular;
 mod templates;
+mod uv0_effects;
 
 use request_options::{VIEW_FACING, install_emissive_evaluator};
 pub(crate) use request_options::{with_mirrored_view, without_emissive};
@@ -139,6 +140,18 @@ pub(crate) fn forward_uv0_normal_request(
     geometry_uv0_normal_request(layout, false)
 }
 
+pub(crate) fn forward_uv0_effect_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    uv0_effects::forward_request(layout)
+}
+
+pub(crate) fn forward_uv0_effect_irradiance_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    uv0_effects::forward_irradiance_request(layout)
+}
+
 pub(crate) fn forward_uv0_normal_effect_request(
     layout: &GeometryLayout,
 ) -> Option<ShaderCompositionRequest> {
@@ -191,6 +204,12 @@ pub(crate) fn gbuffer_uv0_normal_request(
     layout: &GeometryLayout,
 ) -> Option<ShaderCompositionRequest> {
     geometry_uv0_normal_request(layout, true)
+}
+
+pub(crate) fn gbuffer_uv0_effect_request(
+    layout: &GeometryLayout,
+) -> Option<ShaderCompositionRequest> {
+    uv0_effects::gbuffer_request(layout)
 }
 
 /// Deferred MRT request for a UV0 normal surface that has an AO or emissive
@@ -262,7 +281,10 @@ fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCom
     ];
     if !deferred {
         units.push(SourceUnit::new("pbr-direct-light", direct_light::WGSL));
-        units.push(SourceUnit::new("pbr-directional-light-binding", templates::FORWARD_LIGHT));
+        units.push(SourceUnit::new(
+            "pbr-directional-light-binding",
+            templates::FORWARD_LIGHT,
+        ));
     }
     let transform_stages = if deferred {
         vec![ShaderStage::Vertex]
@@ -348,6 +370,9 @@ fn geometry_uv0_request(
             templates::FORWARD_UV0
         },
     ));
+    request
+        .source_units
+        .push(SourceUnit::new("pbr-uv0-vertex", templates::UV0_VERTEX));
     request.vertex_inputs.push(VertexInputDeclaration::new(
         "UV0",
         2,

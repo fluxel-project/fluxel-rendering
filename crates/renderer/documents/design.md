@@ -149,16 +149,17 @@ contract before Renderer advertises or consumes it.
 
 ### Diffuse irradiance input
 
-UV0 normal materials may supply optional scalar occlusion and linear emissive
-evaluators. Forward evaluates them directly; Deferred uses a conditional
-RGBA16F color attachment (emissive RGB, occlusion alpha), declared and bound
-through the same Graph on offscreen and surface paths. Only those effect
-materials require a third color attachment and device support for that exact
-renderable/sampled format. Materials without effects retain the original
-attachment requirements. Occlusion affects diffuse irradiance only; emission
-adds independently of the environment. Binary16 storage and current RGBA8
-composition have distinct precision/range limits, so this does not establish
-HDR presentation or all reference AO modes.
+UV0 normal materials can supply scalar occlusion and linear emissive
+evaluators. A UV0 graph can also supply occlusion from the same evaluation
+as its other surface outputs, including a graph-selected world normal.
+Forward applies the resulting scalar to environment irradiance and the
+specular occlusion calculation. Emissive adds independently of the environment.
+Deferred stores emissive RGB and occlusion alpha in a conditional RGBA16F
+attachment shared by all draws in the effects frame. A graph with unconnected
+occlusion contributes the neutral value one. The attachment is declared and
+bound through the same Graph on offscreen and surface paths. Binary16
+attachment storage and RGBA8 composition have distinct precision and range
+limits.
 
 `Renderer::set_environment_irradiance` selects an exact immutable asset snapshot
 for subsequent submissions. Each submitted frame retains its own device-local
