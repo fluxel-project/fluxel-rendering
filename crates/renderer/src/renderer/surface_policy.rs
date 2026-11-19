@@ -6,7 +6,9 @@
 //! reverses the effective winding, so a cached pipeline cannot reuse the
 //! opposite front-face state.
 
-use fluxel_material::{SurfaceAlphaMode, SurfaceBlendMode, SurfaceSideOrientation};
+use fluxel_material::{
+    SurfaceAlphaMode, SurfaceBlendMode, SurfaceCullFace, SurfaceSideOrientation,
+};
 use fluxel_rhi::{
     api::{
         BlendComponent, BlendFactor, BlendOperation, BlendState, CullMode, Error, FrontFace,
@@ -41,6 +43,7 @@ enum Culling {
     Front,
     Back,
     SeparateBack,
+    SeparateFront,
 }
 
 impl RasterSurfaceState {
@@ -52,7 +55,7 @@ impl RasterSurfaceState {
         };
         primitive.cull_mode = match self.culling {
             Culling::None => CullMode::None,
-            Culling::Front => CullMode::Front,
+            Culling::Front | Culling::SeparateFront => CullMode::Front,
             Culling::Back | Culling::SeparateBack => CullMode::Back,
         };
     }
@@ -62,7 +65,7 @@ impl RasterSurfaceState {
         self,
         mut primary: PrimitiveState,
     ) -> Option<PrimitiveState> {
-        if self.culling != Culling::SeparateBack {
+        if !matches!(self.culling, Culling::SeparateBack | Culling::SeparateFront) {
             return None;
         }
         primary.front_face = match primary.front_face {
@@ -73,9 +76,13 @@ impl RasterSurfaceState {
     }
 
     /// Babylon peeling disables ordinary culling before each mesh draw.
-    pub(in crate::renderer) fn for_oit(mut self, separate_culling_pass: bool) -> Self {
+    pub(in crate::renderer) fn for_oit(
+        mut self,
+        separate_culling_pass: bool,
+        face: SurfaceCullFace,
+    ) -> Self {
         self.culling = if separate_culling_pass {
-            Culling::SeparateBack
+            separate_culling(face)
         } else {
             Culling::None
         };
@@ -135,7 +142,9 @@ impl RasterSurfaceState {
 /// The zero case remains the canonical orientation: it has no inverse for PBR
 /// normal transforms and is already rejected by the PBR preparation boundary.
 pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceState {
-    let policy = input.prepared().material().surface_policy();
+    let material = input.prepared().material();
+    let policy = material.surface_policy();
+    let cull_face = material.cull_face();
     let orientation = policy
         .side_orientation
         .unwrap_or(input.mesh_side_orientation());
@@ -150,16 +159,23 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
         },
         culling: match (policy.back_face_culling, input.view().mirrored) {
             _ if input.particle().is_some() => Culling::None,
-            (false, _) if policy.separate_culling_pass => Culling::SeparateBack,
+            (false, _) if policy.separate_culling_pass => separate_culling(cull_face),
             (false, _) => Culling::None,
-            (true, true) => Culling::Front,
-            (true, false) => Culling::Back,
+            (true, mirrored) if (cull_face == SurfaceCullFace::Front) ^ mirrored => Culling::Front,
+            (true, _) => Culling::Back,
         },
         blend_mode: matches!(
             input.effective_alpha_mode(),
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
         )
         .then_some(policy.blend_mode),
+    }
+}
+
+fn separate_culling(face: SurfaceCullFace) -> Culling {
+    match face {
+        SurfaceCullFace::Back => Culling::SeparateBack,
+        SurfaceCullFace::Front => Culling::SeparateFront,
     }
 }
 

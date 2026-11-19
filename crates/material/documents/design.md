@@ -238,6 +238,11 @@ apply when the renderer reconstructs the basis from derivatives.
 draws when ordinary back-face culling is disabled. It is a static variant
 fact. The consumer retains ownership of both raster states and their order.
 
+`MaterialDefinition::with_cull_face` selects which triangles are discarded
+when culling is active. It defaults to back faces. Mirror views invert the
+ordinary cull face. A separate culling pass uses the selected face for both
+draws and changes the front winding between them.
+
 `TransmissionExtensions` is a separate optional contract for
 `MetallicRoughnessUv0Normal`. Its optional UV0 scalar callables provide
 transmission intensity and normalized thickness. Static fields carry surface

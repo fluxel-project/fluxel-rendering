@@ -21,6 +21,7 @@ impl MaterialCompiler {
             ir.output,
             ir.normal_map_settings,
             ir.surface_policy,
+            ir.cull_face,
             ir.transmission_extensions,
             ir.diffuse_roughness_configuration.is_some(),
             ir.ambient_occlusion_configuration.is_some(),

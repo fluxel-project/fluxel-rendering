@@ -139,3 +139,13 @@ impl PartialEq for SurfacePolicy {
 }
 
 impl Eq for SurfacePolicy {}
+
+/// The face discarded when a material enables triangle culling.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum SurfaceCullFace {
+    /// Cull back-facing triangles, as Babylon does by default.
+    #[default]
+    Back,
+    /// Cull front-facing triangles.
+    Front,
+}

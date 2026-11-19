@@ -31,6 +31,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     pub(super) normal_map_settings: Option<NormalMapSettings>,
     pub(super) surface_policy: SurfacePolicy,
+    pub(super) cull_face: crate::SurfaceCullFace,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     transmission_texture_configuration: Option<TransmissionTextureConfiguration>,
     refraction_environment: Option<RefractionEnvironment>,
@@ -160,6 +161,7 @@ impl NormalizedMaterialIr {
             diffuse_roughness_configuration: definition.diffuse_roughness_configuration().cloned(),
             normal_map_settings: definition.normal_map_settings(),
             surface_policy: definition.surface_policy(),
+            cull_face: definition.cull_face(),
             transmission_extensions: definition.transmission_extensions().cloned(),
             transmission_texture_configuration: definition
                 .transmission_texture_configuration()
@@ -192,6 +194,9 @@ impl NormalizedMaterialIr {
         );
         super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
+        if self.cull_face == crate::SurfaceCullFace::Front {
+            canonical_piece(&mut canonical, "surface-cull-face", "front");
+        }
         super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
         super::transmission::canonical_textures(
             self.transmission_texture_configuration.as_ref(),

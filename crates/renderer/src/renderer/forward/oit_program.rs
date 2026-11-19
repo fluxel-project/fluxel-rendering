@@ -263,10 +263,10 @@ where
         let group2 = environment
             .or(empty_layout.as_ref())
             .ok_or(Error::InvalidState)?;
-        let surface = base
-            .key
-            .surface
-            .for_oit(ordinary.material().surface_policy().separate_culling_pass);
+        let surface = base.key.surface.for_oit(
+            ordinary.material().surface_policy().separate_culling_pass,
+            ordinary.material().cull_face(),
+        );
         let (initial_pipeline, preliminary_initial) = self
             .oit_draw_pipeline(
                 "OIT initial depth",

@@ -287,6 +287,7 @@ pub struct MaterialDefinition {
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
+    cull_face: super::SurfaceCullFace,
     transmission_extensions: Option<TransmissionExtensions>,
     pub(super) transmission_texture_configuration: Option<TransmissionTextureConfiguration>,
     pub(super) refraction_energy_mode: RefractionEnergyMode,
@@ -339,6 +340,7 @@ impl MaterialDefinition {
             diffuse_roughness_configuration: None,
             normal_map_settings: None,
             surface_policy: SurfacePolicy::default(),
+            cull_face: super::SurfaceCullFace::Back,
             transmission_extensions: None,
             transmission_texture_configuration: None,
             refraction_energy_mode: RefractionEnergyMode::Legacy,
@@ -525,6 +527,19 @@ impl MaterialDefinition {
                 },
                 None => false,
             }
+    }
+
+    /// Selects which face to cull when culling is active.
+    #[must_use]
+    pub fn with_cull_face(mut self, face: super::SurfaceCullFace) -> Self {
+        self.cull_face = face;
+        self
+    }
+
+    /// Returns the authored face discarded when culling is active.
+    #[must_use]
+    pub const fn cull_face(&self) -> super::SurfaceCullFace {
+        self.cull_face
     }
 
     /// Returns the static alpha and raster facts selected for this surface.

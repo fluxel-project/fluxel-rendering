@@ -2,8 +2,8 @@
 
 use crate::{
     MaterialAssetRef, MaterialParameter, MaterialResource, MaterialShaderContribution,
-    MaterialTextureEncodingRequirement, NormalMapSettings, SurfaceOutput, SurfacePolicy,
-    TransmissionExtensions,
+    MaterialTextureEncodingRequirement, NormalMapSettings, SurfaceCullFace, SurfaceOutput,
+    SurfacePolicy, TransmissionExtensions,
 };
 
 /// A stable static-variant identity derived from canonical material input.
@@ -39,6 +39,7 @@ pub struct CompiledMaterialVariant {
     output: SurfaceOutput,
     normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
+    cull_face: SurfaceCullFace,
     transmission_extensions: Option<TransmissionExtensions>,
     uses_diffuse_roughness: bool,
     uses_ambient_occlusion_color: bool,
@@ -54,6 +55,7 @@ impl CompiledMaterialVariant {
         output: SurfaceOutput,
         normal_map_settings: Option<NormalMapSettings>,
         surface_policy: SurfacePolicy,
+        cull_face: SurfaceCullFace,
         transmission_extensions: Option<TransmissionExtensions>,
         uses_diffuse_roughness: bool,
         uses_ambient_occlusion_color: bool,
@@ -68,6 +70,7 @@ impl CompiledMaterialVariant {
             output,
             normal_map_settings,
             surface_policy,
+            cull_face,
             transmission_extensions,
             uses_diffuse_roughness,
             uses_ambient_occlusion_color,
@@ -114,6 +117,12 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub const fn surface_policy(&self) -> SurfacePolicy {
         self.surface_policy
+    }
+
+    /// Returns the authored face discarded when culling is active.
+    #[must_use]
+    pub const fn cull_face(&self) -> SurfaceCullFace {
+        self.cull_face
     }
 
     /// Returns requested transmission and volume-attenuation controls.

@@ -30,7 +30,7 @@ pub use diffuse_roughness::{DiffuseRoughnessConfiguration, DiffuseRoughnessTextu
 pub use nodes::*;
 pub use normal_map::NormalMapSettings;
 pub use surface_policy::{
-    SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
+    SurfaceAlphaMode, SurfaceBlendMode, SurfaceCullFace, SurfacePolicy, SurfaceSideOrientation,
 };
 pub use transmission::{
     RefractionEnergyMode, RefractionEnvironment, TransmissionExtensions, TransmissionTexture,
