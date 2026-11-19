@@ -215,6 +215,17 @@ pub enum ForwardPreparationError {
         /// Dimension provided by the supplied source kind.
         actual: fluxel_rhi::api::TextureViewDimension,
     },
+    /// A supplied source cannot provide the material binding's reflected sample aspect.
+    TextureResourceSampleMismatch {
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
+        /// Material texture resource name.
+        resource: String,
+        /// Material-reflected sample type.
+        expected: fluxel_rhi::api::TextureSampleType,
+        /// Sample type provided by the supplied source kind.
+        actual: fluxel_rhi::api::TextureSampleType,
+    },
     /// A draw supplied sampler state for a material without an ordinary sampler.
     UnexpectedSamplerResource {
         /// Draw requesting the binding.

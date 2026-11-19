@@ -399,17 +399,18 @@ occlusion.
 Material resources describe generic shader-visible requirements. The current
 public subset has f32, i32, u32, float vector and column-major
 `mat4x4<f32>` uniforms, read-only `Texture2dF32`, `Texture2dArrayF32`,
-`TextureCubeF32`, and `Texture3dF32`,
+`TextureCubeF32`, `Texture3dF32`, and `Texture2dDepth`,
 and `Sampler { comparison }`, each with a stable name and bind-group location.
 A `Texture2dArrayF32` resource uses a discrete layer argument in WGSL.
 A `TextureCubeF32` resource uses a direction coordinate; a `Texture3dF32`
-resource uses a three-dimensional coordinate. A material can specify the RGB
-transfer encoding for any of these float texture shapes. `comparison` is
-a WGSL fact; filtering is not, so Renderer validates it from the actual sampler
-and texture descriptors before recording. Future kinds must carry equally
-explicit logical semantics and must be proven by a consumer before their public
-contract freezes. The retained resource direction includes uniform data and
-read-only storage alongside textures, without granting Material GPU ownership.
+resource uses a three-dimensional coordinate. `Texture2dDepth` reads raw depth
+and has no RGB transfer-encoding metadata. A material can specify the RGB
+transfer encoding for any of the float texture shapes. `comparison` is a WGSL
+fact; filtering is not, so Renderer validates it from the actual sampler and
+texture descriptors before recording. Future kinds must carry equally explicit
+logical semantics and must be proven by a consumer before their public contract
+freezes. The retained resource direction includes uniform data and read-only
+storage alongside textures, without granting Material GPU ownership.
 
 Parameters divide into two lifetimes:
 

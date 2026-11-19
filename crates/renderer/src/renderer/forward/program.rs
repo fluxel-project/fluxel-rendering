@@ -115,7 +115,7 @@ where
             binding: texture.binding,
             visibility: vec![ShaderStage::Fragment],
             ty: BindingType::SampledTexture {
-                sample: TextureSampleType::Float,
+                sample: texture.sample,
                 dimension: texture.dimension,
                 multisampled: false,
             },

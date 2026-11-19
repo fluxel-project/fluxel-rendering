@@ -4,7 +4,7 @@ use super::*;
 use crate::FeatureIssuer;
 use crate::preparation::forward_schema::MaterialSamplerBinding;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
-use fluxel_rhi::api::{AddressMode, FilterMode, SamplerDesc};
+use fluxel_rhi::api::{AddressMode, FilterMode, SamplerDesc, TextureSampleType};
 
 fn schema(samplers: &[(&str, u32)]) -> MaterialBindingSchema {
     MaterialBindingSchema {
@@ -13,6 +13,7 @@ fn schema(samplers: &[(&str, u32)]) -> MaterialBindingSchema {
             binding: 1,
             name: "image".into(),
             dimension: fluxel_rhi::api::TextureViewDimension::D2,
+            sample: TextureSampleType::Float,
             encoding: None,
         }],
         samplers: samplers

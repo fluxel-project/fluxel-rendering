@@ -209,6 +209,11 @@ mod pass;
 mod ranges;
 use ranges::*;
 
+/// Returns the valid view aspects for a descriptor format.
+pub(crate) fn texture_format_aspects(format: TextureFormat) -> TextureAspects {
+    ranges::format_aspects(format)
+}
+
 #[cfg(test)]
 #[path = "../../tests/graph/declaration.rs"]
 mod declaration_tests;

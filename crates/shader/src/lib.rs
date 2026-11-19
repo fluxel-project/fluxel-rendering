@@ -1,8 +1,8 @@
 //! Portable WGSL composition, validation, and reflection.
 #![deny(missing_docs)]
 mod capabilities;
-pub use capabilities::NagaCapability;
 use capabilities::required_naga_capabilities;
+pub use capabilities::NagaCapability;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
@@ -199,6 +199,8 @@ pub enum BindingShape {
     Uniform(ValueType),
     /// Non-arrayed, non-multisampled float 2D texture.
     Texture2dF32,
+    /// Non-arrayed, non-multisampled depth 2D texture.
+    Texture2dDepth,
     /// Arrayed, non-multisampled float 2D texture.
     ///
     /// This is one `texture_2d_array<f32>` resource addressed with a layer

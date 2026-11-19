@@ -236,6 +236,13 @@ fn material_texture_properties(
                 ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
             }
         }
+        ResolvedForwardTexture::DepthAsset(texture) => {
+            let [width, height] = texture.value().extent;
+            MaterialTextureProperties {
+                extent: Some([width, height, 1]),
+                ..MaterialTextureProperties::d2(TextureFormat::Depth32Float)
+            }
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
             MaterialTextureProperties {
@@ -282,7 +289,11 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
         Support::Supported(s) if mip_levels > s.max_mips => {
             Err(Error::Unsupported("material texture mip levels"))
         }
-        Support::Supported(s) if s.filterable => Ok(()),
+        Support::Supported(s)
+            if properties.format == TextureFormat::Depth32Float || s.filterable =>
+        {
+            Ok(())
+        }
         Support::Supported(_) => Err(Error::Unsupported("filterable material texture")),
         Support::Unsupported(reason) => Err(Error::Unsupported(reason)),
     }
@@ -330,7 +341,9 @@ fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
         || owner.desc.samples != 1
         || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         || (expected.generate_mips && !owner.desc.usage.contains(TextureUsage::COPY_SRC))
-        || (require_filterable && !owner.filterable)
+        || (require_filterable
+            && expected.format != TextureFormat::Depth32Float
+            && !owner.filterable)
     {
         return Err(Error::InvalidState);
     }

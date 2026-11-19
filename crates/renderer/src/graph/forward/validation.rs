@@ -405,7 +405,7 @@ fn validate_texture_uploads<B: ResourceBackend>(
 
 fn texture_bytes_per_texel(format: TextureFormat) -> Result<u32> {
     match format {
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(4),
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb | TextureFormat::Depth32Float => Ok(4),
         TextureFormat::Rgba16Float => Ok(8),
         _ => Err(Error::InvalidRange),
     }

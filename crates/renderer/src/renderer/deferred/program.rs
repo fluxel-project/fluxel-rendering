@@ -406,11 +406,7 @@ where
             })
             .collect();
         entries.extend(schema.textures.iter().map(|texture| {
-            sampled_texture_with_dimension(
-                texture.binding,
-                TextureSampleType::Float,
-                texture.dimension,
-            )
+            sampled_texture_with_dimension(texture.binding, texture.sample, texture.dimension)
         }));
         entries.extend(
             schema

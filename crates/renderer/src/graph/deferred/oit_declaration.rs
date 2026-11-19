@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     graph::{
         forward,
-        oit::{declare_dual_depth_peeling_rounds, DualDepthPeelInputs, OitPeelSide},
+        oit::{DualDepthPeelInputs, OitPeelSide, declare_dual_depth_peeling_rounds},
         oit_record::OitRecordSlots,
     },
     residency::{ForwardFrame, OitTextureOwner},

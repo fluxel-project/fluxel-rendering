@@ -7,8 +7,8 @@ use fluxel_shader::ShaderCompositionRequest;
 use crate::{RenderTransform, SceneAssetRef};
 
 use super::{
-    ColorTextureArrayData, ColorTextureData, ColorTextureVolumeData, ForwardDrawSource,
-    ForwardPreparationError, GeometryData, GeometryLayout, PreparedMaterial,
+    ColorTextureArrayData, ColorTextureData, ColorTextureVolumeData, DepthTextureData,
+    ForwardDrawSource, ForwardPreparationError, GeometryData, GeometryLayout, PreparedMaterial,
 };
 use crate::preparation::forward_templates;
 
@@ -47,6 +47,16 @@ pub(super) fn validate_texture(
         return Err(ForwardPreparationError::InvalidTexture { source });
     }
     Ok(())
+}
+
+pub(super) fn validate_depth_texture(
+    texture: &DepthTextureData,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    texture
+        .is_valid()
+        .then_some(())
+        .ok_or(ForwardPreparationError::InvalidTexture { source })
 }
 
 pub(super) fn validate_texture_array(

@@ -73,6 +73,7 @@ pub(crate) enum ForwardResidentTextureInput {
         encoding: crate::preparation::TextureEncoding,
         generated_mips: Option<u32>,
     },
+    Depth(ForwardTextureCopyInput),
     AuthoredRgba16Float(ForwardAuthoredRgba16FloatTextureInput),
 }
 

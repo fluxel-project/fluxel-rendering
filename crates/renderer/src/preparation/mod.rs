@@ -26,12 +26,12 @@ pub(crate) use forward::ResolvedForwardTexture;
 pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
-    ColorTextureVolumeAsset, ColorTextureVolumeData, ForwardAssets, ForwardCaptureResources,
-    ForwardDrawInput, ForwardDrawRequest, ForwardPreparationError, ForwardResources,
-    ForwardSamplerBinding, ForwardTextureBinding, ForwardTextureSource, GeometryAsset,
-    GeometryData, PreparedCaptureReceiver, TextureEncoding, prepare_forward,
-    prepare_forward_capture_receiver, prepare_forward_capture_receiver_with_instance,
-    prepare_forward_scene_refraction_receiver,
+    ColorTextureVolumeAsset, ColorTextureVolumeData, DepthTextureAsset, DepthTextureData,
+    ForwardAssets, ForwardCaptureResources, ForwardDrawInput, ForwardDrawRequest,
+    ForwardPreparationError, ForwardResources, ForwardSamplerBinding, ForwardTextureBinding,
+    ForwardTextureSource, GeometryAsset, GeometryData, PreparedCaptureReceiver, TextureEncoding,
+    prepare_forward, prepare_forward_capture_receiver,
+    prepare_forward_capture_receiver_with_instance, prepare_forward_scene_refraction_receiver,
     prepare_forward_scene_refraction_receiver_with_sampler,
 };
 pub(crate) use forward::{

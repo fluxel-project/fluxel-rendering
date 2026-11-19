@@ -3,7 +3,7 @@
 use super::*;
 use crate::graph::forward::ForwardReceiverTerminal;
 use crate::{
-    graph::{oit_record::OitRecordCommands, ForwardOitInput},
+    graph::{ForwardOitInput, oit_record::OitRecordCommands},
     residency::ForwardFrame,
 };
 

@@ -27,6 +27,8 @@ use super::{
 
 #[path = "forward_array.rs"]
 mod forward_array;
+#[path = "forward_depth.rs"]
+mod forward_depth;
 #[path = "forward_oit.rs"]
 mod forward_oit;
 #[path = "forward_pbr.rs"]
@@ -36,6 +38,7 @@ mod forward_transmission;
 #[path = "forward_volume.rs"]
 mod forward_volume;
 pub use forward_array::{ColorTextureArrayAsset, ColorTextureArrayData};
+pub use forward_depth::{DepthTextureAsset, DepthTextureData};
 pub(crate) use forward_oit::{OitDrawPartition, partition_oit_draws, prepare_oit_material};
 pub use forward_volume::{ColorTextureVolumeAsset, ColorTextureVolumeData};
 #[path = "forward_validation.rs"]

@@ -71,6 +71,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             copy_write(),
         )?;
         for copy in &frame.resident_upload.textures {
+            let owner = frame
+                .resident
+                .textures
+                .get(copy.texture)
+                .ok_or(Error::InvalidRange)?;
             pass.buffer(
                 self.resident_upload_slot,
                 copy.source_offset..texture_copy_end(copy)?,
@@ -82,7 +87,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                one_color_mip_layer(copy.mip_level, copy.array_layer),
+                material_mip_layer(&owner.desc, copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write(),
             )?;
@@ -233,6 +238,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             frame.uniform_upload.destination.end - frame.uniform_upload.destination.start,
         )?;
         for copy in &frame.resident_upload.textures {
+            let owner = frame
+                .resident
+                .textures
+                .get(copy.texture)
+                .ok_or(Error::InvalidRange)?;
             let source = pass.buffer(
                 self.resident_upload_slot,
                 copy.source_offset..texture_copy_end(copy)?,
@@ -244,7 +254,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                one_color_mip_layer(copy.mip_level, copy.array_layer),
+                material_mip_layer(&owner.desc, copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write(),
             )?;
@@ -260,7 +270,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     mip: copy.mip_level,
                     origin: [0, 0, copy.array_layer],
                     extent: copy.extent,
-                    aspect: TextureAspects::COLOR,
+                    aspect: material_aspect(&owner.desc),
                 },
             )?;
         }

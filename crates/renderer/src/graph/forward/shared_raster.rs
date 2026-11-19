@@ -1,7 +1,7 @@
 //! Range-scoped Forward raster recording shared by ordinary and OIT paths.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 pub(in crate::graph::forward) struct RasterColorSelection<'a, B: ResourceBackend> {
     pub(in crate::graph::forward) slot: TextureSlot,
@@ -113,7 +113,7 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
                     .texture_slots
                     .get(*texture)
                     .ok_or(Error::InvalidRange)?,
-                all_color_mips_layers(owner.desc.mip_levels, owner.desc.array_layers),
+                material_mips_layers(&owner.desc),
                 AccessKind::Read,
                 texture_read_uses(),
             )?;

@@ -281,7 +281,11 @@ where
                 )?;
                 output_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip_layer(upload.mip_level, upload.array_layer),
+                    material_mip_layer(
+                        &frame.resident.textures[upload.texture].desc,
+                        upload.mip_level,
+                        upload.array_layer,
+                    ),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -391,6 +395,7 @@ where
             .textures
             .iter()
             .any(|upload| upload.texture == index)
+            && owner.desc.format != TextureFormat::Depth32Float
             && owner.desc.usage.contains(TextureUsage::COPY_SRC)
         {
             let (texture, passes) = super::super::mip_generation::declare_chain(

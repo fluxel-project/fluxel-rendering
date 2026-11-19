@@ -137,6 +137,9 @@ impl MaterialShaderContribution {
                     MaterialResourceKind::Texture2dF32 => {
                         (BindingKind::Texture, BindingShape::Texture2dF32)
                     }
+                    MaterialResourceKind::Texture2dDepth => {
+                        (BindingKind::Texture, BindingShape::Texture2dDepth)
+                    }
                     MaterialResourceKind::Texture2dArrayF32 => {
                         (BindingKind::Texture, BindingShape::Texture2dArrayF32)
                     }

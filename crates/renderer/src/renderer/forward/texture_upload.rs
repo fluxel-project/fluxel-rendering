@@ -83,6 +83,32 @@ pub(in crate::renderer) fn stage(
                 generated_mips: *generated_mips,
             })
         }
+        ResolvedForwardTexture::DepthAsset(texture) => {
+            let data = texture.value();
+            let [width, height] = data.extent;
+            let extent = [width, height, 1];
+            let source_size = u64::try_from(data.depth32f.len())
+                .ok()
+                .and_then(|count| count.checked_mul(4))
+                .ok_or(Error::InvalidRange)?;
+            let (mut bytes, bytes_per_row, _) =
+                allocate_staged_rows(extent, 4, source_size, max_buffer_bytes)?;
+            for (dest, source) in bytes
+                .chunks_exact_mut(bytes_per_row as usize)
+                .zip(data.depth32f.chunks_exact(width as usize))
+            {
+                for (texel, depth) in dest.chunks_exact_mut(4).zip(source) {
+                    texel.copy_from_slice(&depth.to_le_bytes());
+                }
+            }
+            Ok(ForwardResidentTextureInput::Depth(
+                ForwardTextureCopyInput {
+                    bytes,
+                    extent,
+                    bytes_per_row,
+                },
+            ))
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
             let mut mips = Vec::with_capacity(texture.value().mips().len());
@@ -163,12 +189,33 @@ fn stage_rows(
     source: &[u8],
     max_buffer_bytes: u64,
 ) -> Result<(Vec<u8>, u32), Error> {
+    let (mut bytes, pitch, tight) = allocate_staged_rows(
+        extent,
+        bytes_per_texel,
+        source.len() as u64,
+        max_buffer_bytes,
+    )?;
+    for (dest, source) in bytes
+        .chunks_exact_mut(pitch as usize)
+        .zip(source.chunks_exact(tight))
+    {
+        dest[..tight].copy_from_slice(source);
+    }
+    Ok((bytes, pitch))
+}
+
+fn allocate_staged_rows(
+    extent: [u32; 3],
+    bytes_per_texel: u64,
+    source_size: u64,
+    max_buffer_bytes: u64,
+) -> Result<(Vec<u8>, u32, usize), Error> {
     let row = u64::from(extent[0])
         .checked_mul(bytes_per_texel)
         .ok_or(Error::InvalidRange)?;
     let rows = u64::from(extent[1]) * u64::from(extent[2]);
     let tight_size = row.checked_mul(rows).ok_or(Error::InvalidRange)?;
-    if tight_size == 0 || tight_size != source.len() as u64 {
+    if tight_size == 0 || tight_size != source_size {
         return Err(Error::InvalidRange);
     }
     let pitch = row.checked_add(255).ok_or(Error::InvalidRange)? / 256 * 256;
@@ -185,11 +232,5 @@ fn stage_rows(
         .map_err(|_| Error::OutOfMemory)?;
     bytes.resize(usize::try_from(size).map_err(|_| Error::InvalidRange)?, 0);
     let tight = usize::try_from(row).map_err(|_| Error::InvalidRange)?;
-    for (dest, source) in bytes
-        .chunks_exact_mut(pitch as usize)
-        .zip(source.chunks_exact(tight))
-    {
-        dest[..tight].copy_from_slice(source);
-    }
-    Ok((bytes, pitch))
+    Ok((bytes, pitch, tight))
 }

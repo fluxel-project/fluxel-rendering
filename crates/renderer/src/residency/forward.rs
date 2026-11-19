@@ -305,7 +305,11 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
                 &TextureViewDesc {
                     format: texture_desc.format,
                     dimension: allocation.view_dimension,
-                    aspects: fluxel_rhi::api::TextureAspects::COLOR,
+                    aspects: if texture_desc.format == TextureFormat::Depth32Float {
+                        fluxel_rhi::api::TextureAspects::DEPTH
+                    } else {
+                        fluxel_rhi::api::TextureAspects::COLOR
+                    },
                     mips: 0..texture_desc.mip_levels,
                     layers: 0..texture_desc.array_layers,
                 },

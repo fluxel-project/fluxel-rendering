@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 
 use super::forward_validation::{
-    validate_cube_texture_array, validate_generated_cube_texture_array,
+    validate_cube_texture_array, validate_depth_texture, validate_generated_cube_texture_array,
     validate_generated_texture_array, validate_texture, validate_texture_array,
     validate_texture_volume,
 };
 use super::*;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
+use fluxel_rhi::api::TextureSampleType;
 
 pub(super) fn ordered_texture_sources<'a>(
     provided: &'a [ForwardTextureBinding],
@@ -77,13 +78,21 @@ pub(super) fn resolve_texture_asset(
 ) -> Result<ResolvedForwardTexture, ForwardPreparationError> {
     match binding {
         ForwardTextureSource::Asset(reference) => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
             let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
             validate_texture(asset.value(), source)?;
             validate_texture_encoding(expected, asset.value().encoding, source)?;
             Ok(ResolvedForwardTexture::Asset(asset))
         }
+        ForwardTextureSource::DepthAsset(asset) => {
+            require_texture_sample(expected, TextureSampleType::Depth, source)?;
+            require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
+            validate_depth_texture(asset.value(), source)?;
+            Ok(ResolvedForwardTexture::DepthAsset(asset.clone()))
+        }
         ForwardTextureSource::ArrayAsset(asset) => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(
                 expected,
                 fluxel_rhi::api::TextureViewDimension::D2Array,
@@ -94,6 +103,7 @@ pub(super) fn resolve_texture_asset(
             Ok(ResolvedForwardTexture::ArrayAsset(asset.clone()))
         }
         ForwardTextureSource::ArrayAssetWithGeneratedMips { asset, mip_levels } => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(
                 expected,
                 fluxel_rhi::api::TextureViewDimension::D2Array,
@@ -108,6 +118,7 @@ pub(super) fn resolve_texture_asset(
         }
         ForwardTextureSource::VolumeAsset(asset)
         | ForwardTextureSource::VolumeAssetWithGeneratedMips { asset, .. } => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D3, source)?;
             let generated_mips = match binding {
                 ForwardTextureSource::VolumeAssetWithGeneratedMips { mip_levels, .. } => {
@@ -135,6 +146,7 @@ pub(super) fn resolve_texture_asset(
             asset,
             generated_mips,
         } => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(
                 expected,
                 fluxel_rhi::api::TextureViewDimension::Cube,
@@ -153,6 +165,7 @@ pub(super) fn resolve_texture_asset(
             })
         }
         ForwardTextureSource::RefractionRadiance(asset) => {
+            require_texture_sample(expected, TextureSampleType::Float, source)?;
             require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
             validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
             Ok(ResolvedForwardTexture::RefractionRadiance(asset.clone()))
@@ -178,6 +191,23 @@ fn require_texture_dimension(
             source,
             resource: expected.name.clone(),
             expected: expected.dimension,
+            actual,
+        })
+    }
+}
+
+pub(super) fn require_texture_sample(
+    expected: &MaterialTextureBinding,
+    actual: TextureSampleType,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    if expected.sample == actual {
+        Ok(())
+    } else {
+        Err(ForwardPreparationError::TextureResourceSampleMismatch {
+            source,
+            resource: expected.name.clone(),
+            expected: expected.sample,
             actual,
         })
     }

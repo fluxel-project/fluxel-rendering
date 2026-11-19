@@ -299,7 +299,8 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
-and independently named ordinary samplers in material group zero.
+2D depth textures, and independently named ordinary samplers in material group
+zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -316,6 +317,12 @@ blits one whole mip to the next with linear XYZ filtering at destination texel
 centers, matching the Babylon.js 3D mip sampler for both even and odd extents.
 The image format carries the transfer encoding through each pass, and the
 requested mip count participates in the resident cache key.
+
+`DepthTextureData` supplies one row-major `Depth32Float` image. Each texel is a
+finite normalized depth in the RHI's existing depth range. The resident view and
+Graph copy and shader-read ranges use the depth aspect. Material WGSL reads it
+through `texture_depth_2d`, for example with `textureLoad`. A depth source has
+no color transfer encoding.
 
 UV0 PBR programs can carry typed Material varyings from a shared vertex graph
 to the fragment evaluator. Preparation assigns locations after the template's

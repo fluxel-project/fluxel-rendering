@@ -182,8 +182,10 @@ not introduce descriptor-array or non-uniform-indexing requirements.
 one non-arrayed, non-multisampled sampled-float cube image, not a cube array.
 `texture_3d<f32>` is separately reflected as `BindingShape::Texture3dF32`:
 one non-arrayed, non-multisampled sampled-float volume image, not a 2D array.
-Depth, storage, multisampled, and integer sampled textures remain outside this
-logical contract until an executing consumer requires each exact shape.
+`texture_depth_2d` is separately reflected as `BindingShape::Texture2dDepth`:
+one non-arrayed, non-multisampled depth 2D image. Storage, multisampled, and
+integer sampled textures remain outside this logical contract until an
+executing consumer requires each exact shape.
 
 The [Material direction](../../material/documents/design.md#babylon-aligned-material-direction-planned)
 requires one node-authored definition to feed Forward and Deferred, including

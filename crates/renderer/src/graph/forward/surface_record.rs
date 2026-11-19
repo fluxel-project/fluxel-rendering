@@ -81,10 +81,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         .texture_slots
                         .get(*texture)
                         .ok_or(Error::InvalidRange)?,
-                    all_color_mips_layers(
-                        frame.resident.textures[*texture].desc.mip_levels,
-                        frame.resident.textures[*texture].desc.array_layers,
-                    ),
+                    material_mips_layers(&frame.resident.textures[*texture].desc),
                     AccessKind::Read,
                     texture_read_uses(),
                 )?;
@@ -298,6 +295,11 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             return Err(Error::InvalidRange);
         }
         for copy in &frame.resident_upload.textures {
+            let owner = frame
+                .resident
+                .textures
+                .get(copy.texture)
+                .ok_or(Error::InvalidRange)?;
             let slot = *self
                 .texture_slots
                 .get(copy.texture)
@@ -310,7 +312,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             )?;
             pass.texture(
                 slot,
-                one_color_mip_layer(copy.mip_level, copy.array_layer),
+                material_mip_layer(&owner.desc, copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -427,6 +429,11 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             frame.uniform_upload.destination.end - frame.uniform_upload.destination.start,
         )?;
         for copy in &frame.resident_upload.textures {
+            let owner = frame
+                .resident
+                .textures
+                .get(copy.texture)
+                .ok_or(Error::InvalidRange)?;
             let src = pass.buffer(
                 self.resident_upload_slot,
                 copy.source_offset..texture_copy_end(copy)?,
@@ -438,7 +445,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                one_color_mip_layer(copy.mip_level, copy.array_layer),
+                material_mip_layer(&owner.desc, copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -454,7 +461,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     mip: copy.mip_level,
                     origin: [0, 0, copy.array_layer],
                     extent: copy.extent,
-                    aspect: TextureAspects::COLOR,
+                    aspect: material_aspect(&owner.desc),
                 },
             )?;
         }

@@ -344,6 +344,14 @@ fn binding_shape(module: &naga::Module, global: &naga::GlobalVariable) -> Option
             naga::AddressSpace::Handle,
             naga::TypeInner::Image {
                 dim: naga::ImageDimension::D2,
+                arrayed: false,
+                class: naga::ImageClass::Depth { multi: false },
+            },
+        ) => Some(BindingShape::Texture2dDepth),
+        (
+            naga::AddressSpace::Handle,
+            naga::TypeInner::Image {
+                dim: naga::ImageDimension::D2,
                 arrayed: true,
                 class:
                     naga::ImageClass::Sampled {

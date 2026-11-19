@@ -1,6 +1,8 @@
 //! Graph declaration and recording for the bounded Forward consumer.
 
-use super::validate_resident_texture_devices;
+use super::{
+    material_aspect, material_mip_layer, material_mips_layers, validate_resident_texture_devices,
+};
 
 mod access_contracts;
 mod capture_binding_collection;

@@ -137,7 +137,10 @@ pub(super) fn validate_capture_product_alias<B: ResourceBackend>(
                     return alias.instance != product.instance
                         || alias.texture.device() != product.texture.device()
                         || alias.view.device() != product.view.device()
-                        || !capture_declaration::same_texture_owner_desc(&alias.desc, product.desc)
+                        || !capture_declaration::same_texture_owner_desc(
+                            &alias.desc,
+                            product.desc,
+                        )
                         || alias.incoming != product.incoming
                         || alias.layout != product.layout
                         || !alias.desc.usage.contains(TextureUsage::TEXTURE_BINDING);

@@ -1,7 +1,7 @@
 //! Real Forward and Deferred submission witnesses for specular IBL.
 
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 use std::{collections::BTreeMap, sync::atomic::Ordering};
 

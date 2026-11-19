@@ -37,6 +37,7 @@ mod state;
 pub(crate) use binding::{BindingError, ResourceInstanceId};
 pub(crate) use compute::{ComputeFixtureBindings, ComputePlan};
 pub(crate) use copy::{CopyFrame, CopyPlan};
+use definition::{TextureRange, texture_format_aspects};
 use owner_validation::validate_resident_texture_devices;
 pub(crate) use raster::{RasterPlan, SurfaceRasterPlan};
 pub(crate) use read_set_raster::{ReadSetRasterBindings, ReadSetRasterFrame, ReadSetRasterPlan};
@@ -46,3 +47,19 @@ pub(crate) use read_set_raster::{ReadSetRasterBindings, ReadSetRasterFrame, Read
 mod cost_diagnostic;
 
 pub(crate) use forward::{ForwardOitInput, ForwardOitReadContext};
+
+fn material_aspect(desc: &fluxel_rhi::api::TextureDesc) -> fluxel_rhi::api::TextureAspects {
+    texture_format_aspects(desc.format)
+}
+
+fn material_mips_layers(desc: &fluxel_rhi::api::TextureDesc) -> TextureRange {
+    TextureRange::new(material_aspect(desc), 0..desc.mip_levels, 0..desc.array_layers)
+}
+
+fn material_mip_layer(
+    desc: &fluxel_rhi::api::TextureDesc,
+    mip: u32,
+    layer: u32,
+) -> TextureRange {
+    TextureRange::new(material_aspect(desc), mip..mip + 1, layer..layer + 1)
+}

@@ -1,7 +1,7 @@
 //! Consumer-owned binding facts derived from one prepared material.
 
 use fluxel_material::{MaterialResourceKind, MaterialTextureEncoding, MaterialType};
-use fluxel_rhi::api::{ShaderStage as RhiShaderStage, TextureViewDimension};
+use fluxel_rhi::api::{ShaderStage as RhiShaderStage, TextureSampleType, TextureViewDimension};
 use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
@@ -32,6 +32,8 @@ pub(crate) struct MaterialTextureBinding {
     pub(crate) name: String,
     /// Exact RHI view dimension reflected from the declared material resource.
     pub(crate) dimension: TextureViewDimension,
+    /// Exact RHI texture sample type reflected from the declared material resource.
+    pub(crate) sample: TextureSampleType,
     /// Optional material-declared asset encoding requirement.
     pub(crate) encoding: Option<MaterialTextureEncoding>,
 }
@@ -74,7 +76,9 @@ pub(crate) fn material_binding_schema(
         match binding.kind {
             MaterialResourceKind::Texture2dF32
             | MaterialResourceKind::Texture2dArrayF32
-            | MaterialResourceKind::TextureCubeF32 => original_textures += 1,
+            | MaterialResourceKind::TextureCubeF32
+            | MaterialResourceKind::Texture3dF32
+            | MaterialResourceKind::Texture2dDepth => original_textures += 1,
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
             kind if kind.uniform_material_type().is_some() => {
                 original_uniforms += 1;
@@ -89,7 +93,9 @@ pub(crate) fn material_binding_schema(
             match binding.kind {
                 MaterialResourceKind::Texture2dF32
                 | MaterialResourceKind::Texture2dArrayF32
-                | MaterialResourceKind::TextureCubeF32 => {
+                | MaterialResourceKind::TextureCubeF32
+                | MaterialResourceKind::Texture3dF32
+                | MaterialResourceKind::Texture2dDepth => {
                     schema.unused_textures.push(binding.name.clone())
                 }
                 MaterialResourceKind::Sampler { .. } => {
@@ -114,21 +120,41 @@ pub(crate) fn material_binding_schema(
             | MaterialResourceKind::Texture2dArrayF32
             | MaterialResourceKind::TextureCubeF32
             | MaterialResourceKind::Texture3dF32
+            | MaterialResourceKind::Texture2dDepth
                 if actual.kind == BindingKind::Texture =>
             {
-                let dimension = match (binding.kind, actual.shape) {
-                    (MaterialResourceKind::Texture2dF32, Some(BindingShape::Texture2dF32)) => {
-                        TextureViewDimension::D2
-                    }
+                let declared_encoding = prepared
+                    .material()
+                    .texture_encoding_requirements()
+                    .iter()
+                    .find(|requirement| requirement.resource == binding.name)
+                    .map(|requirement| requirement.encoding);
+                let (dimension, sample, encoding) = match (binding.kind, actual.shape) {
+                    (MaterialResourceKind::Texture2dF32, Some(BindingShape::Texture2dF32)) => (
+                        TextureViewDimension::D2,
+                        TextureSampleType::Float,
+                        declared_encoding,
+                    ),
                     (
                         MaterialResourceKind::Texture2dArrayF32,
                         Some(BindingShape::Texture2dArrayF32),
-                    ) => TextureViewDimension::D2Array,
-                    (MaterialResourceKind::TextureCubeF32, Some(BindingShape::TextureCubeF32)) => {
-                        TextureViewDimension::Cube
-                    }
-                    (MaterialResourceKind::Texture3dF32, Some(BindingShape::Texture3dF32)) => {
-                        TextureViewDimension::D3
+                    ) => (
+                        TextureViewDimension::D2Array,
+                        TextureSampleType::Float,
+                        declared_encoding,
+                    ),
+                    (MaterialResourceKind::TextureCubeF32, Some(BindingShape::TextureCubeF32)) => (
+                        TextureViewDimension::Cube,
+                        TextureSampleType::Float,
+                        declared_encoding,
+                    ),
+                    (MaterialResourceKind::Texture3dF32, Some(BindingShape::Texture3dF32)) => (
+                        TextureViewDimension::D3,
+                        TextureSampleType::Float,
+                        declared_encoding,
+                    ),
+                    (MaterialResourceKind::Texture2dDepth, Some(BindingShape::Texture2dDepth)) => {
+                        (TextureViewDimension::D2, TextureSampleType::Depth, None)
                     }
                     _ => return Err(invalid()),
                 };
@@ -136,12 +162,8 @@ pub(crate) fn material_binding_schema(
                     binding: location,
                     name: binding.name.clone(),
                     dimension,
-                    encoding: prepared
-                        .material()
-                        .texture_encoding_requirements()
-                        .iter()
-                        .find(|requirement| requirement.resource == binding.name)
-                        .map(|requirement| requirement.encoding),
+                    sample,
+                    encoding,
                 });
             }
             MaterialResourceKind::Sampler { comparison: false }

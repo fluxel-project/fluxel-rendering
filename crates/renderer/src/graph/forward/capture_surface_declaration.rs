@@ -86,7 +86,11 @@ where
         preserve_capture_background,
     )?;
     let receiver_capture = capture_texture_slots(&receiver_spec)?;
-    super::capture_bindings::validate_capture_alias(capture, receiver, preserve_capture_background)?;
+    super::capture_bindings::validate_capture_alias(
+        capture,
+        receiver,
+        preserve_capture_background,
+    )?;
     validate_spec(device, &capture_spec, capture_topology, false)?;
     validate_spec(device, &receiver_spec, receiver_topology, true)?;
     let lane = device

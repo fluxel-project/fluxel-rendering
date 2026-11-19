@@ -15,7 +15,7 @@ pub(super) fn plan_texture_uploads(
                 extent: [texture.extent[0], texture.extent[1], 1],
                 bytes_per_row: texture.bytes_per_row,
             };
-            validate_rgba8_copy(&copy)?;
+            validate_four_byte_copy(&copy)?;
             let max_mips = 1 + copy.extent[0].max(copy.extent[1]).ilog2();
             if texture.mip_levels == 0 || texture.mip_levels > max_mips {
                 return Err(Error::InvalidRange);
@@ -54,7 +54,7 @@ pub(super) fn plan_texture_uploads(
                     if copy.extent != expected_extent {
                         return Err(Error::InvalidRange);
                     }
-                    validate_rgba8_copy(copy)?;
+                    validate_four_byte_copy(copy)?;
                 }
             }
             for (copy_index, copy) in texture.copies.into_iter().enumerate() {
@@ -89,7 +89,7 @@ pub(super) fn plan_texture_uploads(
                 if copy.extent != extent.map(|axis| (axis >> level).max(1)) {
                     return Err(Error::InvalidRange);
                 }
-                validate_rgba8_copy(copy)?;
+                validate_four_byte_copy(copy)?;
             }
             for (level, copy) in mips.into_iter().enumerate() {
                 append_texture_upload(bytes, uploads, index, level as u32, 0, copy)?;
@@ -102,6 +102,28 @@ pub(super) fn plan_texture_uploads(
                 TextureViewDimension::D3,
                 generated_mips.is_some(),
             ))
+        }
+        ForwardResidentTextureInput::Depth(copy) => {
+            if copy.extent[2] != 1 {
+                return Err(Error::InvalidRange);
+            }
+            validate_four_byte_copy(&copy)?;
+            let extent = copy.extent;
+            append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
+            Ok(ForwardTextureAllocation {
+                desc: TextureDesc {
+                    label: Some("fluxel forward material depth texture".into()),
+                    dimension: TextureDimension::D2,
+                    extent,
+                    array_layers: 1,
+                    format: TextureFormat::Depth32Float,
+                    mip_levels: 1,
+                    samples: 1,
+                    usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
+                    view_formats: Vec::new(),
+                },
+                view_dimension: TextureViewDimension::D2,
+            })
         }
         ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
             validate_authored_rgba16float_texture(&texture)?;
@@ -160,7 +182,7 @@ fn rgba8_allocation(
     }
 }
 
-fn validate_rgba8_copy(copy: &ForwardTextureCopyInput) -> Result<()> {
+fn validate_four_byte_copy(copy: &ForwardTextureCopyInput) -> Result<()> {
     if copy.extent.contains(&0)
         || copy.bytes_per_row == 0
         || copy.bytes_per_row % 256 != 0

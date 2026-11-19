@@ -257,7 +257,11 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
                 )?;
                 outputs_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip_layer(upload.mip_level, upload.array_layer),
+                    material_mip_layer(
+                        &spec.textures[upload.texture].desc,
+                        upload.mip_level,
+                        upload.array_layer,
+                    ),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
