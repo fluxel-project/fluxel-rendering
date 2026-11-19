@@ -88,6 +88,10 @@ where
             self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
         }
+        for (_, producer) in &frame.indirect {
+            self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
+                .await?;
+        }
         let serial = self.next_serial()?;
         // SAFETY: all bindings were checked against the single compiled Graph;
         // frame owners remain held below through recording and final settlement.
@@ -113,6 +117,22 @@ where
             if let Some(step) = plan.deformation_step() {
                 recorded =
                     execution.commands(step, |encoder| plan.record_deformation(encoder, &frame));
+            }
+        }
+        if recorded.is_ok() {
+            for (draw, upload, compute) in plan.indirect_steps() {
+                recorded = execution.commands(upload, |encoder| {
+                    plan.record_indirect_upload(encoder, &frame, draw)
+                });
+                if recorded.is_err() {
+                    break;
+                }
+                recorded = execution.commands(compute, |encoder| {
+                    plan.record_indirect_compute(encoder, &frame, draw)
+                });
+                if recorded.is_err() {
+                    break;
+                }
             }
         }
         if recorded.is_ok() {
@@ -269,6 +289,10 @@ where
             self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
         }
+        for (_, producer) in &frame.indirect {
+            self.write_deferred_upload(&producer.upload.buffer, &producer.upload_bytes)
+                .await?;
+        }
         let serial = self.next_serial()?;
         let mut execution = unsafe {
             self.device
@@ -295,6 +319,22 @@ where
                 recorded = execution.commands(step, |encoder| {
                     plan.surface_record_deformation(encoder, &frame, &image)
                 });
+            }
+        }
+        if recorded.is_ok() {
+            for (draw, upload, compute) in plan.indirect_steps() {
+                recorded = execution.commands(upload, |encoder| {
+                    plan.surface_record_indirect_upload(encoder, &frame, &image, draw)
+                });
+                if recorded.is_err() {
+                    break;
+                }
+                recorded = execution.commands(compute, |encoder| {
+                    plan.surface_record_indirect_compute(encoder, &frame, &image, draw)
+                });
+                if recorded.is_err() {
+                    break;
+                }
             }
         }
         if recorded.is_ok() {

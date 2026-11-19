@@ -56,6 +56,72 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             frame,
         )
     }
+    /// Records an ordinary Forward raster pass that consumes the frame's
+    /// declared indirect draw records.
+    pub(crate) fn record_raster_indirect(
+        &self,
+        device: &Device<B>,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        let bindings = self.bindings(frame)?;
+        for (declared, (_, product)) in self.indirect.iter().zip(&frame.indirect) {
+            declared
+                .graph
+                .validate_raster_read(self.raster_pass, &bindings, product)?;
+        }
+        shared_record::record_raster_with_loads_indirect(
+            &self.record_slots(),
+            self.raster_pass,
+            &bindings,
+            encoder,
+            frame,
+            frame.frame.depth.as_ref(),
+            LoadOp::Clear(ClearColor::Float([0.0; 4])),
+            LoadOp::Clear(1.0),
+            StoreOp::Discard,
+            false,
+            device,
+        )
+    }
+    /// Records one frame-local indirect parameter copy.
+    pub(crate) fn record_indirect_upload(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.indirect.get(index).ok_or(Error::InvalidRange)?;
+        if frame.indirect.get(index).is_none() {
+            return Err(Error::InvalidRange);
+        }
+        declared
+            .graph
+            .record_upload(encoder, &self.bindings(frame)?)
+    }
+    /// Records one frame-local indirect argument producer.
+    pub(crate) fn record_indirect_compute(
+        &self,
+        device: &Device<B>,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.indirect.get(index).ok_or(Error::InvalidRange)?;
+        let (_, product) = frame.indirect.get(index).ok_or(Error::InvalidRange)?;
+        declared
+            .graph
+            .record_compute(device, encoder, &self.bindings(frame)?, product)
+    }
     pub(crate) fn record_mip(
         &self,
         index: usize,

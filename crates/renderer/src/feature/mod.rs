@@ -4,6 +4,8 @@ mod forward;
 pub use forward::{FeatureBinding, RenderFeature};
 mod deformation;
 pub use deformation::{DeferredPositionDeformer, DeformationBinding, PositionDeformation};
+mod indirect;
+pub use indirect::GpuIndirectDraw;
 
 use std::sync::{Arc, atomic::AtomicU64};
 

@@ -84,6 +84,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             declaration: declaration.graph,
             upload_pass: declaration.upload_pass,
             mip_generation: declaration.mip_generation,
+            indirect: declaration.indirect,
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
             resolve_pass: declaration.resolve_pass,

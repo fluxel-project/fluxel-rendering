@@ -1,5 +1,6 @@
 //! Private two-pass Deferred graph for the first bounded offscreen probe.
 
+use super::indirect::IndirectGraph;
 use super::{
     material_aspect, material_mip_layer, material_mips_layers, validate_resident_texture_devices,
 };
@@ -12,6 +13,7 @@ mod capture_owner_validation;
 mod capture_plan;
 mod capture_producer;
 mod capture_record;
+mod completion;
 mod declaration;
 mod declaration_validation;
 mod diagnostic;
@@ -22,6 +24,7 @@ mod forward_capture_plan;
 mod forward_capture_record;
 mod hybrid_record;
 mod imports;
+mod indirect_steps;
 mod msaa_resolve;
 mod oit_bindings;
 mod oit_declaration;
@@ -44,7 +47,9 @@ mod reverse_capture_plan;
 mod reverse_capture_record;
 mod shared_imports;
 mod surface;
+mod surface_indirect;
 mod surface_record;
+mod surface_recording;
 mod surface_validate;
 mod terminal;
 mod transparent_bindings;
@@ -108,6 +113,7 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     declaration: GraphBuilder,
     upload_pass: GraphPass,
     mip_generation: Vec<super::mip_generation::MipGenerationPass>,
+    indirect: Vec<(usize, IndirectGraph)>,
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
     resolve_pass: Option<GraphPass>,
@@ -150,6 +156,7 @@ pub(crate) struct DeferredDeclaration {
     lane: LaneId,
     upload_pass: GraphPass,
     mip_generation: Vec<super::mip_generation::MipGenerationPass>,
+    indirect: Vec<(usize, IndirectGraph)>,
     deformation_pass: Option<GraphPass>,
     geometry_pass: GraphPass,
     resolve_pass: Option<GraphPass>,

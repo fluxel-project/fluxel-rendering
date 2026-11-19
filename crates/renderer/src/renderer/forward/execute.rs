@@ -88,6 +88,18 @@ where
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
         }
+        for (_, producer) in &frame.indirect {
+            self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
+                .await?;
+        }
+        let indirect_steps = (0..frame.indirect.len())
+            .map(|index| {
+                Ok((
+                    plan.indirect_upload_step(index)?,
+                    plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let serial = self.next_serial()?;
         let mut execution = unsafe {
             self.device
@@ -106,9 +118,25 @@ where
                 });
             }
         }
+        for (index, (upload_step, compute_step)) in indirect_steps.iter().copied().enumerate() {
+            if upload.is_ok() {
+                upload = execution.commands(upload_step, |encoder| {
+                    plan.record_indirect_upload(index, encoder, &frame, &image)
+                });
+            }
+            if upload.is_ok() {
+                upload = execution.commands(compute_step, |encoder| {
+                    plan.record_indirect_compute(&self.device, index, encoder, &frame, &image)
+                });
+            }
+        }
         let raster = match upload {
             Ok(()) => execution.commands(plan.raster_step(), |encoder| {
-                plan.record_raster(encoder, &frame, &image)
+                if frame.indirect.is_empty() {
+                    plan.record_raster(encoder, &frame, &image)
+                } else {
+                    plan.record_raster_indirect(&self.device, encoder, &frame, &image)
+                }
             }),
             Err(error) => Err(error),
         };
@@ -240,6 +268,18 @@ where
             self.write_forward_upload(&environment.upload, &environment.upload_bytes)
                 .await?;
         }
+        for (_, producer) in &frame.indirect {
+            self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
+                .await?;
+        }
+        let indirect_steps = (0..frame.indirect.len())
+            .map(|index| {
+                Ok((
+                    plan.indirect_upload_step(index)?,
+                    plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let serial = self.next_serial()?;
         let mut execution = unsafe {
             self.device
@@ -257,11 +297,29 @@ where
                     execution.commands(step, |encoder| plan.record_mip(index, encoder, &frame));
             }
         }
+        for (index, (upload_step, compute_step)) in indirect_steps.iter().copied().enumerate() {
+            if upload.is_ok() {
+                failure_operation = "indirect upload recording";
+                upload = execution.commands(upload_step, |encoder| {
+                    plan.record_indirect_upload(index, encoder, &frame)
+                });
+            }
+            if upload.is_ok() {
+                failure_operation = "indirect compute recording";
+                upload = execution.commands(compute_step, |encoder| {
+                    plan.record_indirect_compute(&self.device, index, encoder, &frame)
+                });
+            }
+        }
         let raster = match upload {
             Ok(()) => {
                 failure_operation = "raster recording";
                 execution.commands(plan.raster_step(), |encoder| {
-                    plan.record_raster(encoder, &frame)
+                    if frame.indirect.is_empty() {
+                        plan.record_raster(encoder, &frame)
+                    } else {
+                        plan.record_raster_indirect(&self.device, encoder, &frame)
+                    }
                 })
             }
             Err(error) => Err(error),

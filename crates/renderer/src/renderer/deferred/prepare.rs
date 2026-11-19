@@ -424,6 +424,7 @@ where
             pbr,
             publication,
             deformation: None,
+            indirect: Vec::new(),
             resident: Arc::clone(&resident),
             resident_upload,
             frame,

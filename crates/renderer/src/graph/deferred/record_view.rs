@@ -1,6 +1,7 @@
 //! Borrowed actual owners shared by the two Deferred recording consumers.
 
 use super::*;
+use crate::renderer::indirect_producer::IndirectProduct;
 use crate::residency::{
     DeferredDeformation, ForwardResidentBuffers, ForwardResidentUpload, ForwardTexture,
     ForwardUniformUpload,
@@ -24,6 +25,7 @@ pub(super) struct DeferredRecordView<'a, B: ResourceBackend> {
     pub(super) environment: Option<&'a crate::residency::EnvironmentFrameOwner<B>>,
     pub(super) specular: Option<&'a crate::residency::SpecularEnvironmentFrameOwner<B>>,
     pub(super) deformation: Option<&'a DeferredDeformation<B>>,
+    pub(super) indirect: &'a [(usize, IndirectProduct<B>)],
     pub(super) gbuffer: &'a [ForwardTexture<B>; 3],
     pub(super) effects: Option<&'a ForwardTexture<B>>,
     /// The raster-only G-buffer source.  Lighting and every downstream depth
@@ -57,6 +59,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             environment: frame.environment.as_ref(),
             specular: frame.specular.as_ref(),
             deformation: frame.deformation.as_ref(),
+            indirect: &frame.indirect,
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
             msaa: frame.msaa.as_ref(),
@@ -81,6 +84,7 @@ impl<'a, B: ResourceBackend> DeferredRecordView<'a, B> {
             environment: frame.environment.as_ref(),
             specular: frame.specular.as_ref(),
             deformation: frame.deformation.as_ref(),
+            indirect: &frame.indirect,
             gbuffer: &frame.gbuffer,
             effects: frame.effects.as_ref(),
             msaa: frame.msaa.as_ref(),

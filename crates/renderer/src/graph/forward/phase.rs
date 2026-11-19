@@ -1,6 +1,6 @@
 //! Transaction-scoped Forward phase and access capabilities.
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use super::*;
+use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 
 /// Private state behind the public, deliberately narrow phase context.
 pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
@@ -24,6 +24,7 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) resolve_target: Option<crate::graph::definition::TextureHandle>,
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) draws: Vec<ForwardGraphDraw>,
+    pub(super) indirect: Vec<super::ForwardIndirectGraph>,
     pub(super) declared: bool,
     pub(super) output: Option<(
         GraphPass,
@@ -50,6 +51,7 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
+    pub(super) indirect: Vec<super::ForwardIndirectGraph>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
@@ -234,6 +236,12 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
         {
             return Err(());
         }
+        for indirect in &self.indirect {
+            indirect
+                .graph
+                .declare_raster_read(self.pass)
+                .map_err(|_| ())?;
+        }
         self.pass.side_effect();
         Ok((self.resolve_target.unwrap_or(self.target), self.depth))
     }
@@ -394,6 +402,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         let depth = self.depth;
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
+        let indirect = self.indirect.clone();
         let (pass, (target, depth)) = self
             .graph
             .as_deref_mut()
@@ -408,6 +417,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     declared: 0,
                     reads: ForwardReadState::new(streams, uniform, textures, draws)
                         .map_err(|_| crate::graph::definition::GraphError::InvalidRange)?,
+                    indirect,
                     environment,
                     specular_radiance,
                     specular_brdf_lut,

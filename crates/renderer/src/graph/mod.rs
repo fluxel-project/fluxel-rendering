@@ -17,6 +17,7 @@ pub(crate) use deferred::{
 mod definition;
 mod execution;
 mod forward;
+pub(crate) mod indirect;
 mod mip_generation;
 pub(crate) mod oit;
 pub(crate) mod oit_record;
@@ -53,13 +54,13 @@ fn material_aspect(desc: &fluxel_rhi::api::TextureDesc) -> fluxel_rhi::api::Text
 }
 
 fn material_mips_layers(desc: &fluxel_rhi::api::TextureDesc) -> TextureRange {
-    TextureRange::new(material_aspect(desc), 0..desc.mip_levels, 0..desc.array_layers)
+    TextureRange::new(
+        material_aspect(desc),
+        0..desc.mip_levels,
+        0..desc.array_layers,
+    )
 }
 
-fn material_mip_layer(
-    desc: &fluxel_rhi::api::TextureDesc,
-    mip: u32,
-    layer: u32,
-) -> TextureRange {
+fn material_mip_layer(desc: &fluxel_rhi::api::TextureDesc, mip: u32, layer: u32) -> TextureRange {
     TextureRange::new(material_aspect(desc), mip..mip + 1, layer..layer + 1)
 }

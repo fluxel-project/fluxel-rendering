@@ -130,6 +130,18 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 frame.frame.readback_incoming,
             ));
         }
+        if self.indirect.len() != frame.indirect.len()
+            || self
+                .indirect
+                .iter()
+                .zip(&frame.indirect)
+                .any(|(declared, (draw, _))| declared.draw != *draw)
+        {
+            return Err(Error::InvalidState);
+        }
+        for (declared, (_, product)) in self.indirect.iter().zip(&frame.indirect) {
+            buffers.extend(declared.graph.buffers(product));
+        }
         let mut textures: Vec<_> =
             self.texture_slots
                 .iter()

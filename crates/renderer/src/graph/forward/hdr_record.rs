@@ -82,6 +82,74 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         )
     }
 
+    pub(crate) fn record_hdr_raster_indirect(
+        &self,
+        device: &Device<B>,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()>
+    where
+        B: RasterBackend,
+    {
+        let bindings = self.hdr_bindings(frame, image)?;
+        for (declared, (_, product)) in self.indirect.iter().zip(&frame.indirect) {
+            declared
+                .graph
+                .validate_raster_read(self.raster_pass, &bindings, product)?;
+        }
+        shared_record::record_raster_with_loads_indirect(
+            &self.record_slots(),
+            self.raster_pass,
+            &bindings,
+            encoder,
+            frame,
+            frame.frame.depth.as_ref(),
+            LoadOp::Clear(ClearColor::Float([0.0; 4])),
+            LoadOp::Clear(1.0),
+            StoreOp::Discard,
+            false,
+            device,
+        )
+    }
+
+    pub(crate) fn record_hdr_indirect_upload(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.indirect.get(index).ok_or(Error::InvalidRange)?;
+        if frame.indirect.get(index).is_none() {
+            return Err(Error::InvalidRange);
+        }
+        declared
+            .graph
+            .record_upload(encoder, &self.hdr_bindings(frame, image)?)
+    }
+
+    pub(crate) fn record_hdr_indirect_compute(
+        &self,
+        device: &Device<B>,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.indirect.get(index).ok_or(Error::InvalidRange)?;
+        let (_, product) = frame.indirect.get(index).ok_or(Error::InvalidRange)?;
+        declared
+            .graph
+            .record_compute(device, encoder, &self.hdr_bindings(frame, image)?, product)
+    }
+
     pub(crate) fn record_hdr_offscreen_composite(
         &self,
         device: &Device<B>,

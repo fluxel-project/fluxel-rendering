@@ -38,6 +38,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 .iter()
                 .map(|generation| generation.pass),
         );
+        for (_, indirect) in &declaration.indirect {
+            expected.push(indirect.upload_pass);
+            expected.push(indirect.compute_pass);
+        }
         if let Some(pass) = declaration.deformation_pass {
             expected.push(pass);
         }
@@ -97,6 +101,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
             mip_generation: declaration.mip_generation,
+            indirect: declaration.indirect,
             deformation_pass: declaration.deformation_pass,
             geometry_pass: declaration.geometry_pass,
             resolve_pass: declaration.resolve_pass,
@@ -172,6 +177,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 }))
             || self.deformation_pass.map(|pass| pass.1)
                 != declaration.deformation_pass.map(|pass| pass.1)
+            || self.indirect.len() != declaration.indirect.len()
+            || self.indirect.iter().zip(&declaration.indirect).any(
+                |((left_draw, left), (right_draw, right))| {
+                    left_draw != right_draw
+                        || left.upload_pass.1 != right.upload_pass.1
+                        || left.compute_pass.1 != right.compute_pass.1
+                },
+            )
             || self.geometry_pass.1 != declaration.geometry_pass.1
             || self.resolve_pass.map(|pass| pass.1) != declaration.resolve_pass.map(|pass| pass.1)
             || self.lighting_pass.1 != declaration.lighting_pass.1
@@ -380,6 +393,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if self.deformation_pass.is_some() != frame.deformation.is_some() {
             return Err(Error::InvalidState);
         }
+        if self.indirect.len() != frame.indirect.len()
+            || self
+                .indirect
+                .iter()
+                .zip(&frame.indirect)
+                .any(|((draw, _), (product_draw, _))| draw != product_draw)
+        {
+            return Err(Error::InvalidState);
+        }
         if self.specular_upload_slot.is_some() != frame.specular.is_some()
             || self.specular_view_uniform_slot.is_some() != frame.specular.is_some()
             || self.specular_radiance_slot.is_some() != frame.specular.is_some()
@@ -489,95 +511,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             draw_accesses(frame, draw)?;
         }
         Ok(())
-    }
-
-    pub(crate) fn completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>>
-    where
-        B: ExecutionBackend,
-    {
-        let mut expected = vec![self.upload_step()];
-        expected.extend(self.mip_generation_steps().map(|(step, _)| step));
-        if let Some(step) = self.deformation_step() {
-            expected.push(step);
-        }
-        expected.push(self.geometry_step());
-        if let Some(step) = self.resolve_step() {
-            expected.push(step);
-        }
-        expected.push(self.lighting_step());
-        expected.extend(self.composition_passes.iter().map(|pass| StepId {
-            plan: self.id,
-            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
-        }));
-        if self.composite_pass.is_some() {
-            expected.push(self.composite_step());
-        }
-        if matches!(self.output, DeferredOutputPlan::Offscreen { .. }) {
-            expected.push(self.readback_step());
-        }
-        let facts = outcome.facts();
-        if facts.status != ExecutionStatus::Accepted || facts.accepted != Some(&expected) {
-            return Err(Error::InvalidState);
-        }
-        facts
-            .checkpoints
-            .and_then(|points| {
-                points.iter().find(|point| {
-                    point.point.device() == self.id.device
-                        && point
-                            .covers
-                            .lane_frontiers
-                            .iter()
-                            .any(|&(lane, step)| lane == self.lane && step == self.readback_step())
-                })
-            })
-            .map(|point| point.point.clone())
-            .ok_or(Error::InvalidState)
-    }
-
-    pub(crate) fn surface_completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>>
-    where
-        B: ExecutionBackend,
-    {
-        let present = self.present_step()?;
-        let mut expected = vec![self.upload_step()];
-        expected.extend(self.mip_generation_steps().map(|(step, _)| step));
-        if let Some(step) = self.deformation_step() {
-            expected.push(step);
-        }
-        expected.push(self.geometry_step());
-        if let Some(step) = self.resolve_step() {
-            expected.push(step);
-        }
-        expected.push(self.lighting_step());
-        expected.extend(self.composition_passes.iter().map(|pass| StepId {
-            plan: self.id,
-            index: u32::try_from(pass.1).expect("graph pass index fits StepId"),
-        }));
-        expected.extend([self.composite_step(), present]);
-        let facts = outcome.facts();
-        if facts.status != ExecutionStatus::Accepted
-            || facts.accepted != Some(&expected)
-            || !facts.presents.is_some_and(|items| {
-                items.len() == 1 && items[0].accepted && items[0].step == Some(present)
-            })
-        {
-            return Err(Error::InvalidState);
-        }
-        facts
-            .checkpoints
-            .and_then(|points| {
-                points.iter().find(|point| {
-                    point.point.device() == self.id.device
-                        && point
-                            .covers
-                            .lane_frontiers
-                            .iter()
-                            .any(|&(lane, step)| lane == self.lane && step == present)
-                })
-            })
-            .map(|point| point.point.clone())
-            .ok_or(Error::InvalidState)
     }
 }
 

@@ -141,6 +141,7 @@ pub(super) fn blank_surface_frame(
         environment: None,
         specular: None,
         draws: Vec::new(),
+        indirect: Vec::new(),
         draw_batches: Vec::new(),
         extent: [1, 1],
         color_format: TextureFormat::Rgba8Unorm,

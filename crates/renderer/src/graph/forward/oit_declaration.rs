@@ -208,6 +208,7 @@ where
             lane: prefix.lane,
             upload_pass: prefix.upload_pass,
             mip_passes: prefix.mip_passes,
+            indirect: Vec::new(),
             raster_pass,
             readback_pass,
             resident_upload_slot: prefix.resident_upload.into(),

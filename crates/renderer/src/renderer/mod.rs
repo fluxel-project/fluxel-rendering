@@ -11,6 +11,7 @@ mod copy;
 mod deferred;
 mod error;
 mod forward;
+pub(crate) mod indirect_producer;
 mod lighting;
 mod output_processing;
 mod pending;

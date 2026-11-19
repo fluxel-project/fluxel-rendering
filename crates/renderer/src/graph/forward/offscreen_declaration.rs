@@ -27,6 +27,7 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) lane: LaneId,
     pub(super) upload_pass: GraphPass,
     pub(super) mip_passes: Vec<super::super::mip_generation::MipGenerationPass>,
+    pub(super) indirect: Vec<super::ForwardIndirectGraph>,
     pub(super) raster_pass: GraphPass,
     pub(super) readback_pass: GraphPass,
     pub(super) resident_upload_slot: BufferSlot,
@@ -95,20 +96,14 @@ where
 {
     validate_resident_texture_devices(&frame.resident, device.id())?;
     let spec = ForwardGraphSpec::from_frame(frame)?;
-    declare_offscreen_spec_with(device, &spec, expected, contribute)
-}
-
-pub(super) fn declare_offscreen_spec_with<B, F>(
-    device: &Device<B>,
-    spec: &ForwardGraphSpec,
-    expected: FrameTopology,
-    contribute: F,
-) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
-where
-    B: ResourceBackend,
-    F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
-{
-    declare_offscreen_with_output(device, spec, expected, ForwardOutput::Readback, contribute)
+    declare_offscreen_with_output(
+        device,
+        &spec,
+        expected,
+        ForwardOutput::Readback,
+        &frame.indirect,
+        contribute,
+    )
 }
 
 fn declare_offscreen_with_output<B, F>(
@@ -116,6 +111,10 @@ fn declare_offscreen_with_output<B, F>(
     spec: &ForwardGraphSpec,
     expected: FrameTopology,
     output: ForwardOutput<'_>,
+    indirect_products: &[(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )],
     contribute: F,
 ) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
 where
@@ -145,6 +144,7 @@ where
         multisample_color,
     } = super::offscreen_prefix::declare_prefix(device, spec, expected)?;
     let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
+    let indirect = super::declare_indirect(&mut graph, indirect_products)?;
     let (raster_pass, target, _) = {
         let mut driver = ForwardPhaseDriver {
             graph: Some(&mut graph),
@@ -166,6 +166,7 @@ where
             resolve_target: multisample_color.map(|_| target),
             depth,
             draws: spec.draws.clone(),
+            indirect: indirect.clone(),
             declared: false,
             output: None,
         };
@@ -229,6 +230,7 @@ where
         lane,
         upload_pass,
         mip_passes,
+        indirect,
         raster_pass,
         readback_pass,
         resident_upload_slot: BufferSlot::from(resident_upload),
@@ -313,7 +315,7 @@ where
             }
         }
     };
-    declare_offscreen_with_output(device, &spec, expected, output, contribute)
+    declare_offscreen_with_output(device, &spec, expected, output, &frame.indirect, contribute)
 }
 
 fn declare_readback(

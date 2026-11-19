@@ -21,7 +21,7 @@ mod residency;
 pub use feature::{
     CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, DeferredPositionDeformer,
     DeformationBinding, FeatureBinding, FeatureContext, FeatureError, FeatureHandle, FeatureIssuer,
-    PositionDeformation, RenderFeature, TypedFeatureSnapshot, TypedFeatureStorage,
+    GpuIndirectDraw, PositionDeformation, RenderFeature, TypedFeatureSnapshot, TypedFeatureStorage,
     validate_context,
 };
 pub use pipeline::{

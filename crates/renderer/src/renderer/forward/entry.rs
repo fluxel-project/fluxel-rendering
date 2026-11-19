@@ -1,5 +1,6 @@
 //! Built-in Scene selection for the shared Forward execution path.
 use super::*;
+use crate::{GpuIndirectDraw, renderer::indirect_producer::plan_draws};
 use std::time::Instant;
 
 impl<B> Renderer<B>
@@ -25,16 +26,8 @@ where
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
     ) -> std::result::Result<super::Submission, RendererError> {
-        self.submit_forward_target(
-            pipeline,
-            snapshot,
-            view,
-            visibility,
-            assets,
-            None,
-            TextureFormat::Rgba8Unorm,
-        )
-        .await
+        self.submit_forward_target(pipeline, snapshot, view, visibility, assets, &[], None)
+            .await
     }
 
     /// Submits Forward work to an acquired surface image.
@@ -51,22 +44,55 @@ where
         assets: &crate::ForwardAssets,
         image: SurfaceImage<B>,
     ) -> std::result::Result<super::Submission, RendererError> {
-        if image.device() != self.device.id() {
-            return Err(Error::WrongDevice.into());
-        }
-        if !image.is_current() {
-            return Err(Error::SurfaceOutdated.into());
-        }
-        let format = image.format();
-        let extent = image.extent();
         self.submit_forward_target(
             pipeline,
             snapshot,
             view,
             visibility,
             assets,
-            Some((image, extent)),
-            format,
+            &[],
+            Some(image),
+        )
+        .await
+    }
+
+    /// Produces instance counts on the GPU for selected Forward scene draws.
+    #[allow(clippy::too_many_arguments)] // Indirect requests are independent of the scene assets.
+    pub async fn submit_forward_with_indirect<P: crate::FramePipeline<crate::ForwardResources>>(
+        &mut self,
+        pipeline: &P,
+        snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        view: crate::RenderViewId,
+        visibility: crate::RenderBounds,
+        assets: &crate::ForwardAssets,
+        requests: &[GpuIndirectDraw],
+    ) -> std::result::Result<super::Submission, RendererError> {
+        self.submit_forward_target(pipeline, snapshot, view, visibility, assets, requests, None)
+            .await
+    }
+
+    /// Produces instance counts for Forward scene draws and presents the frame.
+    #[allow(clippy::too_many_arguments)] // The caller owns the surface lease and indirect requests.
+    pub async fn submit_forward_surface_with_indirect<
+        P: crate::FramePipeline<crate::ForwardResources>,
+    >(
+        &mut self,
+        pipeline: &P,
+        snapshot: crate::FrameSnapshot<crate::ForwardResources>,
+        view: crate::RenderViewId,
+        visibility: crate::RenderBounds,
+        assets: &crate::ForwardAssets,
+        requests: &[GpuIndirectDraw],
+        image: SurfaceImage<B>,
+    ) -> std::result::Result<super::Submission, RendererError> {
+        self.submit_forward_target(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            requests,
+            Some(image),
         )
         .await
     }
@@ -79,9 +105,17 @@ where
         view: crate::RenderViewId,
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
-        surface: Option<(SurfaceImage<B>, [u32; 2])>,
-        color_format: TextureFormat,
+        indirect_draws: &[GpuIndirectDraw],
+        surface: Option<SurfaceImage<B>>,
     ) -> std::result::Result<super::Submission, RendererError> {
+        if let Some(image) = surface.as_ref() {
+            if image.device() != self.device.id() {
+                return Err(Error::WrongDevice.into());
+            }
+            if !image.is_current() {
+                return Err(Error::SurfaceOutdated.into());
+            }
+        }
         self.ensure_open()?;
         self.free_slot().ok_or(RendererError::Backpressure)?;
         let preparation_started = Instant::now();
@@ -92,10 +126,11 @@ where
             .validate_for(&snapshot, view)
             .map_err(RendererError::ForwardPipeline)?;
         let extent = selected.view_record().extent;
-        if let Some((_, surface_extent)) = surface.as_ref() {
-            if extent != *surface_extent || extent.contains(&0) {
-                return Err(Error::InvalidRange.into());
-            }
+        if surface
+            .as_ref()
+            .is_some_and(|image| extent != image.extent() || extent.contains(&0))
+        {
+            return Err(Error::InvalidRange.into());
         }
         let depth_mode = pipeline.forward_depth_mode(&selected);
         let topology = pipeline
@@ -128,7 +163,11 @@ where
                 .iter()
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
-        self.submit_prepared_forward(
+        let indirect = plan_draws(&self.device, &snapshot, &prepared_inputs, indirect_draws)?;
+        let color_format = surface
+            .as_ref()
+            .map_or(TextureFormat::Rgba8Unorm, SurfaceImage::format);
+        self.submit_prepared_forward_with_indirect(
             snapshot.clone(),
             prepared_inputs,
             extent,
@@ -136,10 +175,11 @@ where
             depth_mode,
             self.forward_sample_count(),
             assets,
-            surface,
+            surface.map(|image| (image, extent)),
             color_format,
             preparation_started,
             environment_snapshot,
+            indirect,
             |context| pipeline.contribute(&selected, context),
         )
         .await

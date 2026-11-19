@@ -3,6 +3,94 @@
 use super::*;
 
 impl<B: ResourceBackend> DeferredPlan<B> {
+    /// Records the upload copy for one retained indirect producer.
+    pub(crate) fn record_indirect_upload(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        draw: usize,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        self.record_body_indirect_upload(
+            encoder,
+            super::record_view::DeferredRecordView::offscreen(frame),
+            draw,
+        )
+    }
+
+    pub(super) fn record_body_indirect_upload(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        draw: usize,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let graph = self
+            .indirect
+            .iter()
+            .find(|(index, _)| *index == draw)
+            .map(|(_, graph)| graph)
+            .ok_or(Error::InvalidRange)?;
+        let product = frame
+            .indirect
+            .iter()
+            .find(|(index, _)| *index == draw)
+            .map(|(_, product)| product)
+            .ok_or(Error::InvalidRange)?;
+        let bindings = self.record_bindings(&frame)?;
+        graph.record_upload(encoder, &bindings)?;
+        if product.upload.buffer.device() != self.id.device {
+            return Err(Error::WrongDevice);
+        }
+        Ok(())
+    }
+
+    /// Records the compute pass producing one indirect argument record.
+    pub(crate) fn record_indirect_compute(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: &DeferredFrame<B>,
+        draw: usize,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        self.record_body_indirect_compute(
+            encoder,
+            super::record_view::DeferredRecordView::offscreen(frame),
+            draw,
+        )
+    }
+
+    pub(super) fn record_body_indirect_compute(
+        &self,
+        encoder: &mut CommandEncoder<B>,
+        frame: super::record_view::DeferredRecordView<'_, B>,
+        draw: usize,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let graph = self
+            .indirect
+            .iter()
+            .find(|(index, _)| *index == draw)
+            .map(|(_, graph)| graph)
+            .ok_or(Error::InvalidRange)?;
+        let product = frame
+            .indirect
+            .iter()
+            .find(|(index, _)| *index == draw)
+            .map(|(_, product)| product)
+            .ok_or(Error::InvalidRange)?;
+        let bindings = self.record_bindings(&frame)?;
+        graph.record_compute(&self.device, encoder, &bindings, product)
+    }
+
     pub(crate) fn record_mip_generation(
         &self,
         encoder: &mut CommandEncoder<B>,
@@ -166,6 +254,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
     {
         let pass = bindings.pass(self.geometry_pass)?;
         let draw_data = frame.draw_graph_data()?;
+        if self.indirect.len() != frame.indirect.len() {
+            return Err(Error::InvalidState);
+        }
+        for ((draw, graph), (product_draw, product)) in self.indirect.iter().zip(frame.indirect) {
+            if draw != product_draw {
+                return Err(Error::InvalidState);
+            }
+            graph.validate_raster_read(self.geometry_pass, bindings, product)?;
+        }
         if let (Some(slots), Some(_)) = (self.deformation_slots, &frame.deformation) {
             let range = draw_data
                 .first()
@@ -285,7 +382,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             secondary_inheritance: None,
         })?;
         configure_raster(&mut raster, frame.extent)?;
-        for draw in frame.draws {
+        for (draw_index, draw) in frame.draws.iter().enumerate() {
+            let indirect = frame
+                .indirect
+                .iter()
+                .find(|(index, _)| *index == draw_index)
+                .map(|(_, product)| product);
             // The preliminary pipeline has the same resource layout and
             // footprint as the primary pipeline. Record it first with the
             // same concrete bindings so the declaration above remains the
@@ -336,7 +438,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         )?;
                     }
                 }
-                raster.draw(draw.vertices.clone(), draw.instances.clone())?;
+                if let Some(product) = indirect {
+                    super::super::indirect::draw(&self.device, &mut raster, product)?;
+                } else {
+                    raster.draw(draw.vertices.clone(), draw.instances.clone())?;
+                }
             }
         }
         raster.finish()

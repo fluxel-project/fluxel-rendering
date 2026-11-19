@@ -39,6 +39,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             || self.lane != declaration.lane
             || self.upload_pass.1 != declaration.upload_pass.1
             || !same_mip_passes(&self.mip_passes, &declaration.mip_passes)
+            || !same_indirect(&self.indirect, &declaration.indirect)
             || self.raster_pass.1 != declaration.raster_pass.1
             || self.readback_pass.1 != declaration.readback_pass.1
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
@@ -99,9 +100,13 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 4);
+        let mut expected =
+            Vec::with_capacity(declaration.mip_passes.len() + declaration.indirect.len() * 2 + 5);
         expected.push(declaration.upload_pass);
         expected.extend(declaration.mip_passes.iter().map(|pass| pass.pass));
+        for item in &declaration.indirect {
+            expected.extend([item.graph.upload_pass, item.graph.compute_pass]);
+        }
         expected.push(declaration.raster_pass);
         if let Some(product) = oit.as_ref() {
             expected.extend(product.passes());
@@ -167,6 +172,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
             mip_passes: declaration.mip_passes,
+            indirect: declaration.indirect,
             raster_pass: declaration.raster_pass,
             readback_pass: declaration.readback_pass,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -209,10 +215,28 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         }
     }
     pub(crate) fn raster_step(&self) -> StepId {
-        StepId {
-            plan: self.id,
-            index: 1 + u32::try_from(self.mip_passes.len()).expect("mip pass count fits u32"),
-        }
+        self.step_for(self.raster_pass)
+            .expect("compiled Forward raster pass belongs to its plan")
+    }
+
+    pub(crate) fn indirect_upload_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.indirect
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .upload_pass,
+        )
+    }
+
+    pub(crate) fn indirect_compute_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.indirect
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .compute_pass,
+        )
     }
     pub(crate) fn readback_step(&self) -> StepId {
         StepId {
@@ -345,6 +369,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             specular.validate_for_sampling(self.id.device)?;
         }
         validate_forward_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
+        crate::residency::validate_indirect_draws(&frame.draws, &frame.indirect)?;
         validate_uploads(frame)?;
         validate_batches(frame)?;
         for draw in &frame.draws {

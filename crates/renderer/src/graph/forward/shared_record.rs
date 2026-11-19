@@ -5,7 +5,7 @@ use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 mod shared_raster;
 pub(super) use shared_raster::{
     RasterColorSelection, RasterDepthSelection, RasterSelection, bind_and_draw,
-    record_raster_selection,
+    bind_and_draw_indirect, record_raster_selection, record_raster_selection_with_indirect,
 };
 
 pub(super) struct RecordSlots<'a> {
@@ -436,6 +436,70 @@ pub(super) fn record_raster_with_loads<B: ResourceBackend>(
 where
     B: RasterBackend,
 {
+    record_raster_with_loads_inner(
+        slots,
+        pass_id,
+        bindings,
+        encoder,
+        frame,
+        depth_owner,
+        color_load,
+        depth_load,
+        depth_store,
+        depth_read_only,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_raster_with_loads_indirect<B: ResourceBackend>(
+    slots: &RecordSlots<'_>,
+    pass_id: GraphPass,
+    bindings: &FrameBindings<'_, B>,
+    encoder: &mut CommandEncoder<B>,
+    frame: &ForwardFrame<B>,
+    depth_owner: Option<&crate::residency::ForwardDepthAttachment<B>>,
+    color_load: LoadOp<ClearColor>,
+    depth_load: LoadOp<f32>,
+    depth_store: StoreOp,
+    depth_read_only: bool,
+    device: &fluxel_rhi::api::Device<B>,
+) -> Result<()>
+where
+    B: RasterBackend,
+{
+    record_raster_with_loads_inner(
+        slots,
+        pass_id,
+        bindings,
+        encoder,
+        frame,
+        depth_owner,
+        color_load,
+        depth_load,
+        depth_store,
+        depth_read_only,
+        Some(device),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_raster_with_loads_inner<B: ResourceBackend>(
+    slots: &RecordSlots<'_>,
+    pass_id: GraphPass,
+    bindings: &FrameBindings<'_, B>,
+    encoder: &mut CommandEncoder<B>,
+    frame: &ForwardFrame<B>,
+    depth_owner: Option<&crate::residency::ForwardDepthAttachment<B>>,
+    color_load: LoadOp<ClearColor>,
+    depth_load: LoadOp<f32>,
+    depth_store: StoreOp,
+    depth_read_only: bool,
+    device: Option<&fluxel_rhi::api::Device<B>>,
+) -> Result<()>
+where
+    B: RasterBackend,
+{
     validate_forward_topology(slots.topology, frame.draws.len(), frame.draw_batches.len())?;
     validate_batches(frame)?;
     if depth_owner.is_some_and(|owner| owner.device != slots.device) {
@@ -455,7 +519,7 @@ where
         }),
         _ => return Err(Error::InvalidState),
     };
-    record_raster_selection(
+    record_raster_selection_with_indirect(
         slots,
         pass_id,
         bindings,
@@ -473,6 +537,7 @@ where
             },
             depth,
         },
+        device,
     )
 }
 

@@ -122,6 +122,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 }
             }
         }
+        if self.indirect.len() != frame.indirect.len() {
+            return Err(Error::InvalidState);
+        }
+        for ((draw, graph), (product_draw, product)) in self.indirect.iter().zip(&frame.indirect) {
+            if draw != product_draw {
+                return Err(Error::InvalidState);
+            }
+            buffers.extend(graph.buffers(product));
+        }
         let textures =
             self.texture_slots
                 .iter()

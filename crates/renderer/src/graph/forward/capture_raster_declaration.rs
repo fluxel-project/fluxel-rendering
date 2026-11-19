@@ -41,6 +41,7 @@ where
         target: handles.target,
         resolve_target: None,
         draws: spec.draws.clone(),
+        indirect: Vec::new(),
         declared: false,
         output: None,
     };

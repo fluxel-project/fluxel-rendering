@@ -82,6 +82,7 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) msaa_effects: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
+    pub(super) indirect: Vec<(usize, super::super::indirect::IndirectGraph)>,
     pub(super) deformation_pass: Option<(GraphPass, super::super::definition::BufferHandle)>,
     pub(super) geometry: Option<(GraphPass, [super::super::definition::TextureHandle; 3])>,
     pub(super) resolve: Option<GraphPass>,
@@ -190,6 +191,11 @@ impl DeferredPhaseDriver<'_> {
         let (pass, output) = self
             .graph
             .add_pass("deferred-geometry", |pass| {
+                for (_, indirect) in &self.indirect {
+                    indirect
+                        .declare_raster_read(pass)
+                        .map_err(|_| GraphError::InvalidRange)?;
+                }
                 let mut geometry = DeferredGeometryPass {
                     pass,
                     upload,

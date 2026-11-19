@@ -342,6 +342,22 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             }
         }
 
+        let indirect = frame
+            .indirect
+            .iter()
+            .map(|(draw_index, product)| {
+                let draw = frame
+                    .draws
+                    .get(*draw_index)
+                    .ok_or(GraphError::InvalidRange)?;
+                product
+                    .validate_draw(&draw.vertices, &draw.instances)
+                    .map_err(|_| GraphError::InvalidRange)?;
+                super::super::indirect::IndirectGraph::declare(&mut graph, product)
+                    .map(|graph| (*draw_index, graph))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| Error::InvalidState)?;
         let draws = frame.draw_graph_data()?;
         let (
             deformation_pass,
@@ -371,6 +387,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 msaa_effects,
                 target: scene_color,
                 deformation,
+                indirect: indirect.clone(),
                 deformation_pass: None,
                 geometry: None,
                 resolve: None,
@@ -386,6 +403,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             lane,
             upload_pass,
             mip_generation,
+            indirect,
             deformation_pass,
             geometry_pass,
             resolve_pass,

@@ -165,6 +165,22 @@ The built-in opaque and alpha-mask geometry paths use the instance stream.
 Transparent sorting, transmission, capture receivers, and the existing
 deformation override require individual or separately owned geometry inputs.
 
+### GPU-generated draw arguments
+
+A scene submission can associate a GPU count function with a selected scene
+record. The function receives immutable per-submission parameters and the
+prepared instance capacity. Renderer writes the bounded count into Babylon
+WebGPU's single-record indirect layout, alongside the prepared vertex count,
+first vertex, and zero first instance. Geometry binding and Graph read ranges
+retain the full prepared capacity.
+
+The actual material Graph orders a uniform upload, compute storage write, and
+indirect raster read of the same argument allocation. Recording issues the
+draw after binding the ordinary material pipeline, groups, and vertex streams.
+The frame retains the compute objects and buffers through the covering
+completion. Admission checks the scene identity, logical Shader interface,
+and actual RHI capabilities and buffer descriptors before realization.
+
 ### Per-texture UV coordinates
 
 Forward and Deferred PBR preparation specialize the selected material template

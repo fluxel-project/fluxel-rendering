@@ -13,6 +13,7 @@ pub(crate) struct SurfaceForwardDeclaration {
     pub(super) lane: LaneId,
     pub(super) upload_pass: GraphPass,
     pub(super) mip_passes: Vec<super::super::mip_generation::MipGenerationPass>,
+    pub(super) indirect: Vec<super::ForwardIndirectGraph>,
     pub(super) raster_pass: GraphPass,
     pub(super) resident_upload_slot: BufferSlot,
     pub(super) frame_upload_slot: BufferSlot,
@@ -53,6 +54,7 @@ where
         return Err(Error::InvalidRange.into());
     }
     validate_surface_topology(expected, frame.draws.len(), frame.draw_batches.len())?;
+    crate::residency::validate_indirect_draws(&frame.draws, &frame.indirect)?;
     validate_surface_depth(frame)?;
     validate_depth_topology(expected, frame.frame.depth.is_some())?;
     validate_surface_uploads(frame)?;
@@ -410,6 +412,7 @@ where
         }
     }
     let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
+    let indirect = super::declare_indirect(&mut graph, &frame.indirect)?;
     let raster_pass = {
         let draws = frame
             .draws
@@ -452,6 +455,7 @@ where
             resolve_target: None,
             depth,
             draws,
+            indirect: indirect.clone(),
             declared: false,
             output: None,
         };
@@ -467,6 +471,7 @@ where
         lane,
         upload_pass,
         mip_passes,
+        indirect,
         raster_pass,
         resident_upload_slot: BufferSlot::from(resident_upload),
         frame_upload_slot: BufferSlot::from(frame_upload),

@@ -308,6 +308,7 @@ where
             pbr,
             publication,
             deformation: None,
+            indirect: Vec::new(),
             resident,
             resident_upload,
             frame,

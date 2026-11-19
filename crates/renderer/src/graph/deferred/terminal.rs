@@ -99,6 +99,7 @@ pub(super) fn declare_terminal(
         lane: prefix.lane,
         upload_pass: prefix.upload_pass,
         mip_generation: prefix.mip_generation,
+        indirect: prefix.indirect,
         deformation_pass: prefix.deformation_pass,
         geometry_pass: prefix.geometry_pass,
         resolve_pass: prefix.resolve_pass,

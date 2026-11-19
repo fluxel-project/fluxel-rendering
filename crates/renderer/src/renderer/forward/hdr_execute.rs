@@ -103,6 +103,18 @@ where
             self.write_forward_upload(&owner.upload, &owner.upload_bytes)
                 .await?;
         }
+        for (_, producer) in &frame.indirect {
+            self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
+                .await?;
+        }
+        let indirect_steps = (0..frame.indirect.len())
+            .map(|index| {
+                Ok((
+                    plan.indirect_upload_step(index)?,
+                    plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let offscreen_composite = if surface.is_none() {
             Some(
                 self.color_composite_from_target(
@@ -152,9 +164,25 @@ where
                 });
             }
         }
+        for (index, (upload_step, compute_step)) in indirect_steps.iter().copied().enumerate() {
+            if recorded.is_ok() {
+                recorded = execution.commands(upload_step, |encoder| {
+                    plan.record_hdr_indirect_upload(index, encoder, &frame, image)
+                });
+            }
+            if recorded.is_ok() {
+                recorded = execution.commands(compute_step, |encoder| {
+                    plan.record_hdr_indirect_compute(&self.device, index, encoder, &frame, image)
+                });
+            }
+        }
         if recorded.is_ok() {
             recorded = execution.commands(plan.raster_step(), |encoder| {
-                plan.record_hdr_raster(encoder, &frame, image)
+                if frame.indirect.is_empty() {
+                    plan.record_hdr_raster(encoder, &frame, image)
+                } else {
+                    plan.record_hdr_raster_indirect(&self.device, encoder, &frame, image)
+                }
             });
         }
         let mut ticket = None;

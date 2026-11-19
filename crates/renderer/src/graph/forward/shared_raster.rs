@@ -37,6 +37,20 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
     frame: &ForwardFrame<B>,
     selection: RasterSelection<'_, B>,
 ) -> Result<()> {
+    record_raster_selection_with_indirect(slots, pass_id, bindings, encoder, frame, selection, None)
+}
+
+pub(in crate::graph::forward) fn record_raster_selection_with_indirect<
+    B: RasterBackend + ResourceBackend,
+>(
+    slots: &RecordSlots<'_>,
+    pass_id: GraphPass,
+    bindings: &FrameBindings<'_, B>,
+    encoder: &mut CommandEncoder<B>,
+    frame: &ForwardFrame<B>,
+    selection: RasterSelection<'_, B>,
+    device: Option<&fluxel_rhi::api::Device<B>>,
+) -> Result<()> {
     if selection.draws.start > selection.draws.end || selection.draws.end > frame.draws.len() {
         return Err(Error::InvalidRange);
     }
@@ -250,20 +264,42 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
         height: frame.extent[1],
     })?;
     let mut bound_batch = None;
-    for draw in &frame.draws[selection.draws] {
+    for (draw_offset, draw) in frame.draws[selection.draws.clone()].iter().enumerate() {
+        let draw_index = selection.draws.start + draw_offset;
         if bound_batch != Some(draw.batch) {
             raster.set_pipeline(&draw.pipeline)?;
             bound_batch = Some(draw.batch);
         }
         if let Some(preliminary) = draw.preliminary_pipeline.as_ref() {
             raster.set_pipeline(preliminary)?;
-            bind_and_draw(&mut raster, &frame.resident, draw)?;
+            if let Some(product) = crate::residency::indirect_for_draw(&frame.indirect, draw_index)
+            {
+                bind_and_draw_indirect(
+                    device.ok_or(Error::InvalidState)?,
+                    &mut raster,
+                    &frame.resident,
+                    draw,
+                    product,
+                )?;
+            } else {
+                bind_and_draw(&mut raster, &frame.resident, draw)?;
+            }
             // Do not rely on backend state surviving a pipeline switch. The
             // main pass must re-establish its complete draw state.
             raster.set_pipeline(&draw.pipeline)?;
             bound_batch = Some(draw.batch);
         }
-        bind_and_draw(&mut raster, &frame.resident, draw)?;
+        if let Some(product) = crate::residency::indirect_for_draw(&frame.indirect, draw_index) {
+            bind_and_draw_indirect(
+                device.ok_or(Error::InvalidState)?,
+                &mut raster,
+                &frame.resident,
+                draw,
+                product,
+            )?;
+        } else {
+            bind_and_draw(&mut raster, &frame.resident, draw)?;
+        }
     }
     raster.finish()
 }
@@ -289,6 +325,34 @@ pub(in crate::graph::forward) fn bind_and_draw<B: RasterBackend + ResourceBacken
         )?;
     }
     raster.draw(draw.vertices.clone(), draw.instances.clone())
+}
+
+/// Binds one material draw and consumes its renderer-owned GPU indirect
+/// command. The Graph declaration validates the argument owner and transition
+/// before this function is reached.
+pub(in crate::graph::forward) fn bind_and_draw_indirect<B: RasterBackend + ResourceBackend>(
+    device: &fluxel_rhi::api::Device<B>,
+    raster: &mut fluxel_rhi::api::RasterPass<'_, B>,
+    resident: &crate::residency::ForwardResidentBuffers<B>,
+    draw: &crate::residency::ForwardDraw<B>,
+    product: &crate::renderer::indirect_producer::IndirectProduct<B>,
+) -> Result<()> {
+    for group in &draw.bind_groups {
+        raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+    }
+    for (slot, (stream, range)) in draw
+        .vertex_streams
+        .iter()
+        .zip(&draw.vertex_ranges)
+        .enumerate()
+    {
+        raster.set_vertex_buffer(
+            u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
+            &resident.streams[*stream].buffer,
+            range.clone(),
+        )?;
+    }
+    crate::graph::indirect::draw(device, raster, product)
 }
 
 fn depth_read_uses() -> TextureAccessContract {

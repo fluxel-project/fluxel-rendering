@@ -58,6 +58,12 @@ pub enum RendererError {
     DeferredFeature(crate::FeatureError),
     /// External GPU deformation source failed logical composition or reflection.
     DeformationShader(fluxel_shader::ShaderError),
+    /// A GPU indirect draw's count function failed shader composition.
+    IndirectShader(fluxel_shader::ShaderError),
+    /// A GPU indirect draw refers to a foreign or stale scene record.
+    IndirectScene(crate::SceneError),
+    /// More than one GPU count producer was assigned to this scene record.
+    DuplicateIndirectDraw(crate::RenderId),
     /// A Forward device operation failed; the original RHI error is preserved.
     ForwardOperation {
         /// The device operation being performed.
@@ -137,6 +143,11 @@ impl fmt::Display for RendererError {
             Self::DeferredPipeline(error) => error.fmt(formatter),
             Self::DeferredFeature(error) => error.fmt(formatter),
             Self::DeformationShader(error) => error.fmt(formatter),
+            Self::IndirectShader(error) => error.fmt(formatter),
+            Self::IndirectScene(error) => error.fmt(formatter),
+            Self::DuplicateIndirectDraw(draw) => {
+                write!(formatter, "multiple GPU count producers for {draw:?}")
+            }
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")
             }

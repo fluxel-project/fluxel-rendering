@@ -150,6 +150,18 @@ pub(super) fn validate_surface_inputs<B: ResourceBackend>(
         }
         validate_deformation(device, &frame.draws[0], deformation)?;
     }
+    for (draw_index, product) in &frame.indirect {
+        let draw = frame.draws.get(*draw_index).ok_or(Error::InvalidRange)?;
+        product.validate_draw(&draw.vertices, &draw.instances)?;
+        if product.upload.buffer.device() != device.id()
+            || product.parameters.buffer.device() != device.id()
+            || product.arguments.buffer.device() != device.id()
+            || product.pipeline.device() != device.id()
+            || product.group.device() != device.id()
+        {
+            return Err(Error::WrongDevice);
+        }
+    }
     for draw in &frame.draws {
         validate_draw_uniform_ranges(
             draw,

@@ -1,11 +1,12 @@
 //! Concrete pre-recording checks for the offscreen Deferred frame.
 
 use super::{
+    DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
     declaration_validation::{
         matches_final_target_template, matches_gbuffer_template, validate_deformation,
         validate_draw_uniforms, validate_uploads,
     },
-    draw_accesses, DeferredFrame, Device, Error, ResourceBackend, Result, TextureFormat,
+    draw_accesses,
 };
 
 pub(super) fn validate_frame_inputs<B: ResourceBackend>(
@@ -106,6 +107,18 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
             return Err(Error::InvalidState);
         }
         validate_deformation(device, &frame.draws[0], deformation)?;
+    }
+    for (draw_index, product) in &frame.indirect {
+        let draw = frame.draws.get(*draw_index).ok_or(Error::InvalidRange)?;
+        product.validate_draw(&draw.vertices, &draw.instances)?;
+        if product.upload.buffer.device() != device.id()
+            || product.parameters.buffer.device() != device.id()
+            || product.arguments.buffer.device() != device.id()
+            || product.pipeline.device() != device.id()
+            || product.group.device() != device.id()
+        {
+            return Err(Error::WrongDevice);
+        }
     }
     for (texture, format) in frame.gbuffer.iter().zip([
         crate::residency::deferred_albedo_format(frame.pbr),

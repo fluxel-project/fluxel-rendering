@@ -20,8 +20,8 @@ mod capture_oit_terminal_record;
 pub(crate) use capture_oit_plan::CaptureOitPlan;
 mod capture_plan;
 mod capture_receiver;
-mod capture_refraction_mips;
 mod capture_record;
+mod capture_refraction_mips;
 mod capture_specular_bindings;
 mod capture_surface_declaration;
 mod capture_surface_plan;
@@ -59,6 +59,7 @@ mod read_scope;
 mod shared_record;
 mod spec;
 mod surface_plan;
+mod surface_raster_record;
 mod surface_record;
 mod validation;
 use access_contracts::*;
@@ -119,6 +120,34 @@ use offscreen_declaration::{
     declare_offscreen_with,
 };
 
+/// One indirect record bound to its actual Forward draw and Graph passes.
+#[derive(Clone, Copy)]
+pub(super) struct ForwardIndirectGraph {
+    pub(super) draw: usize,
+    pub(super) graph: crate::graph::indirect::IndirectGraph,
+}
+
+/// Declares all frame-local indirect producers. Their raster reads establish
+/// the producer-to-consumer dependency on the actual ordinary phase.
+pub(super) fn declare_indirect<B: ResourceBackend>(
+    graph: &mut GraphBuilder,
+    products: &[(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )],
+) -> std::result::Result<Vec<ForwardIndirectGraph>, ForwardPlanBuildError> {
+    let mut declared = Vec::with_capacity(products.len());
+    for (draw, product) in products {
+        let record = crate::graph::indirect::IndirectGraph::declare(graph, product)
+            .map_err(|_| Error::InvalidState)?;
+        declared.push(ForwardIndirectGraph {
+            draw: *draw,
+            graph: record,
+        });
+    }
+    Ok(declared)
+}
+
 /// Exact offscreen resources and stable draw partition for one OIT frame.
 /// This is Graph-private: the renderer retains all actual native programs and
 /// sampled bind groups through completion separately.
@@ -170,6 +199,15 @@ fn same_mip_passes(
         })
 }
 
+fn same_indirect(left: &[ForwardIndirectGraph], right: &[ForwardIndirectGraph]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.draw == right.draw
+                && left.graph.upload_pass.1 == right.graph.upload_pass.1
+                && left.graph.compute_pass.1 == right.graph.compute_pass.1
+        })
+}
+
 pub(crate) enum ForwardPlanBuildError {
     Rhi(Error),
     Pipeline(PipelineError),
@@ -190,6 +228,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     declaration: GraphBuilder,
     upload_pass: GraphPass,
     mip_passes: Vec<super::mip_generation::MipGenerationPass>,
+    indirect: Vec<ForwardIndirectGraph>,
     raster_pass: GraphPass,
     readback_pass: GraphPass,
     resident_upload_slot: BufferSlot,
@@ -228,6 +267,7 @@ pub(crate) struct SurfaceForwardPlan<B: ResourceBackend> {
     declaration: GraphBuilder,
     upload_pass: GraphPass,
     mip_passes: Vec<super::mip_generation::MipGenerationPass>,
+    indirect: Vec<ForwardIndirectGraph>,
     raster_pass: GraphPass,
     present_step: StepId,
     resident_upload_slot: BufferSlot,

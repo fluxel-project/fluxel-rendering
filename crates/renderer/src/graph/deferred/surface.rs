@@ -66,6 +66,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             || self.stream_slots.len() != frame.resident.streams.len()
             || self.texture_slots.len() != frame.resident.textures.len()
             || self.deformation_pass.is_some() != frame.deformation.is_some()
+            || self.indirect.len() != frame.indirect.len()
+            || self
+                .indirect
+                .iter()
+                .zip(&frame.indirect)
+                .any(|((draw, _), (product_draw, _))| draw != product_draw)
             || self.composite_pass.is_none()
             || self.scene_color_slot.is_none()
             || self.msaa_gbuffer_slots.is_some() != frame.msaa.is_some()
@@ -138,6 +144,15 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 &frame.resident.upload_desc,
                 frame.resident.upload_incoming,
             ));
+        }
+        if self.indirect.len() != frame.indirect.len() {
+            return Err(Error::InvalidState);
+        }
+        for ((draw, graph), (product_draw, product)) in self.indirect.iter().zip(&frame.indirect) {
+            if draw != product_draw {
+                return Err(Error::InvalidState);
+            }
+            buffers.extend(graph.buffers(product));
         }
         if let (Some(slot), Some(environment)) = (self.environment_upload_slot, &frame.environment)
         {
@@ -525,70 +540,5 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         raster.set_bind_group(0, &frame.composite_group, &[])?;
         raster.draw(0..3, 0..1)?;
         raster.finish()
-    }
-
-    // These entry points deliberately remain separate from the output route:
-    // their Graph passes are shared with offscreen Deferred.  The Surface
-    // recorder supplies the same concrete owners, so an absent deformation is
-    // an ordinary no-op rather than a second Graph shape.
-    pub(crate) fn surface_record_deformation(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredSurfaceFrame<B>,
-        image: &fluxel_rhi::api::SurfaceImage<B>,
-    ) -> Result<()>
-    where
-        B: CommandBackend,
-    {
-        self.record_body_deformation(
-            encoder,
-            super::record_view::DeferredRecordView::surface_with_image(frame, image),
-        )
-    }
-
-    pub(crate) fn surface_record_mip_generation(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredSurfaceFrame<B>,
-        image: &fluxel_rhi::api::SurfaceImage<B>,
-        generation: &super::super::mip_generation::MipGenerationPass,
-    ) -> Result<()>
-    where
-        B: CommandBackend,
-    {
-        self.record_body_mip_generation(
-            encoder,
-            super::record_view::DeferredRecordView::surface_with_image(frame, image),
-            generation,
-        )
-    }
-
-    pub(crate) fn surface_record_upload(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredSurfaceFrame<B>,
-        image: &fluxel_rhi::api::SurfaceImage<B>,
-    ) -> Result<()>
-    where
-        B: CommandBackend,
-    {
-        self.record_body_upload(
-            encoder,
-            super::record_view::DeferredRecordView::surface_with_image(frame, image),
-        )
-    }
-    pub(crate) fn surface_record_geometry(
-        &self,
-        encoder: &mut CommandEncoder<B>,
-        frame: &DeferredSurfaceFrame<B>,
-        image: &fluxel_rhi::api::SurfaceImage<B>,
-    ) -> Result<()>
-    where
-        B: RasterBackend,
-    {
-        self.record_body_geometry(
-            encoder,
-            super::record_view::DeferredRecordView::surface_with_image(frame, image),
-        )
     }
 }

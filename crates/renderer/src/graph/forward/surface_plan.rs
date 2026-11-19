@@ -24,6 +24,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             || self.lane != declaration.lane
             || self.upload_pass.1 != declaration.upload_pass.1
             || !same_mip_passes(&self.mip_passes, &declaration.mip_passes)
+            || !same_indirect(&self.indirect, &declaration.indirect)
             || self.raster_pass.1 != declaration.raster_pass.1
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
             || self.frame_upload_slot.resource != declaration.frame_upload_slot.resource
@@ -72,17 +73,21 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             return Err(Error::WrongDevice.into());
         }
         let execution = CompiledExecution::compile(&declaration.graph)?;
-        let mut expected = Vec::with_capacity(declaration.mip_passes.len() + 2);
+        let mut expected =
+            Vec::with_capacity(declaration.mip_passes.len() + declaration.indirect.len() * 2 + 3);
         expected.push(declaration.upload_pass);
         expected.extend(declaration.mip_passes.iter().map(|pass| pass.pass));
+        for item in &declaration.indirect {
+            expected.extend([item.graph.upload_pass, item.graph.compute_pass]);
+        }
         expected.push(declaration.raster_pass);
         if execution.logical().passes() != expected {
             return Err(Error::InvalidState.into());
         }
         let present_step = StepId {
             plan: id,
-            index: 2 + u32::try_from(declaration.mip_passes.len())
-                .expect("mip pass count fits u32"),
+            index: u32::try_from(execution.logical().passes().len())
+                .expect("compiled pass count fits u32"),
         };
         let mut steps = execution.steps(device, id, declaration.lane)?;
         steps.push(StepDesc {
@@ -91,8 +96,15 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             waits: vec![StepWait {
                 previous: StepId {
                     plan: id,
-                    index: 1 + u32::try_from(declaration.mip_passes.len())
-                        .expect("mip pass count fits u32"),
+                    index: u32::try_from(
+                        execution
+                            .logical()
+                            .passes()
+                            .iter()
+                            .position(|pass| *pass == declaration.raster_pass)
+                            .ok_or(Error::InvalidState)?,
+                    )
+                    .expect("raster pass index fits u32"),
                 },
                 destination: AccessScope {
                     stages: StageMask::ALL_COMMANDS,
@@ -110,6 +122,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             declaration: declaration.graph.clone(),
             upload_pass: declaration.upload_pass,
             mip_passes: declaration.mip_passes,
+            indirect: declaration.indirect,
             raster_pass: declaration.raster_pass,
             present_step,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -149,10 +162,8 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
         }
     }
     pub(crate) fn raster_step(&self) -> StepId {
-        StepId {
-            plan: self.id,
-            index: 1 + u32::try_from(self.mip_passes.len()).expect("mip pass count fits u32"),
-        }
+        self.step_for(self.raster_pass)
+            .expect("compiled surface Forward raster pass belongs to its plan")
     }
     pub(crate) fn mip_steps(&self) -> impl ExactSizeIterator<Item = StepId> + '_ {
         (0..self.mip_passes.len()).map(|index| StepId {
@@ -160,8 +171,39 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             index: 1 + u32::try_from(index).expect("mip pass index fits u32"),
         })
     }
+    pub(crate) fn indirect_upload_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.indirect
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .upload_pass,
+        )
+    }
+    pub(crate) fn indirect_compute_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.indirect
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .compute_pass,
+        )
+    }
     pub(crate) fn present_step(&self) -> StepId {
         self.present_step
+    }
+    fn step_for(&self, wanted: GraphPass) -> Result<StepId> {
+        let index = self
+            .execution
+            .logical()
+            .passes()
+            .iter()
+            .position(|pass| *pass == wanted)
+            .ok_or(Error::InvalidState)?;
+        Ok(StepId {
+            plan: self.id,
+            index: u32::try_from(index).map_err(|_| Error::InvalidRange)?,
+        })
     }
     pub(crate) fn validate_frame(&self, frame: &SurfaceForwardFrame<B>) -> Result<()> {
         validate_resident_texture_devices(&frame.resident, self.id.device)?;
@@ -180,6 +222,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             return Err(Error::InvalidState);
         }
         validate_surface_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
+        crate::residency::validate_indirect_draws(&frame.draws, &frame.indirect)?;
         validate_surface_uploads(frame)?;
         if let Some(environment) = frame.environment.as_ref() {
             environment.validate_for_sampling(self.id.device)?;
@@ -299,6 +342,18 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 ));
             }
         }
+        if self.indirect.len() != frame.indirect.len()
+            || self
+                .indirect
+                .iter()
+                .zip(&frame.indirect)
+                .any(|(declared, (draw, _))| declared.draw != *draw)
+        {
+            return Err(Error::InvalidState);
+        }
+        for (declared, (_, product)) in self.indirect.iter().zip(&frame.indirect) {
+            buffers.extend(declared.graph.buffers(product));
+        }
         let lease = BoundSurfaceTexture::new(self.surface_target_slot, image)?;
         FrameBindings::new_with_surface_textures(
             &self.execution,
@@ -383,6 +438,10 @@ impl<B: ExecutionBackend + ResourceBackend> SurfaceForwardPlan<B> {
     pub(crate) fn completion(&self, outcome: &Outcome<B>) -> Result<CompletionPoint<B>> {
         let mut expected = vec![self.upload_step()];
         expected.extend(self.mip_steps());
+        for index in 0..self.indirect.len() {
+            expected.push(self.indirect_upload_step(index)?);
+            expected.push(self.indirect_compute_step(index)?);
+        }
         expected.extend([self.raster_step(), self.present_step]);
         let facts = outcome.facts();
         if facts.status != ExecutionStatus::Accepted

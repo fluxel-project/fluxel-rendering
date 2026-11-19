@@ -132,6 +132,33 @@ impl<B: ResourceBackend> ForwardDraw<B> {
     }
 }
 
+/// Validates the one-to-one indirect-product ownership carried by a submitted
+/// Forward frame.
+pub(crate) fn validate_indirect_draws<B: ResourceBackend>(
+    draws: &[ForwardDraw<B>],
+    indirect: &[(usize, crate::renderer::indirect_producer::IndirectProduct<B>)],
+) -> Result<()> {
+    let mut selected = std::collections::BTreeSet::new();
+    for (draw_index, product) in indirect {
+        let draw = draws.get(*draw_index).ok_or(Error::InvalidRange)?;
+        if !selected.insert(*draw_index) {
+            return Err(Error::InvalidRange);
+        }
+        product.validate_draw(&draw.vertices, &draw.instances)?;
+    }
+    Ok(())
+}
+
+/// Returns the unique GPU command owner for one prepared draw.
+pub(crate) fn indirect_for_draw<'a, B: ResourceBackend>(
+    indirect: &'a [(usize, crate::renderer::indirect_producer::IndirectProduct<B>)],
+    draw_index: usize,
+) -> Option<&'a crate::renderer::indirect_producer::IndirectProduct<B>> {
+    indirect
+        .iter()
+        .find_map(|(index, product)| (*index == draw_index).then_some(product))
+}
+
 /// Complete concrete owners and uploads admitted for one Forward submission.
 ///
 /// The coordinator keeps the resident `Arc` in its cache and moves this frame
@@ -149,6 +176,11 @@ pub(crate) struct ForwardFrame<B: ResourceBackend> {
     /// Concrete per-frame specular resources and camera upload.
     pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
+    /// GPU-produced indirect argument records keyed by their prepared draw.
+    ///
+    /// The product stays with this submitted frame through completion. Graph
+    /// declaration and recording use the same concrete owner.
+    pub(crate) indirect: Vec<(usize, crate::renderer::indirect_producer::IndirectProduct<B>)>,
     /// Contiguous draw ranges that share one raster program without changing
     /// the prepared candidate order.
     pub(crate) draw_batches: Vec<Range<usize>>,
@@ -169,6 +201,8 @@ pub(crate) struct SurfaceForwardFrame<B: ResourceBackend> {
     /// Concrete per-frame specular resources and camera upload.
     pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
+    /// GPU-produced indirect argument records keyed by their prepared draw.
+    pub(crate) indirect: Vec<(usize, crate::renderer::indirect_producer::IndirectProduct<B>)>,
     pub(crate) draw_batches: Vec<Range<usize>>,
     pub(crate) extent: [u32; 2],
     /// The color target format used to create every pipeline in this frame.

@@ -83,6 +83,14 @@ pub(crate) struct DeferredFrame<B: ResourceBackend> {
     pub(crate) pbr: bool,
     pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
+    /// Compute-produced indirect records paired with their selected draw index.
+    ///
+    /// The enclosing frame retains these owners through the completion covering
+    /// both the producer compute pass and the geometry consumer.
+    pub(crate) indirect: Vec<(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
     pub(crate) resident_upload: ForwardResidentUpload,
     pub(crate) frame: ForwardFrameBuffers<B>,
@@ -119,6 +127,11 @@ pub(crate) struct DeferredSurfaceFrame<B: ResourceBackend> {
     pub(crate) pbr: bool,
     pub(crate) publication: DeferredPublication,
     pub(crate) deformation: Option<super::DeferredDeformation<B>>,
+    /// Compute-produced indirect records paired with their selected draw index.
+    pub(crate) indirect: Vec<(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )>,
     pub(crate) resident: Arc<ForwardResidentBuffers<B>>,
     pub(crate) resident_upload: ForwardResidentUpload,
     pub(crate) frame: SurfaceForwardFrameBuffers<B>,
