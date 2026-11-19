@@ -46,6 +46,10 @@ pub(super) fn validate_definition(
         definition.transmission_texture_configuration(),
         functions,
         resources,
+    )?;
+    super::transmission::validate_energy_mode(
+        definition.refraction_energy_mode(),
+        definition.transmission_extensions(),
     )
 }
 

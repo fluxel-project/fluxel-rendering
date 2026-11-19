@@ -6,8 +6,8 @@ use super::{
     AmbientOcclusionConfiguration, DiffuseRoughnessConfiguration, MaterialCodeNode,
     MaterialFragment, MaterialNodeGraph, MaterialNodeInputSource, MaterialParameter,
     MaterialResource, MaterialTextureEncoding, MaterialTextureEncodingRequirement,
-    NormalMapSettings, RefractionEnvironment, StaticValue, SurfacePolicy, TransmissionExtensions,
-    TransmissionTextureConfiguration,
+    NormalMapSettings, RefractionEnergyMode, RefractionEnvironment, StaticValue, SurfacePolicy,
+    TransmissionExtensions, TransmissionTextureConfiguration,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -289,6 +289,7 @@ pub struct MaterialDefinition {
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
     pub(super) transmission_texture_configuration: Option<TransmissionTextureConfiguration>,
+    pub(super) refraction_energy_mode: RefractionEnergyMode,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<MaterialNodeGraph>,
     vertex_uv0: Option<VertexUv0>,
@@ -340,6 +341,7 @@ impl MaterialDefinition {
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,
             transmission_texture_configuration: None,
+            refraction_energy_mode: RefractionEnergyMode::Legacy,
             refraction_environment: None,
             node_graph: None,
             vertex_uv0: None,

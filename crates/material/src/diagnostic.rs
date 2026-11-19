@@ -480,6 +480,8 @@ pub enum MaterialError {
     },
     /// Transmission texture sources require selected transmission extensions.
     TransmissionTextureConfigurationExtensionsRequired,
+    /// Base Fresnel refraction energy requires selected transmission extensions.
+    RefractionEnergyModeTransmissionRequired,
     /// An authored thickness callable and thickness texture cannot both select the source.
     TransmissionThicknessTextureConflict,
     /// A requested transmission callable was not declared.

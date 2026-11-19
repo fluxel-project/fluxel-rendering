@@ -8,8 +8,10 @@ pub(super) fn source(
     diffuse: bool,
     refraction_source: Option<ForwardRefraction<'_>>,
     specular: bool,
+    base_fresnel: bool,
 ) -> String {
     let transmission = refraction_source.is_some();
+    let base_fresnel = base_fresnel && transmission;
     let input = if normal_map {
         r#"
 struct PbrSpecularVertexOutput {
@@ -102,20 +104,39 @@ struct PbrSpecularVertexOutput {
     };
     let diffuse_energy = if specular {
         "spec.diffuse_energy"
+    } else if base_fresnel {
+        "vec3<f32>(clamp(base_refraction_energy, 0.0, 1.0))"
     } else {
         "(vec3<f32>(1.0) - dielectric_f0)"
     };
-    let direct = format!(
-        "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * {specular_energy} + terms.diffuse{diffuse_weight};"
-    );
+    let energy = if base_fresnel {
+        "let energy = pbr_refraction_surface_energy(properties, dielectric_f0, material_surface_ior());"
+    } else {
+        ""
+    };
+    let direct_terms = if base_fresnel {
+        "pbr_direct_light_components_with_surface_energy(base, properties, normal, view, dielectric_f0, 0.0, energy)"
+    } else {
+        "pbr_direct_light_components(base, properties, normal, view, dielectric_f0)"
+    };
+    let direct = if base_fresnel {
+        format!(
+            "let terms = {direct_terms};\n    let direct_diffuse = max(terms.diffuse{diffuse_weight}, vec3<f32>(0.0));\n    let direct = terms.specular * {specular_energy} + direct_diffuse;"
+        )
+    } else {
+        format!(
+            "let terms = {direct_terms};\n    let direct = terms.specular * {specular_energy} + terms.diffuse{diffuse_weight};"
+        )
+    };
     let ambient_occlusion = if effects {
         "clamp(surface.occlusion * evaluate_occlusion_uv0(/* fluxel:uv1-argument */input.uv0), 0.0, 1.0)"
     } else {
         "surface.occlusion"
     };
+    let diffuse_metallic = if base_fresnel { "0.0" } else { "properties.x" };
     let indirect = if diffuse {
         format!(
-            "let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, {diffuse_energy}) * ambient_occlusion{diffuse_weight};"
+            "let indirect = pbr_diffuse_irradiance(base, {diffuse_metallic}, normal, pbr_environment_irradiance, pbr_environment_sampler, {diffuse_energy}) * ambient_occlusion{diffuse_weight};"
         )
     } else {
         String::from("let indirect = vec3<f32>(0.0);")
@@ -128,16 +149,28 @@ struct PbrSpecularVertexOutput {
     let (view, specular_terms, radiance, refraction_energy) = if specular {
         (
             "pbr_specular_view_direction(input.world_position, pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.xyz, pbr_specular_camera.camera.w == 0.0)",
-            "let spec = pbr_specular_ibl_bound(input.world_position, normal, ambient_occlusion, base, properties.x, properties.y, dielectric_f0);",
+            if base_fresnel {
+                "let spec = pbr_specular_ibl_bound_with_base_fresnel(input.world_position, normal, ambient_occlusion, base, properties.x, properties.y, dielectric_f0, vec2<f32>(energy.base_f0, energy.f90), true);"
+            } else {
+                "let spec = pbr_specular_ibl_bound(input.world_position, normal, ambient_occlusion, base, properties.x, properties.y, dielectric_f0);"
+            },
             "spec.radiance",
             "spec.refraction_energy",
         )
     } else {
         (
             "pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera)",
-            "",
+            if base_fresnel {
+                "let base_refraction_energy = pbr_analytic_base_refraction_energy(properties.y, normal, view, energy);"
+            } else {
+                ""
+            },
             "vec3<f32>(0.0)",
-            "pbr_analytic_refraction_energy(base, properties, normal, view, dielectric_f0)",
+            if base_fresnel {
+                "base_refraction_energy"
+            } else {
+                "pbr_analytic_refraction_energy(base, properties, normal, view, dielectric_f0)"
+            },
         )
     };
     let refraction = match refraction_source {
@@ -161,6 +194,7 @@ fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) ->
     let properties = surface.properties;
     let normal = pbr_surface_normal({normal}, front_facing);
     let dielectric_f0 = {dielectric_f0};
+    {energy}
     {transmission_values}
     let view = {view};
     let ambient_occlusion = {ambient_occlusion};

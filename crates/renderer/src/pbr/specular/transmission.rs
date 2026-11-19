@@ -46,18 +46,33 @@ fn pbr_refraction_roughness(roughness: f32) -> f32 {
     );
 }
 
+fn pbr_jones_reflectance(
+    f0: vec3<f32>, f90: vec3<f32>, roughness: f32, normal: vec3<f32>, view: vec3<f32>,
+) -> vec3<f32> {
+    // Babylon's Jones reflectance when an environment BRDF LUT is absent.
+    let ndotv = abs(dot(normal, view)) + 0.0000001;
+    let one_minus_ndotv = clamp(1.0 - ndotv, 0.0, 1.0);
+    let squared = one_minus_ndotv * one_minus_ndotv;
+    let weight = mix(0.25, 1.0, sqrt(1.0 - clamp(roughness, 0.0, 1.0)));
+    return f0 + weight * (f90 - f0) * squared * squared * one_minus_ndotv;
+}
+
 fn pbr_analytic_refraction_energy(
     base: vec3<f32>, properties: vec2<f32>, normal: vec3<f32>,
     view: vec3<f32>, dielectric_f0: vec3<f32>,
 ) -> f32 {
-    // Babylon's Jones reflectance when an environment BRDF LUT is absent.
     let f0 = mix(dielectric_f0, max(base, vec3<f32>(0.0)), clamp(properties.x, 0.0, 1.0));
-    let ndotv = abs(dot(normal, view)) + 0.0000001;
-    let one_minus_ndotv = clamp(1.0 - ndotv, 0.0, 1.0);
-    let squared = one_minus_ndotv * one_minus_ndotv;
-    let weight = mix(0.25, 1.0, sqrt(1.0 - clamp(properties.y, 0.0, 1.0)));
-    let reflectance = f0 + weight * (vec3<f32>(1.0) - f0) * squared * squared * one_minus_ndotv;
+    let reflectance = pbr_jones_reflectance(f0, vec3<f32>(1.0), properties.y, normal, view);
     return 1.0 - max(max(reflectance.x, reflectance.y), reflectance.z);
+}
+
+fn pbr_analytic_base_refraction_energy(
+    roughness: f32, normal: vec3<f32>, view: vec3<f32>, energy: PbrSurfaceEnergy,
+) -> f32 {
+    let reflectance = pbr_jones_reflectance(
+        vec3<f32>(energy.base_f0), vec3<f32>(energy.f90), roughness, normal, view,
+    );
+    return 1.0 - reflectance.x;
 }
 
 fn pbr_refraction_latlong_uv(direction: vec3<f32>) -> vec2<f32> {

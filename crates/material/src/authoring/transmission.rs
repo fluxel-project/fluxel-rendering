@@ -1,5 +1,15 @@
 //! Static transmission and volume-attenuation facts for PBR surfaces.
 
+/// Refraction energy relation selected for transmission lighting.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum RefractionEnergyMode {
+    /// Preserves the established transmission energy relation.
+    #[default]
+    Legacy,
+    /// Applies base Fresnel energy partitioning in the renderer's refraction path.
+    BaseFresnel,
+}
+
 /// Channel layout used by one transmission texture.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum TransmissionTextureLayout {

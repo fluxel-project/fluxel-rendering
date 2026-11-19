@@ -126,6 +126,8 @@ fn pbr_specular_ibl(
     lod_offset: f32,
     max_lod: f32,
     dielectric_f0: vec3<f32>,
+    base_fresnel: vec2<f32>,
+    non_legacy: bool,
 ) -> PbrSpecularIblResult {
     let normal = pbr_normal(world_normal);
     let view = pbr_specular_view_direction(
@@ -133,7 +135,7 @@ fn pbr_specular_ibl(
     let ndotv_unclamped = dot(normal, view);
     let ndotv = abs(ndotv_unclamped) + 0.0000001;
     let f0 = pbr_specular_metallic_roughness_f0(base_color, metallic, dielectric_f0);
-    let f90 = vec3<f32>(1.0);
+    let f90 = vec3<f32>(base_fresnel.y);
     // Babylon equirectangular mapping transforms a direction with w=0.
     let reflection = (pbr_specular_camera.reflection_matrix
         * vec4<f32>(pbr_normal(reflect(-view, normal)), 0.0)).xyz;
@@ -153,13 +155,45 @@ fn pbr_specular_ibl(
     // normalization information, so keep unit energy for that authored LUT sample.
     let reciprocal_y = 1.0 / select(1.0, lut.y, lut.y > 0.0);
     let specular_energy = vec3<f32>(1.0) + f0 * (reciprocal_y - 1.0);
-    let max_reflectance = max(reflectance.x, max(reflectance.y, reflectance.z));
+    var diffuse_energy = vec3<f32>(1.0) - dielectric_f0;
+    var refraction_reflectance = max(reflectance.x, max(reflectance.y, reflectance.z));
+    if non_legacy {
+        // Babylon applies radiance occlusion only to colored reflectance.
+        let base_reflectance = pbr_specular_height_correlated_reflectance(
+            vec3<f32>(base_fresnel.x), f90, lut,
+        ).x;
+        let base_multiscatter = 1.0 + base_fresnel.x * (reciprocal_y - 1.0);
+        diffuse_energy = vec3<f32>(clamp(1.0 - base_reflectance * base_multiscatter, 0.0, 1.0));
+        refraction_reflectance = base_reflectance;
+    }
     return PbrSpecularIblResult(
         environment * reflectance * specular_energy,
-        vec3<f32>(1.0) - dielectric_f0,
+        diffuse_energy,
         specular_energy,
-        1.0 - max_reflectance,
+        1.0 - refraction_reflectance,
     );
+}
+
+fn pbr_specular_ibl_bound_with_base_fresnel(
+    world_position: vec3<f32>,
+    world_normal: vec3<f32>,
+    ambient_occlusion: f32,
+    base_color: vec3<f32>,
+    metallic: f32,
+    perceptual_roughness: f32,
+    dielectric_f0: vec3<f32>,
+    base_fresnel: vec2<f32>,
+    non_legacy: bool,
+) -> PbrSpecularIblResult {
+    return pbr_specular_ibl(
+        world_position, world_normal, ambient_occlusion, base_color, metallic, perceptual_roughness,
+        pbr_specular_camera.camera.xyz,
+        pbr_specular_camera.camera.xyz,
+        pbr_specular_camera.camera.w == 0.0,
+        pbr_specular_radiance, pbr_specular_radiance_sampler,
+        pbr_specular_brdf_lut, pbr_specular_brdf_lut_sampler,
+        pbr_specular_camera.lod_params.x, pbr_specular_camera.lod_params.y,
+        pbr_specular_camera.target_size_and_mips.z, dielectric_f0, base_fresnel, non_legacy);
 }
 
 fn pbr_specular_ibl_bound(
@@ -171,15 +205,10 @@ fn pbr_specular_ibl_bound(
     perceptual_roughness: f32,
     dielectric_f0: vec3<f32>,
 ) -> PbrSpecularIblResult {
-    return pbr_specular_ibl(
+    return pbr_specular_ibl_bound_with_base_fresnel(
         world_position, world_normal, ambient_occlusion, base_color, metallic, perceptual_roughness,
-        pbr_specular_camera.camera.xyz,
-        pbr_specular_camera.camera.xyz,
-        pbr_specular_camera.camera.w == 0.0,
-        pbr_specular_radiance, pbr_specular_radiance_sampler,
-        pbr_specular_brdf_lut, pbr_specular_brdf_lut_sampler,
-        pbr_specular_camera.lod_params.x, pbr_specular_camera.lod_params.y,
-        pbr_specular_camera.target_size_and_mips.z, dielectric_f0);
+        dielectric_f0, vec2<f32>(0.0, 1.0), false,
+    );
 }
 "#;
 
@@ -217,6 +246,20 @@ pub(crate) fn forward_specular_request(
     request: ShaderCompositionRequest,
 ) -> ShaderCompositionRequest {
     forward_specular_request_inner(request, true, None)
+}
+
+const BASE_FRESNEL: &str = "babylon-base-fresnel-v1";
+
+pub(crate) fn with_refraction_energy_mode(
+    mut request: ShaderCompositionRequest,
+    mode: fluxel_material::RefractionEnergyMode,
+) -> ShaderCompositionRequest {
+    if mode == fluxel_material::RefractionEnergyMode::BaseFresnel {
+        request
+            .static_options
+            .insert("renderer.refraction_energy".into(), BASE_FRESNEL.into());
+    }
+    request
 }
 
 /// Selects environment refraction from the same prefiltered radiance chain as
@@ -280,6 +323,7 @@ fn forward_specular_request_inner(
             diffuse_irradiance,
             refraction,
             specular,
+            has_static_option(&request, "renderer.refraction_energy", BASE_FRESNEL),
         )
     } else {
         forward_standard::source(diffuse_irradiance, refraction.is_some())

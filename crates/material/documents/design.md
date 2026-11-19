@@ -261,6 +261,14 @@ mask channel in the thickness texture. The selected mask multiplies the
 material's transmission intensity, and the thickness sample is remapped to
 the authored interval.
 
+A transmissive material can opt into `RefractionEnergyMode::BaseFresnel`.
+The renderer uses the base Fresnel term for direct diffuse, indirect
+irradiance and the transmitted share. It derives normal-incidence base
+reflectance from dielectric IOR and metallic, and scales the dielectric
+grazing term by IOR. The BRDF LUT supplies environment reflectance when
+available. The analytical path uses the Jones approximation. Legacy mode
+is the default.
+
 `RefractionEnvironment` is an optional material-local alternative to the
 Renderer scene-environment fallback. It requires transmission extensions and
 names an ordinary group-zero linear `Texture2dF32` resource and non-comparison

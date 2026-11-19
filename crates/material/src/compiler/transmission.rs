@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    MaterialTextureEncoding, MaterialTextureUv, TransmissionTexture,
+    MaterialTextureEncoding, MaterialTextureUv, RefractionEnergyMode, TransmissionTexture,
     TransmissionTextureConfiguration, TransmissionTextureLayout,
 };
 
@@ -43,6 +43,22 @@ pub(super) fn validate(
     validate_static(extensions)?;
     validate_environment(environment, resources)?;
     validate_textures(textures, extensions, resources)
+}
+
+pub(super) fn validate_energy_mode(
+    mode: RefractionEnergyMode,
+    extensions: Option<&TransmissionExtensions>,
+) -> Result<(), MaterialError> {
+    if matches!(mode, RefractionEnergyMode::BaseFresnel) && extensions.is_none() {
+        return Err(MaterialError::RefractionEnergyModeTransmissionRequired);
+    }
+    Ok(())
+}
+
+pub(super) fn canonical_energy_mode(mode: RefractionEnergyMode, target: &mut String) {
+    if matches!(mode, RefractionEnergyMode::BaseFresnel) {
+        piece(target, "refraction-energy", "base-fresnel");
+    }
 }
 
 fn validate_textures(

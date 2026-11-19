@@ -84,6 +84,10 @@ pub(super) fn material_request(
         request
     };
     if transmission {
+        let request = crate::pbr::specular::with_refraction_energy_mode(
+            request,
+            material.refraction_energy_mode(),
+        );
         if let Some(local_environment) = material.refraction_environment() {
             if scene_color.is_some() {
                 return Err(ForwardPreparationError::InvalidSceneRefractionSource { source });

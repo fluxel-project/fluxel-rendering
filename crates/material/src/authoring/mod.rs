@@ -9,6 +9,7 @@ mod diffuse_roughness;
 mod diffuse_roughness_definition;
 mod nodes;
 mod normal_map;
+mod refraction_energy_definition;
 mod surface_policy;
 mod transmission;
 mod transmission_texture_definition;
@@ -32,7 +33,7 @@ pub use surface_policy::{
     SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
 };
 pub use transmission::{
-    RefractionEnvironment, TransmissionExtensions, TransmissionTexture,
+    RefractionEnergyMode, RefractionEnvironment, TransmissionExtensions, TransmissionTexture,
     TransmissionTextureConfiguration, TransmissionTextureLayout,
 };
 pub use types::*;

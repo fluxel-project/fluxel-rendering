@@ -50,8 +50,12 @@ pub(super) fn install_ambient_occlusion_evaluator(
                     &format!("let material = surface.base; let ambient_occlusion_color = {ao};"),
                 )
                 .replace(
-                    "terms.diffuse",
-                    "terms.diffuse * mix(vec3<f32>(1.0), ambient_occlusion_color.rgb, vec3<f32>(ambient_occlusion_color.a))",
+                    " + terms.diffuse",
+                    " + terms.diffuse * mix(vec3<f32>(1.0), ambient_occlusion_color.rgb, vec3<f32>(ambient_occlusion_color.a))",
+                )
+                .replace(
+                    " + direct_diffuse;",
+                    " + direct_diffuse * mix(vec3<f32>(1.0), ambient_occlusion_color.rgb, vec3<f32>(ambient_occlusion_color.a));",
                 )
                 .replace(
                     "pbr_direct_light_view_with_diffuse_roughness(",
@@ -148,8 +152,12 @@ pub(super) fn install_diffuse_roughness_evaluator(
             )
             .replace("vec3<f32>(0.04))", "vec3<f32>(0.04), diffuse_roughness)")
             .replace(
-                "normal, view, dielectric_f0);",
-                "normal, view, dielectric_f0, diffuse_roughness);",
+                "pbr_direct_light_components_with_diffuse_roughness(base, properties, normal, view, dielectric_f0);",
+                "pbr_direct_light_components_with_diffuse_roughness(base, properties, normal, view, dielectric_f0, diffuse_roughness);",
+            )
+            .replace(
+                "dielectric_f0, 0.0, energy);",
+                "dielectric_f0, diffuse_roughness, energy);",
             );
         unit.source = source;
     }

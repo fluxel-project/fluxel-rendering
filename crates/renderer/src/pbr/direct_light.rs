@@ -57,9 +57,30 @@ struct PbrDirectLight {
     specular: vec3<f32>,
 }
 
+struct PbrSurfaceEnergy {
+    non_legacy: bool,
+    base_f0: f32,
+    f90: f32,
+}
+
+fn pbr_refraction_surface_energy(
+    properties: vec2<f32>, dielectric_f0: vec3<f32>, ior: f32,
+) -> PbrSurfaceEnergy {
+    let metal = clamp(properties.x, 0.0, 1.0);
+    let base_f0 = mix(max(max(dielectric_f0.r, dielectric_f0.g), dielectric_f0.b), 1.0, metal);
+    let dielectric_f90 = clamp(2.0 * (ior - 1.0), 0.0, 1.0);
+    return PbrSurfaceEnergy(true, base_f0, mix(dielectric_f90, 1.0, metal));
+}
+
+fn pbr_schlick_scalar(cosine: f32, f0: f32, f90: f32) -> f32 {
+    let grazing = 1.0 - cosine;
+    return f0 + (f90 - f0) * grazing * grazing * grazing * grazing * grazing;
+}
+
 fn pbr_direct_light_brdf(
     base: vec3<f32>, properties: vec2<f32>, normal: vec3<f32>, view: vec3<f32>,
-    dielectric_f0: vec3<f32>, diffuse_roughness: f32, directional: PbrDirectionalLight,
+    dielectric_f0: vec3<f32>, diffuse_roughness: f32, energy: PbrSurfaceEnergy,
+    directional: PbrDirectionalLight,
 ) -> PbrDirectLight {
     // The authored direction follows emitted rays, as in Babylon's vLightData.
     let light = pbr_normal(-directional.direction_and_roughness.xyz);
@@ -68,20 +89,24 @@ fn pbr_direct_light_brdf(
     let half_direction = select(normal, pbr_normal(half_sum), any(half_sum != vec3<f32>(0.0)));
     let no_l = clamp(dot(normal, light), PBR_EPSILON, 1.0);
     let no_v = abs(dot(normal, view)) + PBR_EPSILON;
-    let no_h = clamp(dot(normal, half_direction), PBR_EPSILON, 1.0);
+    let no_h_unclamped = dot(normal, half_direction);
+    let no_h = clamp(no_h_unclamped, PBR_EPSILON, 1.0);
     let vo_h = clamp(dot(view, half_direction), 0.0, 1.0);
 
     // Babylon's EON lobe uses its independently authored diffuse roughness.
-    let surface_albedo = base * (vec3<f32>(1.0) - dielectric_f0) * (1.0 - properties.x);
+    let legacy_surface_albedo = base * (vec3<f32>(1.0) - dielectric_f0) * (1.0 - properties.x);
+    let surface_albedo = select(legacy_surface_albedo, base, energy.non_legacy);
     let eon_albedo = clamp(surface_albedo, vec3<f32>(0.1), vec3<f32>(1.0));
     let diffuse_term = diffuseBRDF_EON(eon_albedo, diffuse_roughness, no_l, no_v, dot(light, view)) / eon_albedo;
-    let diffuse = max(diffuse_term * no_l * light_color * surface_albedo, vec3<f32>(0.0));
+    let diffuse_energy = select(1.0, 1.0 - pbr_schlick_scalar(no_h_unclamped, energy.base_f0, energy.f90), energy.non_legacy);
+    let unclamped_diffuse = diffuse_term * no_l * light_color * surface_albedo * diffuse_energy;
+    let diffuse = select(max(unclamped_diffuse, vec3<f32>(0.0)), unclamped_diffuse, energy.non_legacy);
 
     // glTF dielectric and conductor Schlick branches with unit specular weight.
     let f0 = mix(dielectric_f0, base, vec3<f32>(properties.x));
     let grazing = 1.0 - vo_h;
     let grazing_squared = grazing * grazing;
-    let fresnel = f0 + (vec3<f32>(1.0) - f0) * (grazing_squared * grazing_squared * grazing);
+    let fresnel = f0 + (vec3<f32>(energy.f90) - f0) * (grazing_squared * grazing_squared * grazing);
     let roughness = clamp(properties.y + directional.direction_and_roughness.w, 0.0, 1.0);
     let alpha_g = roughness * roughness + 0.0005;
     let a2 = alpha_g * alpha_g;
@@ -100,7 +125,17 @@ fn pbr_direct_light_components_with_diffuse_roughness(
 ) -> PbrDirectLight {
     return pbr_direct_light_brdf(
         max(base, vec3<f32>(0.0)), clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
-        view, dielectric_f0, diffuse_roughness, pbr_directional_light(),
+        view, dielectric_f0, diffuse_roughness, PbrSurfaceEnergy(false, 0.0, 1.0), pbr_directional_light(),
+    );
+}
+
+fn pbr_direct_light_components_with_surface_energy(
+    base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
+    diffuse_roughness: f32, energy: PbrSurfaceEnergy,
+) -> PbrDirectLight {
+    return pbr_direct_light_brdf(
+        max(base, vec3<f32>(0.0)), clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
+        view, dielectric_f0, diffuse_roughness, energy, pbr_directional_light(),
     );
 }
 

@@ -34,6 +34,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     transmission_texture_configuration: Option<TransmissionTextureConfiguration>,
     refraction_environment: Option<RefractionEnvironment>,
+    refraction_energy_mode: crate::RefractionEnergyMode,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
     vertex_uv0: Option<super::vertex_uv0::NormalizedVertexUv0>,
 }
@@ -164,6 +165,7 @@ impl NormalizedMaterialIr {
                 .transmission_texture_configuration()
                 .cloned(),
             refraction_environment: definition.refraction_environment().cloned(),
+            refraction_energy_mode: definition.refraction_energy_mode(),
             node_graph,
             vertex_uv0,
         })
@@ -199,6 +201,7 @@ impl NormalizedMaterialIr {
             self.refraction_environment.as_ref(),
             &mut canonical,
         );
+        super::transmission::canonical_energy_mode(self.refraction_energy_mode, &mut canonical);
         for fragment in &self.fragments {
             canonical_piece(&mut canonical, "fragment", &fragment.name);
             canonical_piece(&mut canonical, "output", fragment.output.wgsl());
