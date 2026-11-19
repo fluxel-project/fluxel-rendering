@@ -213,6 +213,7 @@ pub struct MaterialDefinition {
     transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<MaterialNodeGraph>,
+    vertex_uv0: Option<String>,
 }
 
 impl MaterialDefinition {
@@ -242,6 +243,7 @@ impl MaterialDefinition {
             transmission_extensions: None,
             refraction_environment: None,
             node_graph: None,
+            vertex_uv0: None,
         }
     }
 
@@ -249,6 +251,16 @@ impl MaterialDefinition {
     #[must_use]
     pub fn with_code_node(mut self, node: MaterialCodeNode) -> Self {
         self.code_nodes.push(node);
+        self
+    }
+
+    /// Selects a vertex-stage callable that transforms UV0 for the UV0 PBR node graph.
+    ///
+    /// The callable takes and returns a `vec2<f32>`. The fragment graph can consume
+    /// the interpolated result through `MaterialNodeInputSource::VertexUv0`.
+    #[must_use]
+    pub fn with_vertex_uv0(mut self, callable: impl Into<String>) -> Self {
+        self.vertex_uv0 = Some(callable.into());
         self
     }
 
@@ -407,6 +419,10 @@ impl MaterialDefinition {
                     .any(|input| input.source == MaterialNodeInputSource::CameraPosition)
             })
         })
+    }
+
+    pub(crate) fn vertex_uv0(&self) -> Option<&str> {
+        self.vertex_uv0.as_deref()
     }
 
     pub(crate) fn node_graph(&self) -> Option<&MaterialNodeGraph> {

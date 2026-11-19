@@ -82,6 +82,16 @@ pub enum MaterialError {
         /// Input-port name.
         input: String,
     },
+    /// The surface has no vertex UV0 evaluation entry.
+    VertexUv0Unsupported {
+        /// Selected surface output.
+        output: SurfaceOutput,
+    },
+    /// A vertex UV0 callable does not take and return a UV vector.
+    VertexUv0Signature {
+        /// Selected callable.
+        callable: String,
+    },
     /// A reachable node graph cycle cannot lower to WGSL wrappers.
     NodeCycle {
         /// Node encountered a second time on the active DFS path.

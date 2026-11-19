@@ -167,9 +167,9 @@ pub(super) fn append_uv0_evaluators(
     let mut parameters = format!("{uv}: vec2<f32>");
     let mut arguments = uv.clone();
     let mut context_parameters = String::new();
-    for (input, seed) in PBR_CONTEXT_INPUTS {
+    for (input, seed, ty) in PBR_CONTEXT_INPUTS {
         let name = unique_local(seed, forbidden.iter().copied());
-        let parameter = format!(", {name}: vec3<f32>");
+        let parameter = format!(", {name}: {}", ty.wgsl());
         context_parameters.push_str(&parameter);
         if root_pbr_inputs.contains(&input) {
             arguments.push_str(&format!(", {name}"));

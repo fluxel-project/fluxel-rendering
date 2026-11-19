@@ -74,7 +74,8 @@ pub(super) fn validate(
     } else {
         matches!(root.inputs.as_slice(), [uv, context @ ..]
             if uv.ty == MaterialType::Vec2 && context.len() == root_pbr_inputs.len()
-            && context.iter().all(|input| input.ty == MaterialType::Vec3))
+            && context.iter().map(|input| input.ty).eq(super::node_graph::PBR_CONTEXT_INPUTS
+                .iter().filter(|(source, _, _)| root_pbr_inputs.contains(source)).map(|(_, _, ty)| *ty)))
     };
     if !valid_inputs {
         return Err(MaterialError::RootInputsUnsupported {
@@ -320,6 +321,7 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
     };
     if supplies_pbr_context(output) {
         names.insert(String::from("evaluate_pbr_material_uv0"));
+        names.insert(String::from(super::vertex_uv0::EVALUATOR));
     }
     names.extend([
         String::from("material_alpha_rejected"),

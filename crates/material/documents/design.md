@@ -137,7 +137,12 @@ the interpolated position, normalized geometric mesh normal and actual eye
 in Fluxel world space. The geometric normal precedes normal mapping and
 sidedness. A graph that asks for the eye requires a view with an explicit
 position, including for a parallel lighting camera. Other surface contexts
-reject these connections. Author source and
+reject these connections. A UV0 metallic-roughness definition can select a
+vertex-stage UV callable with `with_vertex_uv0`. The callable transforms
+mesh UV0 before interpolation. A fragment graph connects the interpolated
+result through `VertexUv0` and can still connect raw UV0 independently.
+The renderer's existing material bindings are fragment-visible, so a vertex
+UV callable can use constants and vertex inputs. Author source and
 declared callable edges may not reference generated wrappers: every
 author-to-node edge must be represented by a typed port connection. This
 prevents hidden cross-graph recursion before a variant is published.
@@ -256,9 +261,10 @@ raster intent are carried separately by `SurfacePolicy`.
 
 `MetallicRoughnessUv0` supplies the PBR evaluator context. A direct root and
 the named property callable take one `vec2<f32>` UV0 argument. The Renderer
-calls `evaluate_pbr_material_uv0(uv, world_position, world_normal, camera_position)`.
-UV-only roots also
-expose `evaluate_material_uv0(uv)`. The property evaluator remains
+calls `evaluate_pbr_vertex_uv0(uv)` at the vertex entry and passes its
+interpolated result to the fragment entry as the fifth argument of
+`evaluate_pbr_material_uv0(uv, world_position, world_normal, camera_position, vertex_uv0)`.
+UV-only roots also expose `evaluate_material_uv0(uv)`. The property evaluator remains
 `evaluate_metallic_roughness_uv0(uv)`. Graph wrappers carry the UV0
 argument through typed node connections, so a Code Node can feed a real
 `textureSample` without bypassing the graph. Renderer owns the mesh ABI and

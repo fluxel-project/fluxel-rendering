@@ -28,6 +28,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
+    vertex_uv0: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub(super) struct FunctionSignature {
@@ -47,14 +48,15 @@ impl NormalizedMaterialIr {
         code_nodes.sort_by(|left, right| left.name.cmp(&right.name));
         validate_code_node_sources(&code_nodes)?;
         let mut functions = function_signatures(&fragments, &code_nodes)?;
+        let vertex_uv0 = super::vertex_uv0::validate(definition, &functions)?;
         let node_graph = definition
             .node_graph()
             .map(|graph| {
                 super::node_graph::normalize(
                     graph,
                     &functions,
-                    super::surface::uses_uv0(definition.output()),
-                    super::surface::supplies_pbr_context(definition.output()),
+                    definition.output(),
+                    vertex_uv0.is_some(),
                 )
             })
             .transpose()?;
@@ -126,6 +128,7 @@ impl NormalizedMaterialIr {
             transmission_extensions: definition.transmission_extensions().cloned(),
             refraction_environment: definition.refraction_environment().cloned(),
             node_graph,
+            vertex_uv0,
         })
     }
 
@@ -133,13 +136,7 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
-        if super::surface::supplies_pbr_context(&self.output) {
-            canonical_piece(
-                &mut canonical,
-                "surface-evaluator-abi",
-                "pbr-uv0-world-context",
-            );
-        }
+        super::vertex_uv0::canonical(&self.output, self.vertex_uv0.as_deref(), &mut canonical);
         super::surface::canonical_extensions(
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
@@ -231,6 +228,11 @@ impl NormalizedMaterialIr {
             self.emissive_configuration.as_ref(),
             self.pbr_surface_factors.as_ref(),
             self.surface_policy,
+        );
+        super::vertex_uv0::append_evaluator(
+            &self.output,
+            self.vertex_uv0.as_deref(),
+            &mut generated,
         );
         super::transmission::append_evaluators(
             &mut generated,

@@ -6,7 +6,7 @@ use fluxel_shader::CallableDeclaration;
 
 use crate::{
     MaterialError, MaterialNodeGraph, MaterialNodeId, MaterialNodeInputSource, MaterialNodeOutput,
-    MaterialType,
+    MaterialType, SurfaceOutput,
 };
 
 use super::validation::FunctionSignature;
@@ -23,18 +23,50 @@ pub(super) struct NormalizedNodeGraph {
     pub(super) pbr_inputs: Vec<MaterialNodeInputSource>,
 }
 
-pub(super) const PBR_CONTEXT_INPUTS: [(MaterialNodeInputSource, &str); 3] = [
-    (MaterialNodeInputSource::WorldPosition, "world_position"),
-    (MaterialNodeInputSource::WorldNormal, "world_normal"),
-    (MaterialNodeInputSource::CameraPosition, "camera_position"),
+pub(super) const PBR_CONTEXT_INPUTS: [(MaterialNodeInputSource, &str, MaterialType); 4] = [
+    (
+        MaterialNodeInputSource::WorldPosition,
+        "world_position",
+        MaterialType::Vec3,
+    ),
+    (
+        MaterialNodeInputSource::WorldNormal,
+        "world_normal",
+        MaterialType::Vec3,
+    ),
+    (
+        MaterialNodeInputSource::CameraPosition,
+        "camera_position",
+        MaterialType::Vec3,
+    ),
+    (
+        MaterialNodeInputSource::VertexUv0,
+        "vertex_uv0",
+        MaterialType::Vec2,
+    ),
 ];
 
 pub(super) fn normalize(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
-    accepts_uv0: bool,
-    supplies_pbr_context: bool,
+    surface_output: &SurfaceOutput,
+    has_vertex_uv0: bool,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
+    let accepts_uv0 = super::surface::uses_uv0(surface_output);
+    let mut context_types = Vec::new();
+    if accepts_uv0 {
+        context_types.push((MaterialNodeInputSource::Uv0, MaterialType::Vec2));
+    }
+    if super::surface::supplies_pbr_context(surface_output) {
+        context_types.extend(
+            PBR_CONTEXT_INPUTS
+                .into_iter()
+                .filter_map(|(source, _, ty)| {
+                    (source != MaterialNodeInputSource::VertexUv0 || has_vertex_uv0)
+                        .then_some((source, ty))
+                }),
+        );
+    }
     let mut nodes = BTreeMap::new();
     for node in &graph.nodes {
         if nodes.insert(node.id, node).is_some() {
@@ -51,8 +83,7 @@ pub(super) fn normalize(
             &node.inputs,
             &nodes,
             functions,
-            accepts_uv0,
-            supplies_pbr_context,
+            &context_types,
         )?;
     }
     let order = evaluation_order(graph.output, &nodes)?;
@@ -60,12 +91,12 @@ pub(super) fn normalize(
     let uv = context_name("uv", functions);
     let context = PBR_CONTEXT_INPUTS
         .into_iter()
-        .filter(|(source, _)| {
+        .filter(|(source, _, _)| {
             nodes
                 .values()
                 .any(|node| node.inputs.iter().any(|input| input.source == *source))
         })
-        .map(|(source, name)| (source, context_name(name, functions)))
+        .map(|(source, name, ty)| (source, context_name(name, functions), ty))
         .collect::<Vec<_>>();
     let mut inputs = Vec::new();
     if accepts_uv0 {
@@ -74,9 +105,9 @@ pub(super) fn normalize(
             ty: MaterialType::Vec2,
         });
     }
-    inputs.extend(context.iter().map(|(_, name)| crate::FragmentInput {
+    inputs.extend(context.iter().map(|(_, name, ty)| crate::FragmentInput {
         name: name.clone(),
-        ty: MaterialType::Vec3,
+        ty: *ty,
     }));
     let parameters = inputs
         .iter()
@@ -127,9 +158,9 @@ pub(super) fn normalize(
                 }
                 MaterialNodeInputSource::Uv0 => source.push_str(&uv),
                 pbr_input => {
-                    let (_, name) = context
+                    let (_, name, _) = context
                         .iter()
-                        .find(|(kind, _)| *kind == pbr_input)
+                        .find(|(kind, _, _)| *kind == pbr_input)
                         .expect("validated PBR context input");
                     source.push_str(name);
                 }
@@ -150,7 +181,7 @@ pub(super) fn normalize(
         generated_names: nodes.keys().map(|id| node_name(*id)).collect(),
         callables: vec![callable],
         inputs,
-        pbr_inputs: context.into_iter().map(|(source, _)| source).collect(),
+        pbr_inputs: context.into_iter().map(|(source, _, _)| source).collect(),
     })
 }
 
@@ -160,8 +191,7 @@ fn validate_node(
     inputs: &[crate::MaterialNodeInput],
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
     functions: &BTreeMap<String, FunctionSignature>,
-    accepts_uv0: bool,
-    supplies_pbr_context: bool,
+    context_types: &[(MaterialNodeInputSource, MaterialType)],
 ) -> Result<(), MaterialError> {
     let signature = functions
         .get(callable)
@@ -196,26 +226,13 @@ fn validate_node(
                         actual,
                     })?
             }
-            MaterialNodeInputSource::Uv0 => {
-                if !accepts_uv0 {
-                    return Err(MaterialError::NodeContextUnavailable {
-                        node,
-                        input: connection.input.clone(),
-                    });
-                }
-                MaterialType::Vec2
-            }
-            MaterialNodeInputSource::WorldPosition
-            | MaterialNodeInputSource::WorldNormal
-            | MaterialNodeInputSource::CameraPosition => {
-                if !supplies_pbr_context {
-                    return Err(MaterialError::NodeContextUnavailable {
-                        node,
-                        input: connection.input.clone(),
-                    });
-                }
-                MaterialType::Vec3
-            }
+            context => context_types
+                .iter()
+                .find_map(|(source, ty)| (*source == context).then_some(*ty))
+                .ok_or_else(|| MaterialError::NodeContextUnavailable {
+                    node,
+                    input: connection.input.clone(),
+                })?,
         };
         if expected.ty != actual {
             return Err(MaterialError::NodeInputTypeMismatch {

@@ -56,6 +56,8 @@ pub enum MaterialNodeInputSource {
     WorldNormal,
     /// Actual camera eye position in Fluxel world space, supplied by the UV0 PBR evaluator.
     CameraPosition,
+    /// Interpolated UV0 computed by the material's vertex-stage callable.
+    VertexUv0,
 }
 
 /// One connection from an upstream value to one named callable input.

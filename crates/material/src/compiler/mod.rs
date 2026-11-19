@@ -10,6 +10,7 @@ mod surface;
 mod texture_encoding;
 mod transmission;
 mod validation;
+mod vertex_uv0;
 
 use crate::{
     BindingLocation, CompiledMaterialVariant, EmissiveConfiguration, FragmentCall, FragmentInput,
