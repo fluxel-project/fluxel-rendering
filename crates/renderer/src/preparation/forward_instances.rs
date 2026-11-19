@@ -1,5 +1,7 @@
 //! Immutable affine instance-transform preparation for Forward draws.
 
+use std::borrow::Cow;
+
 use fluxel_rhi::api::{VertexFormat, VertexStepMode};
 use fluxel_shader::{
     ScalarType, ShaderCompositionRequest, SourceUnit, VertexInputDeclaration, VertexType,
@@ -179,6 +181,26 @@ fn reversed_affine(matrix: [[f32; 4]; 4]) -> Option<bool> {
         return None;
     }
     Some(determinant.is_sign_negative())
+}
+
+/// Mesh templates select their vertex-rate interface before the instance
+/// columns are added to the request. Reflection still sees the full layout.
+pub(crate) fn mesh_vertex_layout(layout: &super::GeometryLayout) -> Cow<'_, super::GeometryLayout> {
+    if layout
+        .streams
+        .iter()
+        .all(|stream| matches!(stream.step_mode, VertexStepMode::Vertex))
+    {
+        return Cow::Borrowed(layout);
+    }
+    Cow::Owned(super::GeometryLayout {
+        streams: layout
+            .streams
+            .iter()
+            .filter(|stream| matches!(stream.step_mode, VertexStepMode::Vertex))
+            .cloned()
+            .collect(),
+    })
 }
 
 pub(crate) fn with_instance_transform(

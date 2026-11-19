@@ -40,9 +40,10 @@ pub(super) fn prepare_draw(
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
     let instance_transforms =
         super::super::forward_instances::instance_transforms(geometry.value(), source)?;
+    let mesh_layout = super::super::mesh_vertex_layout(&geometry.value().layout);
     let mut request = material_request(
         material.value(),
-        &geometry.value().layout,
+        &mesh_layout,
         view,
         source,
         environment,

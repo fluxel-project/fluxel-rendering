@@ -55,31 +55,34 @@ pub(super) fn materials(
     let mut prepared = Vec::with_capacity(inputs.len());
     for input in inputs {
         let layout = &input.geometry().value().layout;
+        let mesh_layout = crate::preparation::mesh_vertex_layout(layout);
         let request = match input.material().value().output() {
             fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. }
                 if effects =>
             {
-                crate::pbr::gbuffer_uv0_effect_request(layout)
+                crate::pbr::gbuffer_uv0_effect_request(&mesh_layout)
             }
             fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
             | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
                 normal: Some(_), ..
-            } if effects => crate::pbr::gbuffer_uv0_normal_effect_request(layout),
+            } if effects => crate::pbr::gbuffer_uv0_normal_effect_request(&mesh_layout),
             fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
             | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
                 normal: Some(_), ..
-            } => crate::pbr::gbuffer_uv0_normal_request(layout),
+            } => crate::pbr::gbuffer_uv0_normal_request(&mesh_layout),
             fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. }
             | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } => {
-                crate::pbr::gbuffer_uv0_request(layout)
+                crate::pbr::gbuffer_uv0_request(&mesh_layout)
             }
             fluxel_material::SurfaceOutput::MetallicRoughness { .. } => {
-                crate::pbr::gbuffer_request(layout)
+                crate::pbr::gbuffer_request(&mesh_layout)
             }
             fluxel_material::SurfaceOutput::ColorUv0 => {
-                super::templates::gbuffer_uv0_request(layout)
+                super::templates::gbuffer_uv0_request(&mesh_layout)
             }
-            fluxel_material::SurfaceOutput::Color => super::templates::gbuffer_request(layout),
+            fluxel_material::SurfaceOutput::Color => {
+                super::templates::gbuffer_request(&mesh_layout)
+            }
         }
         .ok_or(Error::Unsupported(
             "Deferred material cannot consume this geometry layout",
