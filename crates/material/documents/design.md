@@ -439,6 +439,16 @@ actual device-owned buffers, textures, bindings, physical ranges, incoming state
 and Graph accesses. Material does not treat a declared descriptor as proof of a
 concrete owner or of device compatibility.
 
+Generated PBR samples can select UV0 or UV1 independently by logical texture
+resource through `MaterialDefinition::with_texture_uv`. This covers the
+generated base color, packed metallic/roughness/occlusion and emissive samples.
+The transform stores three finite columns for the projected two-dimensional
+affine map. The compiler evaluates the same projected coordinate as Babylon's
+texture matrix applied to `(u, v, 1, 0)`. A texture without metadata samples
+UV0 directly. Authored WGSL nodes retain their declared inputs and sampling
+expressions. The coordinate set and coefficient bits participate in static
+material identity.
+
 ## Static identity and caching
 
 The canonical `MaterialVariantKey` includes static options, normalized material

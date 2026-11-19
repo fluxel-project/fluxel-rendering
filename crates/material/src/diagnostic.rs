@@ -408,6 +408,12 @@ pub enum MaterialError {
         /// Texture resource name.
         resource: String,
     },
+    /// Per-texture UV metadata named a texture not consumed by a generated
+    /// standard PBR or emissive evaluator.
+    TextureUvResourceUnused {
+        /// Texture resource name.
+        resource: String,
+    },
     /// A surface alpha cutoff must be finite before it can become WGSL source.
     SurfaceAlphaCutoffNonFinite,
     /// Transmission controls require a UV0 normal PBR surface.

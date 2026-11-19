@@ -125,6 +125,8 @@ pub enum MaterialPreparationError {
     },
     /// Dynamic varyings would exceed the WGSL location address space.
     VertexVaryingLocationOverflow,
+    /// The secondary texture coordinate must advance with mesh vertices.
+    TextureUv1RequiresVertexStep,
 }
 
 impl fmt::Display for MaterialPreparationError {
@@ -160,6 +162,12 @@ impl fmt::Display for MaterialPreparationError {
                 write!(
                     formatter,
                     "PBR template requires one vertex-varying {marker} marker"
+                )
+            }
+            Self::TextureUv1RequiresVertexStep => {
+                write!(
+                    formatter,
+                    "material texture coordinate UV1 requires a vertex-rate stream"
                 )
             }
             Self::VertexVaryingLocationOverflow => {
@@ -206,7 +214,27 @@ pub(super) fn prepare_compiled_material(
         super::forward_fragment::use_premultiplied_rgb(&mut request);
     }
     let contribution = material.contribution();
-    super::vertex_varyings::specialize(&mut request, contribution.vertex_varyings())?;
+    let uv1_argument = contribution.requires_texture_uv1();
+    // A view-disabled emissive sampler cannot reach the supplied secondary UV.
+    let uv1_input =
+        uv1_argument && (!emissive_disabled || contribution.requires_surface_texture_uv1());
+    if uv1_input
+        && geometry.streams.iter().any(|stream| {
+            matches!(stream.step_mode, fluxel_rhi::api::VertexStepMode::Instance)
+                && stream
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute.semantic == "UV1")
+        })
+    {
+        return Err(MaterialPreparationError::TextureUv1RequiresVertexStep);
+    }
+    super::vertex_varyings::specialize(
+        &mut request,
+        contribution.vertex_varyings(),
+        uv1_argument,
+        uv1_input,
+    )?;
     for (name, value) in contribution.shader_static_options() {
         if let Some(existing) = request.static_options.get(&name) {
             if existing != &value {

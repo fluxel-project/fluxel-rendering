@@ -1,9 +1,11 @@
 //! Opt-in Babylon-style PBR factor and packed-data lowering.
 
+use std::collections::BTreeMap;
+
 use crate::{
     MaterialError, MaterialNodeInputSource, MaterialParameter, MaterialResource,
     MaterialResourceKind, MaterialTextureEncoding, MaterialTextureEncodingRequirement,
-    MaterialType, PbrPackedChannel, PbrSurfaceFactors, SurfaceOutput,
+    MaterialTextureUv, MaterialType, PbrPackedChannel, PbrSurfaceFactors, SurfaceOutput,
 };
 
 use super::{canonical::piece as canonical_piece, node_graph::PBR_CONTEXT_INPUTS};
@@ -158,6 +160,7 @@ pub(super) fn append_uv0_evaluators(
     properties: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
     vertex_varyings: &[(u32, MaterialType)],
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
     let forbidden = factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
     let uv = if factors.is_some() {
@@ -165,9 +168,11 @@ pub(super) fn append_uv0_evaluators(
     } else {
         unique_local("uv", forbidden.iter().copied())
     };
-    let mut parameters = format!("{uv}: vec2<f32>");
+    let uv1 = uv1_name(texture_uv, forbidden.iter().copied());
+    let prefix = uv1_parameter(uv1.as_deref());
+    let mut parameters = format!("{prefix}{uv}: vec2<f32>");
     let mut arguments = uv.clone();
-    let mut full_arguments = uv.clone();
+    let mut full_arguments = format!("{}{uv}", uv1_argument(uv1.as_deref()));
     for (input, seed, ty) in PBR_CONTEXT_INPUTS {
         let name = unique_local(seed, forbidden.iter().copied());
         parameters.push_str(&format!(", {name}: {}", ty.wgsl()));
@@ -196,6 +201,8 @@ pub(super) fn append_uv0_evaluators(
             root_pbr_inputs.is_empty(),
             properties,
             factors,
+            texture_uv,
+            uv1.as_deref(),
         );
     }
     generated.push_str("struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, occlusion: f32 };\n");
@@ -205,7 +212,10 @@ pub(super) fn append_uv0_evaluators(
     let (base, properties, world_normal, has_world_normal, occlusion) = if properties.is_some() {
         (
             format!("evaluate_pbr_material_uv0({full_arguments})"),
-            format!("evaluate_metallic_roughness_uv0({uv})"),
+            format!(
+                "evaluate_metallic_roughness_uv0({}{uv})",
+                uv1_argument(uv1.as_deref())
+            ),
             "vec3<f32>(0.0)".into(),
             "false".into(),
             "1.0".into(),
@@ -213,13 +223,21 @@ pub(super) fn append_uv0_evaluators(
     } else {
         let values = unique_local("pbr_graph_values", forbidden.iter().copied());
         generated.push_str(&format!("    let {values} = {raw};\n"));
-        let base = apply_base_factors(&format!("{values}.base"), &uv, factors);
+        let base = apply_base_factors(
+            &format!("{values}.base"),
+            &uv,
+            factors,
+            texture_uv,
+            uv1.as_deref(),
+        );
         let properties = apply_property_factors(
             generated,
             format!("{values}.properties"),
             &uv,
             factors,
             forbidden.iter().copied(),
+            texture_uv,
+            uv1.as_deref(),
         );
         (
             base,
@@ -242,14 +260,18 @@ fn append_legacy_uv0(
     is_uv_only: bool,
     properties: &str,
     factors: Option<&PbrSurfaceFactors>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
+    base_uv1: Option<&str>,
 ) {
     let property_symbols = factors.map_or_else(
         || vec![properties],
         |factors| factor_symbols(factors, [properties].into_iter()),
     );
     let property_uv = unique_local("uv", property_symbols.iter().copied());
+    let property_uv1 = uv1_name(texture_uv, property_symbols.iter().copied());
+    let property_prefix = uv1_parameter(property_uv1.as_deref());
     generated.push_str(&format!(
-        "fn evaluate_metallic_roughness_uv0({property_uv}: vec2<f32>) -> vec2<f32> {{\n"
+        "fn evaluate_metallic_roughness_uv0({property_prefix}{property_uv}: vec2<f32>) -> vec2<f32> {{\n"
     ));
     let properties = apply_property_factors(
         generated,
@@ -257,17 +279,20 @@ fn append_legacy_uv0(
         &property_uv,
         factors,
         property_symbols.iter().copied(),
+        texture_uv,
+        property_uv1.as_deref(),
     );
     generated.push_str(&format!("    return {properties};\n}}\n"));
 
-    let base = apply_base_factors(raw, uv, factors);
+    let base = apply_base_factors(raw, uv, factors, texture_uv, base_uv1);
+    let base_prefix = uv1_parameter(base_uv1);
     if is_uv_only {
         generated.push_str(&format!(
-            "fn evaluate_material_uv0({uv}: vec2<f32>) -> vec4<f32> {{\n    return {base};\n}}\n"
+            "fn evaluate_material_uv0({base_prefix}{uv}: vec2<f32>) -> vec4<f32> {{\n    return {base};\n}}\n"
         ));
     }
     let base = if is_uv_only {
-        format!("evaluate_material_uv0({uv})")
+        format!("evaluate_material_uv0({}{uv})", uv1_argument(base_uv1))
     } else {
         base
     };
@@ -276,7 +301,13 @@ fn append_legacy_uv0(
     ));
 }
 
-fn apply_base_factors(value: &str, uv: &str, factors: Option<&PbrSurfaceFactors>) -> String {
+fn apply_base_factors(
+    value: &str,
+    uv: &str,
+    factors: Option<&PbrSurfaceFactors>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
+    uv1: Option<&str>,
+) -> String {
     let Some(factors) = factors else {
         return value.into();
     };
@@ -287,6 +318,7 @@ fn apply_base_factors(value: &str, uv: &str, factors: Option<&PbrSurfaceFactors>
     let sample = factors.base_texture.as_ref().map_or_else(
         || String::from("vec4<f32>(1.0)"),
         |texture| {
+            let uv = sample_uv(texture_uv, &texture.texture, uv, uv1);
             format!(
                 "textureSample({}, {}, {uv})",
                 texture.texture, texture.sampler
@@ -302,6 +334,8 @@ fn apply_property_factors<'a>(
     uv: &str,
     factors: Option<&PbrSurfaceFactors>,
     forbidden: impl IntoIterator<Item = &'a str>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
+    uv1: Option<&str>,
 ) -> String {
     let Some(factors) = factors else {
         return value;
@@ -317,6 +351,7 @@ fn apply_property_factors<'a>(
     let mut value = format!("{value} * vec2<f32>({metallic}, {roughness})");
     if let Some(texture) = &factors.packed_metallic_roughness {
         let sample = unique_local("pbr_packed_sample", forbidden);
+        let uv = sample_uv(texture_uv, &texture.texture, uv, uv1);
         generated.push_str(&format!(
             "    let {sample} = textureSample({}, {}, {uv});\n",
             texture.texture, texture.sampler
@@ -333,28 +368,33 @@ fn apply_property_factors<'a>(
 pub(super) fn uv0_occlusion_evaluator(
     authored: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) -> String {
-    let uv = factors.map_or_else(
-        || unique_local("pbr_uv", authored.into_iter()),
-        |factors| unique_local("pbr_uv", factor_symbols(factors, authored.into_iter())),
+    let names = factors.map_or_else(
+        || authored.into_iter().collect(),
+        |factors| factor_symbols(factors, authored.into_iter()),
     );
+    let uv = unique_local("pbr_uv", names.iter().copied());
+    let uv1 = uv1_name(texture_uv, names.iter().copied());
+    let prefix = uv1_parameter(uv1.as_deref());
     let previous = authored.map_or_else(|| String::from("1.0"), |name| format!("{name}({uv})"));
     let Some(packed) = factors.and_then(|factors| factors.packed_metallic_roughness.as_ref())
     else {
         return format!(
-            "fn evaluate_occlusion_uv0({uv}: vec2<f32>) -> f32 {{\n    return {previous};\n}}\n"
+            "fn evaluate_occlusion_uv0({prefix}{uv}: vec2<f32>) -> f32 {{\n    return {previous};\n}}\n"
         );
     };
     let Some(channel) = packed.occlusion else {
         return format!(
-            "fn evaluate_occlusion_uv0({uv}: vec2<f32>) -> f32 {{\n    return {previous};\n}}\n"
+            "fn evaluate_occlusion_uv0({prefix}{uv}: vec2<f32>) -> f32 {{\n    return {previous};\n}}\n"
         );
     };
     let strength = factors
         .and_then(|factors| factors.occlusion_strength_parameter.as_deref())
         .unwrap_or("1.0");
+    let sample_uv = sample_uv(texture_uv, &packed.texture, &uv, uv1.as_deref());
     format!(
-        "fn evaluate_occlusion_uv0({uv}: vec2<f32>) -> f32 {{\n    return mix({previous}, textureSample({}, {}, {uv}).{}, {strength});\n}}\n",
+        "fn evaluate_occlusion_uv0({prefix}{uv}: vec2<f32>) -> f32 {{\n    return mix({previous}, textureSample({}, {}, {sample_uv}).{}, {strength});\n}}\n",
         packed.texture,
         packed.sampler,
         channel_expression(channel),
@@ -383,6 +423,45 @@ fn factor_symbols<'a>(
         symbols.extend([texture.texture.as_str(), texture.sampler.as_str()]);
     }
     symbols
+}
+
+pub(super) fn uv1_name<'a>(
+    coordinates: &BTreeMap<String, MaterialTextureUv>,
+    symbols: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    coordinates
+        .values()
+        .any(|value| value.set() == crate::TextureUvSet::Uv1)
+        .then(|| unique_local("fluxel_uv1", symbols))
+}
+
+pub(super) fn uv1_parameter(name: Option<&str>) -> String {
+    name.map_or_else(String::new, |name| format!("{name}: vec2<f32>, "))
+}
+
+fn uv1_argument(name: Option<&str>) -> String {
+    name.map_or_else(String::new, |name| format!("{name}, "))
+}
+
+/// Babylon multiplies the selected UV and a unit affine coordinate by the
+/// texture matrix. These columns are the XY projection of that operation.
+pub(super) fn sample_uv(
+    coordinates: &BTreeMap<String, MaterialTextureUv>,
+    resource: &str,
+    uv0: &str,
+    uv1: Option<&str>,
+) -> String {
+    let Some(coordinates) = coordinates.get(resource) else {
+        return uv0.into();
+    };
+    let uv = match coordinates.set() {
+        crate::TextureUvSet::Uv0 => uv0,
+        crate::TextureUvSet::Uv1 => uv1.expect("UV1 sampling has a corresponding parameter"),
+    };
+    let [[xu, xv], [yu, yv], [tu, tv]] = coordinates.columns();
+    format!(
+        "(mat3x2<f32>(vec2<f32>({xu:?}, {xv:?}), vec2<f32>({yu:?}, {yv:?}), vec2<f32>({tu:?}, {tv:?})) * vec3<f32>({uv}, 1.0))"
+    )
 }
 
 fn unique_local<'a>(seed: &str, symbols: impl IntoIterator<Item = &'a str>) -> String {

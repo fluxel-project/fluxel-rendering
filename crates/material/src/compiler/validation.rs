@@ -19,6 +19,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) parameters: Vec<MaterialParameter>,
     pub(super) resources: Vec<MaterialResource>,
     pub(super) texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
+    texture_uv: BTreeMap<String, MaterialTextureUv>,
     static_options: BTreeMap<String, StaticValue>,
     pub(super) output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
@@ -115,6 +116,11 @@ impl NormalizedMaterialIr {
         let texture_encoding_requirements =
             super::texture_encoding::effective_requirements(definition)?;
         super::texture_encoding::validate(&texture_encoding_requirements, &resources)?;
+        let texture_uv = super::texture_uv::validate(
+            definition.texture_uv(),
+            definition.pbr_surface_factors(),
+            definition.emissive_configuration(),
+        )?;
         validate_top_level_names(
             &fragments,
             &code_nodes,
@@ -132,6 +138,7 @@ impl NormalizedMaterialIr {
             parameters: sorted_by_name(definition.parameters().to_vec(), |value| &value.name),
             resources,
             texture_encoding_requirements,
+            texture_uv,
             static_options: definition.static_options().clone(),
             output: definition.output().clone(),
             surface_extensions: definition.surface_extensions().clone(),
@@ -190,6 +197,7 @@ impl NormalizedMaterialIr {
         }
         canonical_resources(&mut canonical, &self.resources);
         super::texture_encoding::canonical(&self.texture_encoding_requirements, &mut canonical);
+        super::texture_uv::canonical(&self.texture_uv, &mut canonical);
         for (name, value) in &self.static_options {
             canonical_piece(&mut canonical, "static-name", name);
             canonical_piece(&mut canonical, "static-value", &value.canonical());
@@ -231,6 +239,8 @@ impl NormalizedMaterialIr {
             generated.push_str(&graph.source);
         }
         let vertex_varyings = super::vertex_uv0::varying_types(self.vertex_uv0.as_ref());
+        let texture_uv_requirements =
+            super::texture_uv::requirements(&self.texture_uv, self.pbr_surface_factors.as_ref());
         super::surface::append_evaluators(
             &mut generated,
             &self.root_fragment,
@@ -243,6 +253,7 @@ impl NormalizedMaterialIr {
             self.pbr_surface_factors.as_ref(),
             self.surface_policy,
             vertex_varyings,
+            &self.texture_uv,
         );
         super::vertex_uv0::append_evaluator(&self.output, self.vertex_uv0.as_ref(), &mut generated);
         super::transmission::append_evaluators(
@@ -291,6 +302,7 @@ impl NormalizedMaterialIr {
             self.static_options.clone(),
         )
         .with_vertex_varyings(vertex_varyings.to_vec())
+        .with_texture_uv_requirements(texture_uv_requirements.any, texture_uv_requirements.surface)
     }
 }
 

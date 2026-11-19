@@ -165,6 +165,15 @@ The built-in opaque and alpha-mask geometry paths use the instance stream.
 Transparent sorting, transmission, capture receivers, and the existing
 deformation override require individual or separately owned geometry inputs.
 
+### Per-texture UV coordinates
+
+Forward and Deferred PBR preparation specialize the selected material template
+when a generated sample needs UV1. Shader reflection requires a vertex-rate
+`Float32x2` UV1 attribute at vertex location 8, following the reserved instance
+transform locations 4 through 7. The template supplies a perspective-correct
+varying for the affine sample coordinates. Disabling emissive omits the UV1
+attribute when emissive is its only consumer.
+
 ### Diffuse irradiance input
 
 UV0 normal materials can supply scalar occlusion and linear emissive

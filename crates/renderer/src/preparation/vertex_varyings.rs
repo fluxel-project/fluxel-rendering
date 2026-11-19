@@ -1,7 +1,7 @@
-//! Renderer specialization for typed Material vertex-to-fragment varyings.
+//! Renderer specialization for Material UV sets and typed vertex varyings.
 
 use fluxel_material::MaterialType;
-use fluxel_shader::ShaderCompositionRequest;
+use fluxel_shader::{ScalarType, ShaderCompositionRequest, VertexInputDeclaration, VertexType};
 
 use super::MaterialPreparationError;
 
@@ -11,12 +11,17 @@ const FIELD_MARKERS: [(&str, u32); 2] = [
 ];
 const ASSIGNMENT_TARGETS: [&str; 2] = ["output", "o"];
 const ARGUMENT_MARKER: &str = "/* fluxel:vertex-varying-arguments */";
+const UV1_INPUT_MARKER: &str = "/* fluxel:uv1-input */";
+// Built-in mesh semantics occupy locations 0..4; instance columns use 4..8.
+const UV1_INPUT_LOCATION: u32 = 8;
 
 pub(super) fn specialize(
     request: &mut ShaderCompositionRequest,
     varyings: &[(u32, MaterialType)],
+    uv1_argument: bool,
+    uv1_input: bool,
 ) -> Result<(), MaterialPreparationError> {
-    if varyings.is_empty() {
+    if varyings.is_empty() && !uv1_argument {
         return Ok(());
     }
     let context = request.static_options.get("renderer.material_context");
@@ -29,14 +34,40 @@ pub(super) fn specialize(
     let mut fields_replaced = false;
     let mut assignments_replaced = false;
     let mut arguments_replaced = false;
+    let mut uv1_input_replaced = false;
+    let mut uv1_argument_replaced = false;
     for unit in &mut request.source_units {
         let source = &mut unit.source;
+        if uv1_argument {
+            if uv1_input && source.contains(UV1_INPUT_MARKER) {
+                replace_marker(
+                    source,
+                    UV1_INPUT_MARKER,
+                    &format!(", @location({UV1_INPUT_LOCATION}) fluxel_uv1: vec2<f32>"),
+                    "uv1 input",
+                    &mut uv1_input_replaced,
+                )?;
+            }
+            const UV1_ARG: &str = "/* fluxel:uv1-argument */";
+            uv1_argument_replaced |= source.contains(UV1_ARG);
+            *source = source
+                .replace(
+                    UV1_ARG,
+                    if uv1_input {
+                        "input.fluxel_uv1, "
+                    } else {
+                        "vec2<f32>(0.0), "
+                    },
+                )
+                .replace("/* fluxel:uv1-local-param */", "fluxel_uv1: vec2<f32>, ")
+                .replace("/* fluxel:uv1-local-argument */", "fluxel_uv1, ");
+        }
         for (marker, location) in FIELD_MARKERS {
             if source.contains(marker) {
                 replace_marker(
                     source,
                     marker,
-                    &fields(varyings, location)?,
+                    &fields(varyings, location, uv1_input)?,
                     "fields",
                     &mut fields_replaced,
                 )?;
@@ -50,7 +81,7 @@ pub(super) fn specialize(
                 replace_marker(
                     source,
                     &marker,
-                    &assignments(varyings, target),
+                    &assignments(varyings, target, uv1_input),
                     "assignments",
                     &mut assignments_replaced,
                 )?;
@@ -70,10 +101,19 @@ pub(super) fn specialize(
         (fields_replaced, "fields"),
         (assignments_replaced, "assignments"),
         (arguments_replaced, "arguments"),
+        (!uv1_input || uv1_input_replaced, "uv1 input"),
+        (!uv1_argument || uv1_argument_replaced, "uv1 argument"),
     ] {
         if !replaced {
             return Err(MaterialPreparationError::MissingVertexVaryingMarker { marker });
         }
+    }
+    if uv1_input {
+        request.vertex_inputs.push(VertexInputDeclaration::new(
+            "UV1",
+            UV1_INPUT_LOCATION,
+            VertexType::Vec2(ScalarType::F32),
+        ));
     }
     Ok(())
 }
@@ -96,8 +136,13 @@ fn replace_marker(
 fn fields(
     varyings: &[(u32, MaterialType)],
     mut location: u32,
+    uv1_input: bool,
 ) -> Result<String, MaterialPreparationError> {
     let mut output = String::new();
+    if uv1_input {
+        output.push_str(&format!("@location({location}) fluxel_uv1: vec2<f32>,\n"));
+        location += 1;
+    }
     for (id, ty) in varyings {
         let count = column_count(*ty);
         for column in 0..count {
@@ -122,10 +167,20 @@ fn fields(
     Ok(output)
 }
 
-fn assignments(varyings: &[(u32, MaterialType)], target: &str) -> String {
-    let mut output = format!(
+fn assignments(varyings: &[(u32, MaterialType)], target: &str, uv1_input: bool) -> String {
+    let mut output = String::new();
+    if uv1_input {
+        output.push_str(&format!("{target}.fluxel_uv1 = fluxel_uv1;\n"));
+    }
+    if varyings.is_empty() {
+        output.push_str(&format!(
+            "{target}.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);\n"
+        ));
+        return output;
+    }
+    output.push_str(&format!(
         "let fluxel_vertex_varyings = evaluate_pbr_vertex_varyings(uv0);\n{target}.vertex_uv0 = fluxel_vertex_varyings.uv0;\n"
-    );
+    ));
     for (id, ty) in varyings {
         for column in 0..column_count(*ty) {
             let field = field_name(*id, *ty, column);

@@ -1,9 +1,11 @@
 //! Generated WGSL emission for validated material surface outputs.
 
+use std::collections::BTreeMap;
+
 use super::super::pbr_factors;
 use crate::{
-    EmissiveConfiguration, MaterialNodeInputSource, MaterialType, PbrSurfaceFactors,
-    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    EmissiveConfiguration, MaterialNodeInputSource, MaterialTextureUv, MaterialType,
+    PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
 };
 
 pub(in crate::compiler) fn append_evaluators(
@@ -16,6 +18,7 @@ pub(in crate::compiler) fn append_evaluators(
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
     policy: SurfacePolicy,
     vertex_varyings: &[(u32, MaterialType)],
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
     match output {
         SurfaceOutput::Color => generated.push_str(&format!(
@@ -39,6 +42,7 @@ pub(in crate::compiler) fn append_evaluators(
             Some(properties),
             pbr_surface_factors,
             vertex_varyings,
+            texture_uv,
         ),
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
             pbr_factors::append_uv0_evaluators(
@@ -48,6 +52,7 @@ pub(in crate::compiler) fn append_evaluators(
                 Some(properties),
                 pbr_surface_factors,
                 vertex_varyings,
+                texture_uv,
             );
             append_normal_extensions(
                 generated,
@@ -55,6 +60,7 @@ pub(in crate::compiler) fn append_evaluators(
                 extensions,
                 emissive_configuration,
                 pbr_surface_factors,
+                texture_uv,
             );
         }
         SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
@@ -65,6 +71,7 @@ pub(in crate::compiler) fn append_evaluators(
                 None,
                 pbr_surface_factors,
                 vertex_varyings,
+                texture_uv,
             );
             if let Some(normal) = normal {
                 append_normal_extensions(
@@ -73,20 +80,26 @@ pub(in crate::compiler) fn append_evaluators(
                     extensions,
                     emissive_configuration,
                     pbr_surface_factors,
+                    texture_uv,
                 );
             } else {
-                append_neutral_effects(generated);
+                append_neutral_effects(generated, texture_uv);
             }
         }
     }
     append_policy_helpers(generated, policy);
 }
 
-fn append_neutral_effects(generated: &mut String) {
-    generated.push_str(
-        "fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 1.0; }\n\
-fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n",
-    );
+fn append_neutral_effects(
+    generated: &mut String,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
+) {
+    let uv1 = pbr_factors::uv1_name(texture_uv, []);
+    let prefix = pbr_factors::uv1_parameter(uv1.as_deref());
+    generated.push_str(&format!(
+        "fn evaluate_occlusion_uv0({prefix}uv: vec2<f32>) -> f32 {{ return 1.0; }}\n\
+fn evaluate_emissive_uv0({prefix}uv: vec2<f32>) -> vec3<f32> {{ return vec3<f32>(0.0); }}\n"
+    ));
 }
 
 fn append_normal_extensions(
@@ -95,6 +108,7 @@ fn append_normal_extensions(
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
     generated.push_str(&format!(
         "fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"
@@ -102,20 +116,27 @@ fn append_normal_extensions(
     generated.push_str(&pbr_factors::uv0_occlusion_evaluator(
         extensions.occlusion.as_deref(),
         pbr_surface_factors,
+        texture_uv,
     ));
+    let uv1 = pbr_factors::uv1_name(texture_uv, extensions.emissive.as_deref());
+    let prefix = pbr_factors::uv1_parameter(uv1.as_deref());
     match (&extensions.emissive, emissive_configuration) {
         (Some(_), Some(_)) => unreachable!("validated emissive configuration conflict"),
         (Some(emissive), None) => generated.push_str(&format!(
-            "fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n"
+            "fn evaluate_emissive_uv0({prefix}uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n"
         )),
-        (None, Some(configuration)) => append_emissive_configuration(generated, configuration),
-        (None, None) => generated.push_str(
-            "fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n",
-        ),
+        (None, Some(configuration)) => append_emissive_configuration(generated, configuration, texture_uv),
+        (None, None) => generated.push_str(&format!(
+            "fn evaluate_emissive_uv0({prefix}uv: vec2<f32>) -> vec3<f32> {{ return vec3<f32>(0.0); }}\n"
+        )),
     }
 }
 
-fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {
+fn append_emissive_configuration(
+    generated: &mut String,
+    configuration: &EmissiveConfiguration,
+    texture_uv: &BTreeMap<String, MaterialTextureUv>,
+) {
     let color = configuration
         .color_parameter
         .as_deref()
@@ -134,10 +155,13 @@ fn append_emissive_configuration(generated: &mut String, configuration: &Emissiv
         bindings[4] = &texture.sampler;
     }
     let uv = unique_emissive_local("emissive_uv", &bindings);
+    let uv1 = pbr_factors::uv1_name(texture_uv, bindings);
+    let prefix = pbr_factors::uv1_parameter(uv1.as_deref());
     generated.push_str(&format!(
-        "fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"
+        "fn evaluate_emissive_uv0({prefix}{uv}: vec2<f32>) -> vec3<f32> {{\n"
     ));
     if let Some(texture) = texture {
+        let uv = pbr_factors::sample_uv(texture_uv, &texture.texture, &uv, uv1.as_deref());
         let sample = format!(
             "textureSample({}, {}, {uv}).rgb",
             texture.texture, texture.sampler

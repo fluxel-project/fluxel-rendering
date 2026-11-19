@@ -8,7 +8,7 @@ const EMISSIVE_EVALUATOR: &str = "pbr-emissive";
 pub(super) fn install_emissive_evaluator(request: &mut ShaderCompositionRequest) {
     request.source_units.push(SourceUnit::new(
         EMISSIVE_EVALUATOR,
-        "fn pbr_emissive(uv: vec2<f32>) -> vec3<f32> { return evaluate_emissive_uv0(uv); }",
+        "fn pbr_emissive(/* fluxel:uv1-local-param */uv: vec2<f32>) -> vec3<f32> { return evaluate_emissive_uv0(/* fluxel:uv1-local-argument */uv); }",
     ));
 }
 
@@ -25,7 +25,7 @@ pub(crate) fn without_emissive(mut request: ShaderCompositionRequest) -> ShaderC
         .expect("surface-effect PBR request includes its emissive evaluator");
     *unit = SourceUnit::new(
         EMISSIVE_EVALUATOR,
-        "fn pbr_emissive(_uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }",
+        "fn pbr_emissive(/* fluxel:uv1-local-param */_uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }",
     );
     request
         .static_options

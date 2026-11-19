@@ -25,7 +25,7 @@ struct PbrSpecularVertexOutput {
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32> /* instance_parameters */,
+    @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32> /* instance_parameters */ /* fluxel:uv1-input */,
 ) -> PbrSpecularVertexOutput {
     /* instance_setup */
     var output: PbrSpecularVertexOutput;
@@ -54,7 +54,7 @@ struct PbrSpecularVertexOutput {
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32> /* instance_parameters */,
+    @location(2) uv0: vec2<f32> /* instance_parameters */ /* fluxel:uv1-input */,
 ) -> PbrSpecularVertexOutput {
     /* instance_setup */
     var output: PbrSpecularVertexOutput;
@@ -109,7 +109,7 @@ struct PbrSpecularVertexOutput {
         "let terms = pbr_direct_light_components(base, properties, normal, view, dielectric_f0);\n    let direct = terms.specular * {specular_energy} + terms.diffuse{diffuse_weight};"
     );
     let ambient_occlusion = if effects {
-        "clamp(surface.occlusion * evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"
+        "clamp(surface.occlusion * evaluate_occlusion_uv0(/* fluxel:uv1-argument */input.uv0), 0.0, 1.0)"
     } else {
         "surface.occlusion"
     };
@@ -121,7 +121,7 @@ struct PbrSpecularVertexOutput {
         String::from("let indirect = vec3<f32>(0.0);")
     };
     let emissive = if effects {
-        "let emissive = pbr_emissive(input.uv0);"
+        "let emissive = pbr_emissive(/* fluxel:uv1-argument */input.uv0);"
     } else {
         "let emissive = vec3<f32>(0.0);"
     };
@@ -155,7 +155,7 @@ struct PbrSpecularVertexOutput {
     format!(
         r#"{input}
 fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
-    let surface = evaluate_pbr_surface_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
+    let surface = evaluate_pbr_surface_uv0(/* fluxel:uv1-argument */input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
     let material = surface.base;
     let base = {base};
     let properties = surface.properties;

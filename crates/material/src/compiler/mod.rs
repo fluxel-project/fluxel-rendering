@@ -8,6 +8,7 @@ mod node_graph;
 mod pbr_factors;
 mod surface;
 mod texture_encoding;
+mod texture_uv;
 mod transmission;
 mod validation;
 mod vertex_uv0;
@@ -16,9 +17,9 @@ use crate::{
     BindingLocation, CompiledMaterialVariant, EmissiveConfiguration, FragmentCall, FragmentInput,
     MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
     MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
-    MaterialTextureEncodingRequirement, MaterialType, MaterialVariantKey, PbrSurfaceFactors,
-    RefractionEnvironment, StaticValue, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
-    SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType, MaterialVariantKey,
+    PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode, SurfaceExtensions,
+    SurfaceOutput, SurfacePolicy, TransmissionExtensions,
 };
 use fluxel_assets::AssetSnapshot;
 

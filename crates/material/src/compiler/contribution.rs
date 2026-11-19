@@ -45,6 +45,8 @@ pub struct MaterialShaderContribution {
     /// Canonical static choices participating in composition identity.
     pub static_options: BTreeMap<String, StaticValue>,
     vertex_varyings: Vec<(u32, MaterialType)>,
+    requires_texture_uv1: bool,
+    requires_surface_texture_uv1: bool,
 }
 
 impl MaterialShaderContribution {
@@ -67,6 +69,8 @@ impl MaterialShaderContribution {
             callables,
             static_options,
             vertex_varyings: Vec::new(),
+            requires_texture_uv1: false,
+            requires_surface_texture_uv1: false,
         }
     }
 
@@ -125,6 +129,28 @@ impl MaterialShaderContribution {
     ) -> Self {
         self.vertex_varyings = vertex_varyings;
         self
+    }
+
+    pub(super) fn with_texture_uv_requirements(
+        mut self,
+        requires_texture_uv1: bool,
+        requires_surface_texture_uv1: bool,
+    ) -> Self {
+        self.requires_texture_uv1 = requires_texture_uv1;
+        self.requires_surface_texture_uv1 = requires_surface_texture_uv1;
+        self
+    }
+
+    /// Returns whether any generated texture evaluator requires the UV1 input.
+    #[must_use]
+    pub const fn requires_texture_uv1(&self) -> bool {
+        self.requires_texture_uv1
+    }
+
+    /// Returns whether generated base or ORM surface sampling requires UV1.
+    #[must_use]
+    pub const fn requires_surface_texture_uv1(&self) -> bool {
+        self.requires_surface_texture_uv1
     }
 
     /// Converts resource metadata into Shader-owned binding declarations.

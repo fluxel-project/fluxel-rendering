@@ -138,6 +138,57 @@ pub struct PbrBaseTexture {
     pub sampler: String,
 }
 
+/// Mesh texture-coordinate set selected by one generated texture evaluator.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum TextureUvSet {
+    /// The first mesh texture-coordinate set.
+    Uv0,
+    /// The second mesh texture-coordinate set.
+    Uv1,
+}
+
+/// One finite affine texture-coordinate transform for a generated texture use.
+///
+/// The three stored columns encode a homogeneous `mat3x2` transform from the
+/// selected mesh UV set. Coefficients retain their exact IEEE-754 bit patterns
+/// so variant identity distinguishes signed zero and other authored values.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MaterialTextureUv {
+    set: TextureUvSet,
+    columns: [[u32; 2]; 3],
+}
+
+impl MaterialTextureUv {
+    /// Creates an affine texture-coordinate transform when every coefficient is finite.
+    #[must_use]
+    pub fn new(set: TextureUvSet, columns: [[f32; 2]; 3]) -> Option<Self> {
+        columns
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite())
+            .then(|| Self {
+                set,
+                columns: columns.map(|column| column.map(f32::to_bits)),
+            })
+    }
+
+    /// Returns the selected mesh texture-coordinate set.
+    #[must_use]
+    pub const fn set(self) -> TextureUvSet {
+        self.set
+    }
+
+    /// Returns the authored affine transform coefficients.
+    #[must_use]
+    pub fn columns(self) -> [[f32; 2]; 3] {
+        self.columns.map(|column| column.map(f32::from_bits))
+    }
+
+    pub(crate) const fn bits(self) -> [[u32; 2]; 3] {
+        self.columns
+    }
+}
+
 /// One channel of a packed PBR data texture.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PbrPackedChannel {
@@ -225,6 +276,7 @@ pub struct MaterialDefinition {
     parameters: Vec<MaterialParameter>,
     resources: Vec<MaterialResource>,
     texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
+    texture_uv: BTreeMap<String, MaterialTextureUv>,
     static_options: BTreeMap<String, StaticValue>,
     output: SurfaceOutput,
     surface_extensions: SurfaceExtensions,
@@ -271,6 +323,7 @@ impl MaterialDefinition {
             parameters,
             resources,
             texture_encoding_requirements: Vec::new(),
+            texture_uv: BTreeMap::new(),
             static_options,
             output,
             surface_extensions: SurfaceExtensions::default(),
@@ -362,6 +415,21 @@ impl MaterialDefinition {
         requirements: Vec<MaterialTextureEncodingRequirement>,
     ) -> Self {
         self.texture_encoding_requirements = requirements;
+        self
+    }
+
+    /// Selects one texture-coordinate set and affine transform for a generated
+    /// built-in texture evaluator.
+    ///
+    /// Validation only admits names selected by standard PBR base or packed
+    /// factors, or by the configured standard emissive texture.
+    #[must_use]
+    pub fn with_texture_uv(
+        mut self,
+        resource: impl Into<String>,
+        coordinates: MaterialTextureUv,
+    ) -> Self {
+        self.texture_uv.insert(resource.into(), coordinates);
         self
     }
 
@@ -474,6 +542,9 @@ impl MaterialDefinition {
     }
     pub(crate) fn texture_encoding_requirements(&self) -> &[MaterialTextureEncodingRequirement] {
         &self.texture_encoding_requirements
+    }
+    pub(crate) fn texture_uv(&self) -> &BTreeMap<String, MaterialTextureUv> {
+        &self.texture_uv
     }
     pub(crate) fn static_options(&self) -> &BTreeMap<String, StaticValue> {
         &self.static_options
