@@ -6,8 +6,8 @@ use fluxel_rhi::api::{
 
 use crate::residency::{
     DeferredSurfaceFrame, SurfaceForwardFrameBuffers, allocate_deferred_scene_color_desc,
-    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
-    plan_deferred_msaa_with_effects, plan_surface_forward_frame,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_aux,
+    plan_deferred_msaa_with_aux, plan_surface_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -40,9 +40,16 @@ where
         self.ensure_open()?;
         crate::renderer::require_opaque_or_mask(inputs)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
-        self.prepare_deferred_surface_resources(inputs, &prepared, pbr, effects, color_format)
-            .await
+        let (prepared, pbr, effects, diffuse_roughness) = super::scene_prepare::materials(inputs)?;
+        self.prepare_deferred_surface_resources(
+            inputs,
+            &prepared,
+            pbr,
+            effects,
+            diffuse_roughness,
+            color_format,
+        )
+        .await
     }
 
     async fn prepare_deferred_surface_resources(
@@ -51,6 +58,7 @@ where
         prepared: &[PreparedMaterial],
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<DeferredSurfaceFrame<B>, RendererError> {
         let input = inputs.first().ok_or(Error::InvalidState)?;
@@ -70,7 +78,10 @@ where
             None
         };
         let limits = self.device.capabilities().limits;
-        let lighting_bindings = 3 + u32::from(effects) + u32::from(pbr && specular.is_none());
+        let lighting_bindings = 3
+            + u32::from(effects)
+            + u32::from(diffuse_roughness)
+            + u32::from(pbr && specular.is_none());
         if limits.max_bindings_per_group < lighting_bindings {
             return Err(self.observe_rhi_error(Error::Unsupported("Deferred lighting bindings")));
         }
@@ -106,14 +117,20 @@ where
             limits.uniform_offset_alignment,
         )
         .map_err(|error| self.observe_rhi_error(error))?;
-        let gbuffer_plan =
-            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
-                .map_err(|error| self.observe_rhi_error(error))?;
-        let msaa_plan = plan_deferred_msaa_with_effects(
+        let gbuffer_plan = plan_deferred_gbuffer_with_aux(
             &self.device,
             input.extent(),
             pbr,
             effects,
+            diffuse_roughness,
+        )
+        .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa_plan = plan_deferred_msaa_with_aux(
+            &self.device,
+            input.extent(),
+            pbr,
+            effects,
+            diffuse_roughness,
             self.deferred_sample_count(),
         )
         .map_err(|error| self.observe_rhi_error(error))?;
@@ -122,7 +139,7 @@ where
                 return Err(self.observe_rhi_error(Error::Unsupported(reason)));
             }
         }
-        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects);
+        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects, diffuse_roughness);
         let mut geometry_programs = Vec::with_capacity(prepared.len());
         for (input, material) in inputs.iter().zip(prepared) {
             geometry_programs.push(
@@ -130,6 +147,7 @@ where
                     material,
                     pbr,
                     effects,
+                    diffuse_roughness,
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?,
@@ -160,6 +178,7 @@ where
                 environment.is_some(),
                 specular.is_some(),
                 effects,
+                diffuse_roughness,
                 scene_color_desc.format,
             )
             .await?;
@@ -180,12 +199,14 @@ where
         let (frame, uniform_upload) =
             SurfaceForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
                 .map_err(|error| self.observe_rhi_error(error))?;
-        let (gbuffer, effects_attachment) = gbuffer_plan
-            .allocate_with_effects(&self.device)
+        let (gbuffer, effects_attachment, roughness_attachment) = gbuffer_plan
+            .allocate_with_aux(&self.device)
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let msaa = self.realize_deferred_msaa(msaa_plan, pbr, effects).await?;
+        let msaa = self
+            .realize_deferred_msaa(msaa_plan, pbr, effects, diffuse_roughness)
+            .await?;
         let scene_color_sampler_desc = crate::renderer::forward::default_material_sampler();
         let scene_color_sampler = self
             .device
@@ -242,6 +263,12 @@ where
                 },
             });
         }
+        if let Some(roughness) = &roughness_attachment {
+            lighting_entries.push(BindGroupEntry {
+                binding: crate::pbr::DIFFUSE_ROUGHNESS_BINDING,
+                resource: BindingResource::TextureView(&roughness.view),
+            });
+        }
         let lighting_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -292,10 +319,10 @@ where
             .deferred_stats
             .buffer_allocations
             .saturating_add(2 + resident_buffers);
-        self.deferred_stats.texture_allocations = self
-            .deferred_stats
-            .texture_allocations
-            .saturating_add(4 + resident_textures);
+        self.deferred_stats.texture_allocations =
+            self.deferred_stats.texture_allocations.saturating_add(
+                4 + u64::from(effects) + u64::from(diffuse_roughness) + resident_textures,
+            );
         self.deferred_stats.resident_upload_bytes = self
             .deferred_stats
             .resident_upload_bytes
@@ -318,6 +345,7 @@ where
             specular,
             gbuffer,
             effects: effects_attachment,
+            diffuse_roughness: roughness_attachment,
             msaa,
             scene_color,
             scene_color_sampler,

@@ -37,6 +37,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects.as_ref()) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
+        if let (Some(slot), Some(_)) = (
+            self.diffuse_roughness_slot,
+            frame.diffuse_roughness.as_ref(),
+        ) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
         pass.texture(
             scene_color_slot,
             whole_color(),

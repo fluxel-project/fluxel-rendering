@@ -31,6 +31,7 @@ mod oit_declaration;
 mod oit_plan;
 mod oit_record;
 mod phase;
+mod phase_lighting;
 mod plan;
 mod plan_bindings;
 mod plan_steps;
@@ -134,8 +135,10 @@ pub(crate) struct DeferredPlan<B: ResourceBackend> {
     specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
+    diffuse_roughness_slot: Option<TextureSlot>,
     msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
     msaa_effects_slot: Option<TextureSlot>,
+    msaa_diffuse_roughness_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,
@@ -176,8 +179,10 @@ pub(crate) struct DeferredDeclaration {
     specular_brdf_lut_slot: Option<TextureSlot>,
     gbuffer_slots: [TextureSlot; 3],
     effects_slot: Option<TextureSlot>,
+    diffuse_roughness_slot: Option<TextureSlot>,
     msaa_gbuffer_slots: Option<[TextureSlot; 3]>,
     msaa_effects_slot: Option<TextureSlot>,
+    msaa_diffuse_roughness_slot: Option<TextureSlot>,
     scene_color_slot: Option<TextureSlot>,
     surface_target_slot: Option<TextureSlot>,
     target_slot: Option<TextureSlot>,

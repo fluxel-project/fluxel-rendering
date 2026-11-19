@@ -6,7 +6,7 @@ use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
 
 pub(super) fn materials(
     inputs: &[ForwardDrawInput],
-) -> Result<(Vec<PreparedMaterial>, bool, bool), RendererError> {
+) -> Result<(Vec<PreparedMaterial>, bool, bool, bool), RendererError> {
     let first = inputs
         .first()
         .ok_or(Error::Unsupported("Deferred requires visible geometry"))?;
@@ -52,6 +52,9 @@ pub(super) fn materials(
     let effects = inputs
         .iter()
         .any(|input| input.material().value().requires_surface_effects());
+    let diffuse_roughness = inputs
+        .iter()
+        .any(|input| input.prepared().material().uses_diffuse_roughness());
     let mut prepared = Vec::with_capacity(inputs.len());
     for input in inputs {
         let layout = &input.geometry().value().layout;
@@ -97,6 +100,11 @@ pub(super) fn materials(
         } else {
             request
         };
+        let request = if diffuse_roughness {
+            crate::pbr::with_gbuffer_diffuse_roughness(request, effects)
+        } else {
+            request
+        };
         let request = if input.has_instance_transforms() {
             crate::preparation::with_instance_transform(request, input.source())
                 .map_err(RendererError::ForwardPreparation)?
@@ -121,7 +129,7 @@ pub(super) fn materials(
         }
         prepared.push(material.with_binding_schema(schema));
     }
-    Ok((prepared, pbr, effects))
+    Ok((prepared, pbr, effects, diffuse_roughness))
 }
 
 pub(super) fn uniforms(

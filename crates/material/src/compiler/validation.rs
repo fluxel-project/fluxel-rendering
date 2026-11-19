@@ -9,6 +9,7 @@ use super::canonical::{
 use super::names::{
     shader_resource_name, validate_generated_node_references, validate_top_level_names,
 };
+use super::validation_code_nodes::validate_code_node_sources;
 use super::*;
 use fluxel_shader::CallableDeclaration;
 #[derive(Clone, Debug)]
@@ -25,6 +26,7 @@ pub(super) struct NormalizedMaterialIr {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     pub(super) normal_map_settings: Option<NormalMapSettings>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
@@ -128,6 +130,7 @@ impl NormalizedMaterialIr {
             definition.texture_uv(),
             definition.pbr_surface_factors(),
             definition.emissive_configuration(),
+            definition.diffuse_roughness_configuration(),
         )?;
         validate_top_level_names(
             &fragments,
@@ -136,6 +139,7 @@ impl NormalizedMaterialIr {
             definition.parameters(),
             definition.static_options(),
             definition.output(),
+            definition.diffuse_roughness_configuration().is_some(),
             graphs,
         )?;
         validate_calls(&functions)?;
@@ -152,6 +156,7 @@ impl NormalizedMaterialIr {
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
+            diffuse_roughness_configuration: definition.diffuse_roughness_configuration().cloned(),
             normal_map_settings: definition.normal_map_settings(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
@@ -170,6 +175,10 @@ impl NormalizedMaterialIr {
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
             self.pbr_surface_factors.as_ref(),
+            &mut canonical,
+        );
+        super::diffuse_roughness::canonical(
+            self.diffuse_roughness_configuration.as_ref(),
             &mut canonical,
         );
         super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
@@ -249,8 +258,11 @@ impl NormalizedMaterialIr {
             generated.push_str(&graph.source);
         }
         let vertex_varyings = super::vertex_uv0::varying_types(self.vertex_uv0.as_ref());
-        let texture_uv_requirements =
-            super::texture_uv::requirements(&self.texture_uv, self.pbr_surface_factors.as_ref());
+        let texture_uv_requirements = super::texture_uv::requirements(
+            &self.texture_uv,
+            self.pbr_surface_factors.as_ref(),
+            self.diffuse_roughness_configuration.as_ref(),
+        );
         super::surface::append_evaluators(
             &mut generated,
             &self.root_fragment,
@@ -264,6 +276,12 @@ impl NormalizedMaterialIr {
             self.normal_map_settings,
             self.surface_policy,
             vertex_varyings,
+            &self.texture_uv,
+        );
+        super::diffuse_roughness::append_evaluator(
+            &mut generated,
+            self.diffuse_roughness_configuration.as_ref(),
+            &self.output,
             &self.texture_uv,
         );
         super::vertex_uv0::append_evaluator(&self.output, self.vertex_uv0.as_ref(), &mut generated);
@@ -315,23 +333,6 @@ impl NormalizedMaterialIr {
         .with_vertex_varyings(vertex_varyings.to_vec())
         .with_texture_uv_requirements(texture_uv_requirements.any, texture_uv_requirements.surface)
     }
-}
-
-fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {
-    let mut ids = BTreeSet::new();
-    for node in nodes {
-        if node.source.id.0.is_empty() {
-            return Err(MaterialError::EmptyCodeNodeSourceId {
-                node: node.name.clone(),
-            });
-        }
-        if !ids.insert(node.source.id.0.as_str()) {
-            return Err(MaterialError::DuplicateCodeNodeSourceId {
-                source_id: node.source.id.0.clone(),
-            });
-        }
-    }
-    Ok(())
 }
 
 fn function_signatures(

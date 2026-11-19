@@ -81,6 +81,13 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .as_ref()
                     .and_then(|msaa| msaa.effects.as_ref())
                     .is_some()
+            || self.diffuse_roughness_slot.is_some() != frame.diffuse_roughness.is_some()
+            || self.msaa_diffuse_roughness_slot.is_some()
+                != frame
+                    .msaa
+                    .as_ref()
+                    .and_then(|msaa| msaa.diffuse_roughness.as_ref())
+                    .is_some()
         {
             return Err(Error::InvalidState);
         }
@@ -266,6 +273,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         }),
                 )
                 .chain(
+                    self.diffuse_roughness_slot
+                        .zip(frame.diffuse_roughness.as_ref())
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
                     self.msaa_gbuffer_slots
                         .into_iter()
                         .flatten()
@@ -284,6 +305,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 .chain(
                     self.msaa_effects_slot
                         .zip(frame.msaa.as_ref().and_then(|msaa| msaa.effects.as_ref()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.msaa_diffuse_roughness_slot
+                        .zip(
+                            frame
+                                .msaa
+                                .as_ref()
+                                .and_then(|msaa| msaa.diffuse_roughness.as_ref()),
+                        )
                         .map(|(slot, texture)| {
                             BoundTexture::new(
                                 slot,
@@ -384,6 +424,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             pass.texture(slot, range, AccessKind::Read, sampled_read())?;
         }
         if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects.as_ref()) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
+        if let (Some(slot), Some(_)) = (
+            self.diffuse_roughness_slot,
+            frame.diffuse_roughness.as_ref(),
+        ) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
         pass.texture(

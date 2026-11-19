@@ -26,6 +26,7 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
             .gbuffer
             .iter()
             .chain(frame.effects.iter())
+            .chain(frame.diffuse_roughness.iter())
             .chain([&frame.scene_color])
         {
             if owner.device != device
@@ -148,6 +149,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
         .iter()
         .map(|owner| owner.instance)
         .chain(producer.effects.iter().map(|owner| owner.instance))
+        .chain(
+            producer
+                .diffuse_roughness
+                .iter()
+                .map(|owner| owner.instance),
+        )
         .chain([
             producer.scene_color.instance,
             product.instance,
@@ -163,6 +170,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
         .iter()
         .map(|owner| owner.instance)
         .chain(receiver.effects.iter().map(|owner| owner.instance))
+        .chain(
+            receiver
+                .diffuse_roughness
+                .iter()
+                .map(|owner| owner.instance),
+        )
         .chain([
             receiver.scene_color.instance,
             receiver.frame.target_instance,
@@ -193,6 +206,12 @@ pub(super) fn validate_capture_owners<B: ResourceBackend>(
         .iter()
         .map(|owner| owner.instance)
         .chain(receiver.effects.iter().map(|owner| owner.instance))
+        .chain(
+            receiver
+                .diffuse_roughness
+                .iter()
+                .map(|owner| owner.instance),
+        )
         .chain([
             receiver.scene_color.instance,
             receiver.frame.target_instance,
@@ -326,6 +345,12 @@ fn validate_oit_input<B: ResourceBackend>(
         producer.gbuffer[1].instance,
         producer.gbuffer[2].instance,
     ]);
+    owners.extend(
+        producer
+            .diffuse_roughness
+            .iter()
+            .map(|owner| owner.instance),
+    );
     owners.extend(
         producer
             .resident

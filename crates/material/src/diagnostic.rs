@@ -360,6 +360,53 @@ pub enum MaterialError {
         /// Texture resource name.
         resource: String,
     },
+    /// Diffuse-roughness controls require a PBR surface, and texture sampling
+    /// additionally requires a UV-capable PBR surface.
+    DiffuseRoughnessUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
+    /// A diffuse-roughness control named no declared material parameter.
+    DiffuseRoughnessParameterMissing {
+        /// Configuration field.
+        field: &'static str,
+        /// Missing parameter name.
+        parameter: String,
+    },
+    /// A diffuse-roughness control named a parameter with an incompatible type.
+    DiffuseRoughnessParameterTypeMismatch {
+        /// Configuration field.
+        field: &'static str,
+        /// Parameter name.
+        parameter: String,
+        /// Required type.
+        expected: MaterialType,
+        /// Actual type.
+        actual: MaterialType,
+    },
+    /// A diffuse-roughness texture named no declared material resource.
+    DiffuseRoughnessResourceMissing {
+        /// Configuration field.
+        field: &'static str,
+        /// Missing resource name.
+        resource: String,
+    },
+    /// A diffuse-roughness texture named a resource with an incompatible kind.
+    DiffuseRoughnessResourceTypeMismatch {
+        /// Configuration field.
+        field: &'static str,
+        /// Resource name.
+        resource: String,
+        /// Required kind.
+        expected: MaterialResourceKind,
+        /// Actual kind.
+        actual: MaterialResourceKind,
+    },
+    /// Explicit texture encoding metadata contradicts the diffuse-roughness texture.
+    DiffuseRoughnessTextureEncodingConflict {
+        /// Texture resource name.
+        resource: String,
+    },
     /// PBR factors require UV0 and packed occlusion also requires the normal-surface interface.
     PbrSurfaceFactorsUnsupported {
         /// Selected output.

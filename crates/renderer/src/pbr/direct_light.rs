@@ -59,7 +59,7 @@ struct PbrDirectLight {
 
 fn pbr_direct_light_brdf(
     base: vec3<f32>, properties: vec2<f32>, normal: vec3<f32>, view: vec3<f32>,
-    dielectric_f0: vec3<f32>, directional: PbrDirectionalLight,
+    dielectric_f0: vec3<f32>, diffuse_roughness: f32, directional: PbrDirectionalLight,
 ) -> PbrDirectLight {
     // The authored direction follows emitted rays, as in Babylon's vLightData.
     let light = pbr_normal(-directional.direction_and_roughness.xyz);
@@ -71,11 +71,10 @@ fn pbr_direct_light_brdf(
     let no_h = clamp(dot(normal, half_direction), PBR_EPSILON, 1.0);
     let vo_h = clamp(dot(view, half_direction), 0.0, 1.0);
 
-    // PBRBRDFConfiguration defaults to EON and legacy energy conservation.
-    // The current surface supplies no separate diffuse-roughness texture/value.
+    // Babylon's EON lobe uses its independently authored diffuse roughness.
     let surface_albedo = base * (vec3<f32>(1.0) - dielectric_f0) * (1.0 - properties.x);
     let eon_albedo = clamp(surface_albedo, vec3<f32>(0.1), vec3<f32>(1.0));
-    let diffuse_term = diffuseBRDF_EON(eon_albedo, 0.0, no_l, no_v, dot(light, view)) / eon_albedo;
+    let diffuse_term = diffuseBRDF_EON(eon_albedo, diffuse_roughness, no_l, no_v, dot(light, view)) / eon_albedo;
     let diffuse = max(diffuse_term * no_l * light_color * surface_albedo, vec3<f32>(0.0));
 
     // glTF dielectric and conductor Schlick branches with unit specular weight.
@@ -95,20 +94,38 @@ fn pbr_direct_light_brdf(
     return PbrDirectLight(diffuse, specular);
 }
 
-fn pbr_direct_light_components(
+fn pbr_direct_light_components_with_diffuse_roughness(
     base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
+    diffuse_roughness: f32,
 ) -> PbrDirectLight {
     return pbr_direct_light_brdf(
         max(base, vec3<f32>(0.0)), clamp(properties, vec2<f32>(0.0), vec2<f32>(1.0)), pbr_normal(world_normal),
-        view, dielectric_f0, pbr_directional_light(),
+        view, dielectric_f0, diffuse_roughness, pbr_directional_light(),
     );
+}
+
+fn pbr_direct_light_components(
+    base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
+) -> PbrDirectLight {
+    return pbr_direct_light_components_with_diffuse_roughness(
+        base, properties, world_normal, view, dielectric_f0, 0.0,
+    );
+}
+
+fn pbr_direct_light_view_with_diffuse_roughness(
+    base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
+    diffuse_roughness: f32,
+) -> vec3<f32> {
+    let terms = pbr_direct_light_components_with_diffuse_roughness(
+        base, properties, world_normal, view, dielectric_f0, diffuse_roughness,
+    );
+    return terms.diffuse + terms.specular;
 }
 
 fn pbr_direct_light_view(
     base: vec3<f32>, properties: vec2<f32>, world_normal: vec3<f32>, view: vec3<f32>, dielectric_f0: vec3<f32>,
 ) -> vec3<f32> {
-    let terms = pbr_direct_light_components(base, properties, world_normal, view, dielectric_f0);
-    return terms.diffuse + terms.specular;
+    return pbr_direct_light_view_with_diffuse_roughness(base, properties, world_normal, view, dielectric_f0, 0.0);
 }
 
 fn pbr_gbuffer_is_covered(normal: vec3<f32>) -> bool {

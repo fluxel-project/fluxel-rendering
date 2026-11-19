@@ -22,6 +22,7 @@ impl MaterialCompiler {
             ir.normal_map_settings,
             ir.surface_policy,
             ir.transmission_extensions,
+            ir.diffuse_roughness_configuration.is_some(),
         ))
     }
 

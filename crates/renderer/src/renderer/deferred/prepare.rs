@@ -8,8 +8,8 @@ use fluxel_rhi::api::{
 
 use crate::residency::{
     DeferredFrame, ForwardFrameBuffers, allocate_deferred_scene_color_desc,
-    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_effects,
-    plan_deferred_msaa_with_effects, plan_forward_frame,
+    deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_aux,
+    plan_deferred_msaa_with_aux, plan_forward_frame,
 };
 use crate::{ForwardDrawInput, PreparedMaterial};
 
@@ -86,7 +86,7 @@ where
         self.ensure_open()?;
         crate::renderer::require_opaque_or_mask(inputs)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let (prepared, pbr, effects) = super::scene_prepare::materials(inputs)?;
+        let (prepared, pbr, effects, diffuse_roughness) = super::scene_prepare::materials(inputs)?;
         let extent = inputs.first().ok_or(Error::InvalidState)?.extent();
         let mut scene_color =
             deferred_scene_color_desc_with_format(extent, self.deferred_scene_color_format());
@@ -101,8 +101,16 @@ where
             }
         }
         self.admit_deferred_scene_color(&scene_color)?;
-        self.prepare_deferred_resources(inputs, &prepared, pbr, effects, capture, scene_color)
-            .await
+        self.prepare_deferred_resources(
+            inputs,
+            &prepared,
+            pbr,
+            effects,
+            diffuse_roughness,
+            capture,
+            scene_color,
+        )
+        .await
     }
 
     async fn prepare_deferred_resources(
@@ -111,6 +119,7 @@ where
         prepared: &[PreparedMaterial],
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         capture: Option<&crate::renderer::forward::CaptureTextureOwner<B>>,
         scene_color_desc: TextureDesc,
     ) -> std::result::Result<DeferredFrame<B>, RendererError> {
@@ -137,7 +146,10 @@ where
             None
         };
         let limits = self.device.capabilities().limits;
-        let lighting_bindings = 3 + u32::from(effects) + u32::from(pbr && specular.is_none());
+        let lighting_bindings = 3
+            + u32::from(effects)
+            + u32::from(diffuse_roughness)
+            + u32::from(pbr && specular.is_none());
         if limits.max_bindings_per_group < lighting_bindings {
             return Err(self.observe_rhi_error(Error::Unsupported("Deferred lighting bindings")));
         }
@@ -177,14 +189,20 @@ where
             false,
         )
         .map_err(|error| self.observe_rhi_error(error))?;
-        let gbuffer_plan =
-            plan_deferred_gbuffer_with_effects(&self.device, input.extent(), pbr, effects)
-                .map_err(|error| self.observe_rhi_error(error))?;
-        let msaa_plan = plan_deferred_msaa_with_effects(
+        let gbuffer_plan = plan_deferred_gbuffer_with_aux(
             &self.device,
             input.extent(),
             pbr,
             effects,
+            diffuse_roughness,
+        )
+        .map_err(|error| self.observe_rhi_error(error))?;
+        let msaa_plan = plan_deferred_msaa_with_aux(
+            &self.device,
+            input.extent(),
+            pbr,
+            effects,
+            diffuse_roughness,
             self.deferred_sample_count(),
         )
         .map_err(|error| self.observe_rhi_error(error))?;
@@ -203,7 +221,7 @@ where
         if let Support::Unsupported(reason) = self.device.texture_support(&frame_plan.target_desc) {
             return Err(self.observe_rhi_error(Error::Unsupported(reason)));
         }
-        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects);
+        self.retain_deferred_gbuffer_programs(inputs, prepared, pbr, effects, diffuse_roughness);
         let mut geometry_programs = Vec::with_capacity(prepared.len());
         for (input, material) in inputs.iter().zip(prepared) {
             geometry_programs.push(
@@ -211,6 +229,7 @@ where
                     material,
                     pbr,
                     effects,
+                    diffuse_roughness,
                     crate::renderer::raster_surface_state(input),
                 )
                 .await?,
@@ -236,6 +255,7 @@ where
                 environment.is_some(),
                 specular.is_some(),
                 effects,
+                diffuse_roughness,
                 scene_color_desc.format,
             )
             .await?;
@@ -271,28 +291,39 @@ where
                 row_pitch,
                 pbr,
                 effects,
+                diffuse_roughness,
             )
         });
         let reused_frame = pooled.is_some();
-        let (frame, uniform_upload, gbuffer, effects_attachment) = if let Some(entry) = pooled {
-            (
-                entry.frame,
-                frame_plan.uniform_upload.clone(),
-                entry.gbuffer,
-                entry.effects,
-            )
-        } else {
-            let (frame, uniform_upload) =
-                ForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
+        let (frame, uniform_upload, gbuffer, effects_attachment, roughness_attachment) =
+            if let Some(entry) = pooled {
+                (
+                    entry.frame,
+                    frame_plan.uniform_upload.clone(),
+                    entry.gbuffer,
+                    entry.effects,
+                    entry.diffuse_roughness,
+                )
+            } else {
+                let (frame, uniform_upload) =
+                    ForwardFrameBuffers::allocate_planned(&self.device, frame_plan)
+                        .map_err(|error| self.observe_rhi_error(error))?;
+                let (gbuffer, effects_attachment, roughness_attachment) = gbuffer_plan
+                    .allocate_with_aux(&self.device)
                     .map_err(|error| self.observe_rhi_error(error))?;
-            let (gbuffer, effects_attachment) = gbuffer_plan
-                .allocate_with_effects(&self.device)
-                .map_err(|error| self.observe_rhi_error(error))?;
-            (frame, uniform_upload, gbuffer, effects_attachment)
-        };
+                (
+                    frame,
+                    uniform_upload,
+                    gbuffer,
+                    effects_attachment,
+                    roughness_attachment,
+                )
+            };
         let scene_color = allocate_deferred_scene_color_desc(&self.device, scene_color_desc)
             .map_err(|error| self.observe_rhi_error(error))?;
-        let msaa = self.realize_deferred_msaa(msaa_plan, pbr, effects).await?;
+        let msaa = self
+            .realize_deferred_msaa(msaa_plan, pbr, effects, diffuse_roughness)
+            .await?;
         let scene_color_sampler_desc = crate::renderer::forward::material_sampler(1)
             .map_err(|error| self.observe_rhi_error(error))?;
         let scene_color_sampler = self
@@ -350,6 +381,12 @@ where
                 },
             });
         }
+        if let Some(roughness) = &roughness_attachment {
+            lighting_entries.push(BindGroupEntry {
+                binding: crate::pbr::DIFFUSE_ROUGHNESS_BINDING,
+                resource: BindingResource::TextureView(&roughness.view),
+            });
+        }
         let lighting_group = self
             .device
             .create_bind_group(&BindGroupDesc {
@@ -401,8 +438,10 @@ where
         } else {
             self.deferred_stats.buffer_allocations =
                 self.deferred_stats.buffer_allocations.saturating_add(3);
-            self.deferred_stats.texture_allocations =
-                self.deferred_stats.texture_allocations.saturating_add(5);
+            self.deferred_stats.texture_allocations = self
+                .deferred_stats
+                .texture_allocations
+                .saturating_add(5 + u64::from(effects) + u64::from(diffuse_roughness));
         }
         self.deferred_stats.buffer_allocations = self
             .deferred_stats
@@ -434,6 +473,7 @@ where
             specular,
             gbuffer,
             effects: effects_attachment,
+            diffuse_roughness: roughness_attachment,
             msaa,
             scene_color,
             scene_color_sampler,

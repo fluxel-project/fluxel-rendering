@@ -12,11 +12,13 @@ pub(crate) use specular_environment::{SpecularEnvironmentFrameOwner, SpecularIbl
 mod forward;
 #[cfg(test)]
 pub(crate) use deferred::allocate_deferred_scene_color;
+#[cfg(test)]
+pub(crate) use deferred::plan_deferred_gbuffer_with_effects;
 pub(crate) use deferred::{
     DeferredDraw, DeferredFrame, DeferredGbufferPlan, DeferredMsaa, DeferredPublication,
     DeferredSurfaceFrame, allocate_deferred_scene_color_desc, deferred_albedo_format,
-    deferred_normal_format, deferred_scene_color_desc_with_format,
-    plan_deferred_gbuffer_with_effects, plan_deferred_msaa_with_effects,
+    deferred_normal_format, deferred_scene_color_desc_with_format, plan_deferred_gbuffer_with_aux,
+    plan_deferred_msaa_with_aux,
 };
 pub(crate) use environment::EnvironmentFrameOwner;
 pub(crate) use oit::{OitDepthPrecision, OitOwners, OitPingPongOwners, OitPlan, OitTextureOwner};

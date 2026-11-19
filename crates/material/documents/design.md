@@ -370,6 +370,13 @@ variant identity; conflicting explicit metadata is rejected before publication.
 No renderer pass, coordinate transform, binding owner, or texture allocation is
 introduced by this configuration.
 
+`DiffuseRoughnessConfiguration` supplies the independent roughness of the PBR
+diffuse lobe. Its finite base value defaults to zero. A UV surface can multiply
+that value by the red channel of a linear texture and its optional scalar
+level. The compiler uses the texture's own UV set and transform and validates
+the texture, sampler, level and encoding against the authored declarations.
+The renderer consumes the result in EON direct diffuse lighting.
+
 ## Resources, parameters, and instances
 
 RGB transfer encoding is an image-source fact resolved by Renderer, rather than

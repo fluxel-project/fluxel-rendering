@@ -24,6 +24,7 @@ pub(crate) struct DeferredFramePoolEntry<B: ResourceBackend> {
     /// Albedo, normal/roughness, and depth owners in Deferred attachment order.
     pub(crate) gbuffer: [ForwardTexture<B>; 3],
     pub(crate) effects: Option<ForwardTexture<B>>,
+    pub(crate) diffuse_roughness: Option<ForwardTexture<B>>,
 }
 
 /// Records the actual post-readback states for a completed Deferred allocation.
@@ -35,12 +36,13 @@ pub(crate) fn recycle<B: ResourceBackend>(
     frame: ForwardFrameBuffers<B>,
     mut gbuffer: [ForwardTexture<B>; 3],
     mut effects: Option<ForwardTexture<B>>,
+    mut diffuse_roughness: Option<ForwardTexture<B>>,
 ) -> DeferredFramePoolEntry<B> {
     for texture in &mut gbuffer {
         texture.incoming = sampled_fragment_uses();
         texture.layout = pooled_layout();
     }
-    if let Some(texture) = &mut effects {
+    for texture in effects.iter_mut().chain(diffuse_roughness.iter_mut()) {
         texture.incoming = sampled_fragment_uses();
         texture.layout = pooled_layout();
     }
@@ -48,6 +50,7 @@ pub(crate) fn recycle<B: ResourceBackend>(
         frame: pool::recycle(frame, true),
         gbuffer,
         effects,
+        diffuse_roughness,
     }
 }
 
@@ -66,24 +69,39 @@ pub(crate) fn compatible<B: ResourceBackend>(
     row_pitch: u32,
     pbr: bool,
     effects: bool,
+    diffuse_roughness: bool,
 ) -> bool {
     pool::compatible(&entry.frame, device, extent, uniform_bytes, row_pitch)
         && gbuffer_compatible(&entry.gbuffer, device, extent, pbr)
-        && effect_compatible(&entry.effects, device, extent, effects)
+        && aux_compatible(
+            &entry.effects,
+            device,
+            extent,
+            effects,
+            TextureFormat::Rgba16Float,
+        )
+        && aux_compatible(
+            &entry.diffuse_roughness,
+            device,
+            extent,
+            diffuse_roughness,
+            TextureFormat::R32Float,
+        )
 }
 
-fn effect_compatible<B: ResourceBackend>(
+fn aux_compatible<B: ResourceBackend>(
     effects: &Option<ForwardTexture<B>>,
     device: DeviceId,
     extent: [u32; 2],
     required: bool,
+    format: TextureFormat,
 ) -> bool {
     match (effects, required) {
         (None, false) => true,
         (Some(texture), true) => {
             texture.texture.device() == device
                 && texture.view.device() == device
-                && descriptor_compatible(&texture.desc, extent, TextureFormat::Rgba16Float)
+                && descriptor_compatible(&texture.desc, extent, format)
                 && texture.incoming == sampled_fragment_uses()
                 && texture.layout == pooled_layout()
         }

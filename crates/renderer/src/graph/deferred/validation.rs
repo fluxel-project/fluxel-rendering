@@ -24,7 +24,7 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
     if frame.resident.device != device.id()
         || frame.extent.contains(&0)
         || device.capabilities().limits.max_color_attachments
-            < if frame.effects.is_some() { 3 } else { 2 }
+            < 2 + u32::from(frame.effects.is_some()) + u32::from(frame.diffuse_roughness.is_some())
         || device.capabilities().limits.uniform_offset_alignment == 0
         || frame.resident.streams.is_empty()
         || frame.draws.is_empty()
@@ -137,6 +137,18 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
             return Err(Error::InvalidRange);
         }
     }
+    if let Some(diffuse_roughness) = &frame.diffuse_roughness {
+        if diffuse_roughness.texture.device() != device.id()
+            || diffuse_roughness.view.device() != device.id()
+            || !matches_gbuffer_template(
+                &diffuse_roughness.desc,
+                frame.extent,
+                TextureFormat::R32Float,
+            )
+        {
+            return Err(Error::InvalidRange);
+        }
+    }
     if let Some(msaa) = &frame.msaa {
         if msaa.pipeline.device() != device.id()
             || msaa.group.device() != device.id()
@@ -165,6 +177,10 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
                 (&frame.effects, &msaa.effects),
                 (Some(_), None) | (None, Some(_))
             )
+            || matches!(
+                (&frame.diffuse_roughness, &msaa.diffuse_roughness),
+                (Some(_), None) | (None, Some(_))
+            )
         {
             return Err(Error::InvalidRange);
         }
@@ -175,6 +191,19 @@ pub(super) fn validate_frame_inputs<B: ResourceBackend>(
                 || effects.desc.extent != [frame.extent[0], frame.extent[1], 1]
                 || effects.desc.samples != msaa.gbuffer[0].desc.samples
                 || !effects.desc.usage.contains(
+                    super::TextureUsage::RENDER_ATTACHMENT | super::TextureUsage::TEXTURE_BINDING,
+                )
+            {
+                return Err(Error::InvalidRange);
+            }
+        }
+        if let Some(diffuse_roughness) = &msaa.diffuse_roughness {
+            if diffuse_roughness.texture.device() != device.id()
+                || diffuse_roughness.view.device() != device.id()
+                || diffuse_roughness.desc.format != TextureFormat::R32Float
+                || diffuse_roughness.desc.extent != [frame.extent[0], frame.extent[1], 1]
+                || diffuse_roughness.desc.samples != msaa.gbuffer[0].desc.samples
+                || !diffuse_roughness.desc.usage.contains(
                     super::TextureUsage::RENDER_ATTACHMENT | super::TextureUsage::TEXTURE_BINDING,
                 )
             {

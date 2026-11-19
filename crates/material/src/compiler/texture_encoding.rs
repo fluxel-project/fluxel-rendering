@@ -90,6 +90,10 @@ pub(super) fn effective_requirements(
         definition.pbr_surface_factors(),
         requirements,
     )?;
+    let requirements = super::diffuse_roughness::effective_texture_encodings(
+        definition.diffuse_roughness_configuration(),
+        requirements,
+    )?;
     super::transmission::effective_texture_encodings(
         definition.refraction_environment(),
         requirements,

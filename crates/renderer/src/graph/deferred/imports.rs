@@ -18,8 +18,10 @@ pub(super) struct DeferredImports {
     pub(super) specular_brdf_lut: Option<TextureHandle>,
     pub(super) gbuffer: Vec<TextureHandle>,
     pub(super) effects: Option<TextureHandle>,
+    pub(super) diffuse_roughness: Option<TextureHandle>,
     pub(super) msaa_gbuffer: Option<[TextureHandle; 3]>,
     pub(super) msaa_effects: Option<TextureHandle>,
+    pub(super) msaa_diffuse_roughness: Option<TextureHandle>,
     pub(super) target: Option<TextureHandle>,
     pub(super) scene_color: Option<TextureHandle>,
     pub(super) surface_target: Option<TextureHandle>,
@@ -171,6 +173,13 @@ pub(super) fn import<B: ResourceBackend>(
         })
         .transpose()
         .map_err(|_| Error::InvalidState)?;
+    let diffuse_roughness = frame
+        .diffuse_roughness
+        .map(|texture| {
+            graph.import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
+        })
+        .transpose()
+        .map_err(|_| Error::InvalidState)?;
     let msaa_gbuffer = frame
         .msaa
         .map(|msaa| {
@@ -185,6 +194,14 @@ pub(super) fn import<B: ResourceBackend>(
     let msaa_effects = frame
         .msaa
         .and_then(|msaa| msaa.effects.as_ref())
+        .map(|texture| {
+            graph.import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
+        })
+        .transpose()
+        .map_err(|_| Error::InvalidState)?;
+    let msaa_diffuse_roughness = frame
+        .msaa
+        .and_then(|msaa| msaa.diffuse_roughness.as_ref())
         .map(|texture| {
             graph.import_texture_with_state(texture.desc.clone(), texture.incoming, texture.layout)
         })
@@ -300,8 +317,10 @@ pub(super) fn import<B: ResourceBackend>(
         specular_brdf_lut,
         gbuffer,
         effects,
+        diffuse_roughness,
         msaa_gbuffer,
         msaa_effects,
+        msaa_diffuse_roughness,
         target,
         scene_color,
         surface_target,

@@ -216,9 +216,10 @@ pub(super) fn validate_top_level_names<'a>(
     parameters: &[MaterialParameter],
     static_options: &BTreeMap<String, StaticValue>,
     output: &SurfaceOutput,
+    uses_diffuse_roughness: bool,
     graphs: impl IntoIterator<Item = &'a super::node_graph::NormalizedNodeGraph>,
 ) -> Result<(), MaterialError> {
-    let mut names = super::surface::reserved_names(output);
+    let mut names = super::surface::reserved_names(output, uses_diffuse_roughness);
     let mut insert = |name: &str| {
         if names.insert(name.to_owned()) {
             Ok(())

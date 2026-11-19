@@ -10,7 +10,19 @@ pub(super) fn declare(
     source_effects: Option<TextureHandle>,
     destination: [TextureHandle; 3],
     destination_effects: Option<TextureHandle>,
-) -> std::result::Result<(GraphPass, ([TextureHandle; 3], Option<TextureHandle>)), ()> {
+    source_diffuse_roughness: Option<TextureHandle>,
+    destination_diffuse_roughness: Option<TextureHandle>,
+) -> std::result::Result<
+    (
+        GraphPass,
+        (
+            [TextureHandle; 3],
+            Option<TextureHandle>,
+            Option<TextureHandle>,
+        ),
+    ),
+    (),
+> {
     graph
         .add_pass("deferred-msaa-resolve", |pass| {
             pass.depends_on(geometry)?;
@@ -30,6 +42,15 @@ pub(super) fn declare(
             if let Some(effects) = source_effects {
                 pass.read_texture_with_use(
                     effects,
+                    whole_color(),
+                    sampled_read().uses,
+                    ImageLayout::ShaderReadOnly,
+                    TextureUsage::TEXTURE_BINDING,
+                )?;
+            }
+            if let Some(diffuse_roughness) = source_diffuse_roughness {
+                pass.read_texture_with_use(
+                    diffuse_roughness,
                     whole_color(),
                     sampled_read().uses,
                     ImageLayout::ShaderReadOnly,
@@ -69,7 +90,18 @@ pub(super) fn declare(
                     )
                 })
                 .transpose()?;
-            Ok((gbuffer, effects))
+            let diffuse_roughness = destination_diffuse_roughness
+                .map(|texture| {
+                    pass.write_texture_with_use(
+                        texture,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                })
+                .transpose()?;
+            Ok((gbuffer, effects, diffuse_roughness))
         })
         .map_err(|_| ())
 }

@@ -32,6 +32,7 @@ pub(super) struct GbufferProgramKey {
     multisample_count: u32,
     pbr: bool,
     effects: bool,
+    diffuse_roughness: bool,
     surface: crate::renderer::RasterSurfaceState,
 }
 
@@ -42,6 +43,7 @@ impl GbufferProgramKey {
         transform_uniform_bytes: u64,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         surface: crate::renderer::RasterSurfaceState,
         multisample_count: u32,
     ) -> Self {
@@ -63,6 +65,7 @@ impl GbufferProgramKey {
             multisample_count,
             pbr,
             effects,
+            diffuse_roughness,
             surface,
         }
     }
@@ -78,6 +81,7 @@ pub(super) struct LightingProgramKey {
     multisample_count: u32,
     pbr: bool,
     effects: bool,
+    diffuse_roughness: bool,
 }
 
 impl LightingProgramKey {
@@ -86,6 +90,7 @@ impl LightingProgramKey {
         artifact: fluxel_shader::ShaderArtifactKey,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         color_format: TextureFormat,
     ) -> Self {
         Self {
@@ -100,6 +105,7 @@ impl LightingProgramKey {
             multisample_count: 1,
             pbr,
             effects,
+            diffuse_roughness,
         }
     }
 }
@@ -112,7 +118,7 @@ impl LightingProgramKey {
 pub(crate) struct DeferredProgramCache<B: ResourceBackend> {
     gbuffer: HashMap<GbufferProgramKey, Arc<GbufferProgram<B>>>,
     lighting: HashMap<LightingProgramKey, Arc<LightingProgram<B>>>,
-    msaa_resolve: HashMap<(bool, bool), Arc<MsaaResolveProgram<B>>>,
+    msaa_resolve: HashMap<(bool, bool, bool), Arc<MsaaResolveProgram<B>>>,
 }
 
 impl<B: ResourceBackend> Default for DeferredProgramCache<B> {
@@ -134,17 +140,22 @@ impl<B: ResourceBackend> DeferredProgramCache<B> {
         &self,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
     ) -> Option<Arc<MsaaResolveProgram<B>>> {
-        self.msaa_resolve.get(&(pbr, effects)).cloned()
+        self.msaa_resolve
+            .get(&(pbr, effects, diffuse_roughness))
+            .cloned()
     }
 
     pub(in crate::renderer::deferred) fn publish_msaa_resolve(
         &mut self,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         program: Arc<MsaaResolveProgram<B>>,
     ) {
-        self.msaa_resolve.insert((pbr, effects), program);
+        self.msaa_resolve
+            .insert((pbr, effects, diffuse_roughness), program);
     }
 
     pub(super) fn get_lighting(&self, key: &LightingProgramKey) -> Option<Arc<LightingProgram<B>>> {

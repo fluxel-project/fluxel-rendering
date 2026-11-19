@@ -250,6 +250,7 @@ where
                     frame.frame,
                     frame.gbuffer,
                     frame.effects,
+                    frame.diffuse_roughness,
                 ));
             }
             _ => {}

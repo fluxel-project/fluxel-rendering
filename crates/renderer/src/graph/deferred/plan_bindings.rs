@@ -173,6 +173,20 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         }),
                 )
                 .chain(
+                    self.diffuse_roughness_slot
+                        .zip(frame.diffuse_roughness.as_ref())
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
                     self.msaa_gbuffer_slots
                         .into_iter()
                         .flatten()
@@ -191,6 +205,25 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 .chain(
                     self.msaa_effects_slot
                         .zip(frame.msaa.as_ref().and_then(|msaa| msaa.effects.as_ref()))
+                        .map(|(slot, texture)| {
+                            BoundTexture::new(
+                                slot,
+                                texture.instance,
+                                &texture.texture,
+                                &texture.desc,
+                                texture.incoming,
+                                texture.layout,
+                            )
+                        }),
+                )
+                .chain(
+                    self.msaa_diffuse_roughness_slot
+                        .zip(
+                            frame
+                                .msaa
+                                .as_ref()
+                                .and_then(|msaa| msaa.diffuse_roughness.as_ref()),
+                        )
                         .map(|(slot, texture)| {
                             BoundTexture::new(
                                 slot,

@@ -354,6 +354,19 @@ fn collect_capture_bindings<'a, B: ResourceBackend>(
                 owner.layout
             );
         }
+        if let (Some(slot), Some(owner)) = (
+            plan.diffuse_roughness_slot,
+            frame.diffuse_roughness.as_ref(),
+        ) {
+            push_texture!(
+                slot,
+                owner.instance,
+                &owner.texture,
+                &owner.desc,
+                owner.incoming,
+                owner.layout
+            );
+        }
         if let (Some(slots), Some(msaa)) = (plan.msaa_gbuffer_slots, frame.msaa.as_ref()) {
             for (slot, owner) in slots.into_iter().zip(&msaa.gbuffer) {
                 push_texture!(
@@ -366,6 +379,19 @@ fn collect_capture_bindings<'a, B: ResourceBackend>(
                 );
             }
             if let (Some(slot), Some(owner)) = (plan.msaa_effects_slot, msaa.effects.as_ref()) {
+                push_texture!(
+                    slot,
+                    owner.instance,
+                    &owner.texture,
+                    &owner.desc,
+                    owner.incoming,
+                    owner.layout
+                );
+            }
+            if let (Some(slot), Some(owner)) = (
+                plan.msaa_diffuse_roughness_slot,
+                msaa.diffuse_roughness.as_ref(),
+            ) {
                 push_texture!(
                     slot,
                     owner.instance,

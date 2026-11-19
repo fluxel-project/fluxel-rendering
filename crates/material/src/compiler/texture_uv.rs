@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    EmissiveConfiguration, MaterialError, MaterialTextureUv, PbrSurfaceFactors, TextureUvSet,
+    DiffuseRoughnessConfiguration, EmissiveConfiguration, MaterialError, MaterialTextureUv,
+    PbrSurfaceFactors, TextureUvSet,
 };
 
 use super::canonical::piece as canonical_piece;
@@ -12,6 +13,7 @@ pub(super) fn validate(
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
     factors: Option<&PbrSurfaceFactors>,
     emissive: Option<&EmissiveConfiguration>,
+    diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
 ) -> Result<BTreeMap<String, MaterialTextureUv>, MaterialError> {
     let mut generated_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -23,6 +25,11 @@ pub(super) fn validate(
         }
     }
     if let Some(texture) = emissive.and_then(|configuration| configuration.texture.as_ref()) {
+        generated_texture_names.insert(texture.texture.as_str());
+    }
+    if let Some(texture) =
+        diffuse_roughness.and_then(|configuration| configuration.texture.as_ref())
+    {
         generated_texture_names.insert(texture.texture.as_str());
     }
     for resource in texture_uv.keys() {
@@ -67,6 +74,7 @@ pub(super) struct Requirements {
 pub(super) fn requirements(
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
     factors: Option<&PbrSurfaceFactors>,
+    diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
 ) -> Requirements {
     let mut surface_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -76,6 +84,11 @@ pub(super) fn requirements(
         if let Some(packed) = &factors.packed_metallic_roughness {
             surface_texture_names.insert(packed.texture.as_str());
         }
+    }
+    if let Some(texture) =
+        diffuse_roughness.and_then(|configuration| configuration.texture.as_ref())
+    {
+        surface_texture_names.insert(texture.texture.as_str());
     }
     let surface = texture_uv.iter().any(|(resource, coordinates)| {
         coordinates.set() == TextureUvSet::Uv1 && surface_texture_names.contains(resource.as_str())

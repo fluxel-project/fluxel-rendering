@@ -29,9 +29,7 @@ use program_fixed::{
     surface_triangles,
 };
 
-use program_layout::{
-    material_sampler, material_uniform, ordinary_sampler, sampled_texture,
-};
+use program_layout::{material_sampler, material_uniform, ordinary_sampler, sampled_texture};
 
 pub(crate) use program_cache::DeferredProgramCache;
 
@@ -69,6 +67,7 @@ where
         materials: &[PreparedMaterial],
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
     ) {
         let active = inputs
             .iter()
@@ -84,6 +83,7 @@ where
                     },
                     pbr,
                     effects,
+                    diffuse_roughness,
                     crate::renderer::raster_surface_state(input),
                     self.deferred_sample_count(),
                 )
@@ -97,6 +97,7 @@ where
         prepared: &PreparedMaterial,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
         surface: crate::renderer::RasterSurfaceState,
     ) -> std::result::Result<Arc<GbufferProgram<B>>, RendererError> {
         self.ensure_open()?;
@@ -112,6 +113,7 @@ where
             transform_uniform_bytes,
             pbr,
             effects,
+            diffuse_roughness,
             surface,
             multisample_count,
         );
@@ -193,26 +195,15 @@ where
                 constants: vec![],
             }),
             vertex_buffers: prepared.geometry().streams.clone(),
-            color_targets: if effects {
-                vec![
-                    Some(color_target_with_format(
-                        crate::residency::deferred_albedo_format(pbr),
-                    )),
-                    Some(color_target_with_format(
-                        crate::residency::deferred_normal_format(pbr),
-                    )),
-                    Some(color_target_with_format(TextureFormat::Rgba16Float)),
-                ]
-            } else {
-                vec![
-                    Some(color_target_with_format(
-                        crate::residency::deferred_albedo_format(pbr),
-                    )),
-                    Some(color_target_with_format(
-                        crate::residency::deferred_normal_format(pbr),
-                    )),
-                ]
-            },
+            color_targets: [
+                crate::residency::deferred_albedo_format(pbr),
+                crate::residency::deferred_normal_format(pbr),
+            ]
+            .into_iter()
+            .chain(effects.then_some(TextureFormat::Rgba16Float))
+            .chain(diffuse_roughness.then_some(TextureFormat::R32Float))
+            .map(|format| Some(color_target_with_format(format)))
+            .collect(),
             primitive,
             depth_stencil: Some(depth_state()),
             multisample: multisample(multisample_count),

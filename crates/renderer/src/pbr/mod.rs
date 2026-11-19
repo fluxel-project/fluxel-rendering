@@ -27,11 +27,31 @@ mod templates;
 mod uv0_effects;
 
 pub(crate) use deferred_lighting::{
-    basic_deferred_view_binding, lighting_effect_irradiance_request, lighting_effect_request,
-    lighting_irradiance_request, lighting_request,
+    DIFFUSE_ROUGHNESS_BINDING, basic_deferred_view_binding, lighting_effect_irradiance_request,
+    lighting_effect_request, lighting_irradiance_request, lighting_request,
+    with_deferred_diffuse_roughness,
 };
-use request_options::{VIEW_FACING, install_emissive_evaluator};
-pub(crate) use request_options::{with_mirrored_view, without_emissive};
+use request_options::{
+    VIEW_FACING, install_diffuse_roughness_evaluator, install_emissive_evaluator,
+};
+pub(crate) use request_options::{
+    with_gbuffer_diffuse_roughness, with_mirrored_view, without_emissive,
+};
+
+pub(crate) fn specialize_diffuse_roughness(request: &mut ShaderCompositionRequest, enabled: bool) {
+    if !request
+        .source_units
+        .iter()
+        .any(|unit| unit.id.0.starts_with("pbr-forward") || unit.id.0.starts_with("pbr-gbuffer"))
+    {
+        return;
+    }
+    let material_uses_uv0 = request
+        .static_options
+        .get("renderer.material_context")
+        .is_some();
+    install_diffuse_roughness_evaluator(request, enabled, material_uses_uv0);
+}
 
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {
     matches!(

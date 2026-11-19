@@ -40,6 +40,7 @@ pub struct CompiledMaterialVariant {
     normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
+    uses_diffuse_roughness: bool,
 }
 
 impl CompiledMaterialVariant {
@@ -53,6 +54,7 @@ impl CompiledMaterialVariant {
         normal_map_settings: Option<NormalMapSettings>,
         surface_policy: SurfacePolicy,
         transmission_extensions: Option<TransmissionExtensions>,
+        uses_diffuse_roughness: bool,
     ) -> Self {
         Self {
             material: None,
@@ -65,6 +67,7 @@ impl CompiledMaterialVariant {
             normal_map_settings,
             surface_policy,
             transmission_extensions,
+            uses_diffuse_roughness,
         }
     }
 
@@ -114,6 +117,12 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub fn transmission_extensions(&self) -> Option<&TransmissionExtensions> {
         self.transmission_extensions.as_ref()
+    }
+
+    /// Returns whether this variant emits a diffuse-lobe roughness evaluator.
+    #[must_use]
+    pub const fn uses_diffuse_roughness(&self) -> bool {
+        self.uses_diffuse_roughness
     }
 
     /// Returns optional asset transfer-encoding requirements by resource name.

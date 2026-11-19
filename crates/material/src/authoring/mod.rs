@@ -3,6 +3,8 @@
 mod assets;
 mod code_node;
 mod definition;
+mod diffuse_roughness;
+mod diffuse_roughness_definition;
 mod nodes;
 mod normal_map;
 mod surface_policy;
@@ -17,6 +19,7 @@ pub use definition::{
     MaterialTextureUv, MaterialVertexVarying, PbrBaseTexture, PbrPackedChannel,
     PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions, SurfaceOutput, TextureUvSet,
 };
+pub use diffuse_roughness::{DiffuseRoughnessConfiguration, DiffuseRoughnessTexture};
 pub use nodes::*;
 pub use normal_map::NormalMapSettings;
 pub use surface_policy::{

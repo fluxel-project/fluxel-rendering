@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialNodeInputSource,
-    MaterialParameter, MaterialResource, MaterialTextureEncoding,
+    DiffuseRoughnessConfiguration, MaterialCodeNode, MaterialFragment, MaterialNodeGraph,
+    MaterialNodeInputSource, MaterialParameter, MaterialResource, MaterialTextureEncoding,
     MaterialTextureEncodingRequirement, NormalMapSettings, RefractionEnvironment, StaticValue,
     SurfacePolicy, TransmissionExtensions,
 };
@@ -282,6 +282,7 @@ pub struct MaterialDefinition {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
@@ -330,6 +331,7 @@ impl MaterialDefinition {
             surface_extensions: SurfaceExtensions::default(),
             emissive_configuration: None,
             pbr_surface_factors: None,
+            diffuse_roughness_configuration: None,
             normal_map_settings: None,
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,

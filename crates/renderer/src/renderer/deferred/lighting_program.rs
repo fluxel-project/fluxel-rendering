@@ -18,6 +18,7 @@ where
         use_environment: bool,
         use_specular: bool,
         effects: bool,
+        diffuse_roughness: bool,
         color_format: TextureFormat,
     ) -> std::result::Result<Arc<LightingProgram<B>>, RendererError> {
         self.ensure_open()?;
@@ -62,6 +63,11 @@ where
         } else {
             request
         };
+        let request = if diffuse_roughness {
+            crate::pbr::with_deferred_diffuse_roughness(request)
+        } else {
+            request
+        };
         let artifact = fluxel_shader::ShaderComposer::new()
             .compose(&request)
             .map_err(RendererError::DeferredShader)?;
@@ -70,6 +76,7 @@ where
             artifact.cache_key().clone(),
             pbr,
             effects,
+            diffuse_roughness,
             color_format,
         );
         if let Some(program) = self.deferred_programs.get_lighting(&key) {
@@ -150,6 +157,12 @@ where
                             partially_bound: false,
                             nonuniform_indexing: false,
                         });
+                    }
+                    if diffuse_roughness {
+                        entries.push(sampled_texture(
+                            crate::pbr::DIFFUSE_ROUGHNESS_BINDING,
+                            TextureSampleType::UnfilterableFloat,
+                        ));
                     }
                     entries
                 },

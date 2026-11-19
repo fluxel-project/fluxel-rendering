@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::MaterialNodeInputSource;
 
 use super::{
-    EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
-    MaterialResourceKind, MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions,
-    SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
+    DiffuseRoughnessConfiguration, EmissiveConfiguration, MaterialDefinition, MaterialError,
+    MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType, PbrSurfaceFactors,
+    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    validation::FunctionSignature,
 };
 
 #[path = "surface_emission.rs"]
@@ -29,6 +30,7 @@ pub(super) fn validate_definition(
         definition.surface_extensions(),
         definition.emissive_configuration(),
         definition.pbr_surface_factors(),
+        definition.diffuse_roughness_configuration(),
         root,
         functions,
         root_name,
@@ -90,6 +92,7 @@ pub(super) fn validate(
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
+    diffuse_roughness_configuration: Option<&DiffuseRoughnessConfiguration>,
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
@@ -117,6 +120,12 @@ pub(super) fn validate(
         });
     }
     super::pbr_factors::validate(pbr_surface_factors, output, parameters, resources)?;
+    super::diffuse_roughness::validate(
+        diffuse_roughness_configuration,
+        output,
+        parameters,
+        resources,
+    )?;
     if root.output != MaterialType::Vec4 {
         return Err(MaterialError::UnsupportedOutput {
             output: output.clone(),
@@ -147,7 +156,7 @@ pub(super) fn validate(
         }
         SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => (None, true, normal.as_deref()),
     };
-    let reserved = reserved_names(output);
+    let reserved = reserved_names(output, diffuse_roughness_configuration.is_some());
     for name in std::iter::once(root_name).chain(properties).chain(normal) {
         if reserved.contains(name) {
             return Err(MaterialError::TopLevelNameConflict { name: name.into() });
@@ -368,7 +377,10 @@ fn has_evaluator_inputs(signature: &FunctionSignature, expects_uv0: bool) -> boo
     }
 }
 
-pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
+pub(super) fn reserved_names(
+    output: &SurfaceOutput,
+    uses_diffuse_roughness: bool,
+) -> BTreeSet<String> {
     let mut names = match output {
         SurfaceOutput::Color => BTreeSet::from([String::from("evaluate_material")]),
         SurfaceOutput::ColorUv0 => BTreeSet::from([String::from("evaluate_material_uv0")]),
@@ -406,6 +418,13 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
         names.insert(String::from("FluxelVertexVaryings"));
         names.insert(String::from("evaluate_pbr_vertex_varyings"));
         names.insert(String::from(super::vertex_uv0::EVALUATOR));
+    }
+    if uses_diffuse_roughness {
+        names.insert(if uses_uv0(output) {
+            String::from("evaluate_diffuse_roughness_uv0")
+        } else {
+            String::from("evaluate_diffuse_roughness")
+        });
     }
     names.extend([
         String::from("material_alpha_rejected"),

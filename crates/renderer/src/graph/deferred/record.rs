@@ -312,6 +312,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         }
         let raster_gbuffer_slots = self.msaa_gbuffer_slots.unwrap_or(self.gbuffer_slots);
         let raster_effects_slot = self.msaa_effects_slot.or(self.effects_slot);
+        let raster_diffuse_roughness_slot = self
+            .msaa_diffuse_roughness_slot
+            .or(self.diffuse_roughness_slot);
         let raster_gbuffer = frame
             .msaa
             .map(|msaa| &msaa.gbuffer)
@@ -320,6 +323,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             .msaa
             .and_then(|msaa| msaa.effects.as_ref())
             .or(frame.effects);
+        let raster_diffuse_roughness = frame
+            .msaa
+            .and_then(|msaa| msaa.diffuse_roughness.as_ref())
+            .or(frame.diffuse_roughness);
         pass.texture(
             raster_gbuffer_slots[0],
             whole_color(),
@@ -333,6 +340,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             color_write(),
         )?;
         if let (Some(slot), Some(_)) = (raster_effects_slot, raster_effects) {
+            pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
+        }
+        if let (Some(slot), Some(_)) = (raster_diffuse_roughness_slot, raster_diffuse_roughness) {
             pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
         }
         pass.texture(
@@ -359,6 +369,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(effects) = raster_effects {
             colors.push(Some(ColorAttachment {
                 view: AttachmentView::Texture(&effects.view),
+                resolve_target: None,
+                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                store: StoreOp::Store,
+            }));
+        }
+        if let Some(diffuse_roughness) = raster_diffuse_roughness {
+            colors.push(Some(ColorAttachment {
+                view: AttachmentView::Texture(&diffuse_roughness.view),
                 resolve_target: None,
                 load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
                 store: StoreOp::Store,

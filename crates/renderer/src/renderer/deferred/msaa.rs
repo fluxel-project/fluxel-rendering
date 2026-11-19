@@ -35,22 +35,32 @@ where
         plan: Option<DeferredGbufferPlan>,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
     ) -> std::result::Result<Option<DeferredMsaa<B>>, RendererError> {
         let Some(plan) = plan else {
             return Ok(None);
         };
-        let program = self.deferred_msaa_resolve_program(pbr, effects).await?;
-        let (gbuffer, effects) = plan
-            .allocate_with_effects(&self.device)
+        let program = self
+            .deferred_msaa_resolve_program(pbr, effects, diffuse_roughness)
+            .await?;
+        let (gbuffer, effects, diffuse_roughness) = plan
+            .allocate_with_aux(&self.device)
             .map_err(|error| self.observe_rhi_error(error))?;
         let entries = gbuffer
             .iter()
-            .chain(effects.iter())
             .enumerate()
             .map(|(binding, texture)| BindGroupEntry {
                 binding: binding as u32,
                 resource: BindingResource::TextureView(&texture.view),
             })
+            .chain(effects.iter().map(|texture| BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::TextureView(&texture.view),
+            }))
+            .chain(diffuse_roughness.iter().map(|texture| BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::TextureView(&texture.view),
+            }))
             .collect::<Vec<_>>();
         let group = self
             .device
@@ -60,13 +70,14 @@ where
                 entries: &entries,
             })
             .map_err(|error| self.observe_rhi_error(error))?;
-        self.deferred_stats.texture_allocations = self
-            .deferred_stats
-            .texture_allocations
-            .saturating_add(3 + u64::from(effects.is_some()));
+        self.deferred_stats.texture_allocations =
+            self.deferred_stats.texture_allocations.saturating_add(
+                3 + u64::from(effects.is_some()) + u64::from(diffuse_roughness.is_some()),
+            );
         Ok(Some(DeferredMsaa {
             gbuffer,
             effects,
+            diffuse_roughness,
             pipeline: program.pipeline.clone(),
             group,
         }))
@@ -76,11 +87,15 @@ where
         &mut self,
         pbr: bool,
         effects: bool,
+        diffuse_roughness: bool,
     ) -> std::result::Result<Arc<MsaaResolveProgram<B>>, RendererError> {
-        if let Some(program) = self.deferred_programs.get_msaa_resolve(pbr, effects) {
+        if let Some(program) =
+            self.deferred_programs
+                .get_msaa_resolve(pbr, effects, diffuse_roughness)
+        {
             return Ok(program);
         }
-        let request = resolve_request(effects);
+        let request = resolve_request(effects, diffuse_roughness);
         let artifact = ShaderComposer::new()
             .compose(&request)
             .map_err(RendererError::DeferredShader)?;
@@ -118,7 +133,9 @@ where
             .device
             .create_bind_group_layout(&BindGroupLayoutDesc {
                 label: Some("Deferred resolve layout".into()),
-                entries: (0..3 + u32::from(effects))
+                entries: (0..3)
+                    .chain(effects.then_some(3))
+                    .chain(diffuse_roughness.then_some(4))
                     .map(|binding| BindGroupLayoutEntry {
                         binding,
                         visibility: vec![ShaderStage::Fragment],
@@ -160,6 +177,9 @@ where
         if effects {
             colors.push(Some(color_target_with_format(TextureFormat::Rgba16Float)));
         }
+        if diffuse_roughness {
+            colors.push(Some(color_target_with_format(TextureFormat::R32Float)));
+        }
         let mut depth = depth_state();
         depth.depth_compare = CompareFunction::Always;
         let pipeline = self
@@ -188,14 +208,18 @@ where
             .await
             .map_err(|error| self.observe_rhi_error(error))?;
         let program = Arc::new(MsaaResolveProgram { pipeline, layout });
-        self.deferred_programs
-            .publish_msaa_resolve(pbr, effects, Arc::clone(&program));
+        self.deferred_programs.publish_msaa_resolve(
+            pbr,
+            effects,
+            diffuse_roughness,
+            Arc::clone(&program),
+        );
         Ok(program)
     }
 }
 
-fn resolve_request(effects: bool) -> ShaderCompositionRequest {
-    let (binding, member, load) = if effects {
+fn resolve_request(effects: bool, diffuse_roughness: bool) -> ShaderCompositionRequest {
+    let (effects_binding, effects_member, effects_load) = if effects {
         (
             "@group(0) @binding(3) var effects_msaa: texture_multisampled_2d<f32>;",
             "@location(2) effects: vec4<f32>,",
@@ -204,6 +228,17 @@ fn resolve_request(effects: bool) -> ShaderCompositionRequest {
     } else {
         ("", "", "")
     };
+    let diffuse_roughness_location = 2 + u32::from(effects);
+    let (diffuse_roughness_binding, diffuse_roughness_member, diffuse_roughness_load) =
+        if diffuse_roughness {
+            (
+                "@group(0) @binding(4) var diffuse_roughness_msaa: texture_multisampled_2d<f32>;",
+                format!("@location({diffuse_roughness_location}) diffuse_roughness: f32,"),
+                "output.diffuse_roughness = textureLoad(diffuse_roughness_msaa, pixel, 0).r;",
+            )
+        } else {
+            ("", String::new(), "")
+        };
     // Babylon WebGPU resolves depth from sample zero by default. Load all
     // G-buffer fields from that same surface so lighting never reconstructs a
     // position from one sample while shading a different sample's material.
@@ -212,7 +247,8 @@ fn resolve_request(effects: bool) -> ShaderCompositionRequest {
 @group(0) @binding(0) var albedo_msaa: texture_multisampled_2d<f32>;
 @group(0) @binding(1) var normal_msaa: texture_multisampled_2d<f32>;
 @group(0) @binding(2) var depth_msaa: texture_depth_multisampled_2d;
-{binding}
+{effects_binding}
+{diffuse_roughness_binding}
 
 @vertex fn deferred_resolve_vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {{
     let positions = array<vec2<f32>, 3>(
@@ -223,7 +259,8 @@ fn resolve_request(effects: bool) -> ShaderCompositionRequest {
 struct ResolveOutput {{
     @location(0) albedo: vec4<f32>,
     @location(1) normal: vec4<f32>,
-    {member}
+    {effects_member}
+    {diffuse_roughness_member}
     @builtin(frag_depth) depth: f32,
 }}
 
@@ -233,7 +270,8 @@ struct ResolveOutput {{
     output.albedo = textureLoad(albedo_msaa, pixel, 0);
     output.normal = textureLoad(normal_msaa, pixel, 0);
     output.depth = textureLoad(depth_msaa, pixel, 0);
-    {load}
+    {effects_load}
+    {diffuse_roughness_load}
     return output;
 }}
 "#
@@ -245,7 +283,10 @@ struct ResolveOutput {{
                 "deferred_resolve_fs",
                 LogicalStage::Fragment,
             ));
-    for binding in 0..3 + u32::from(effects) {
+    for binding in (0..3)
+        .chain(effects.then_some(3))
+        .chain(diffuse_roughness.then_some(4))
+    {
         request = request.with_binding(
             BindingDeclaration::new(0, binding, BindingKind::Texture)
                 .with_visibility([LogicalStage::Fragment]),

@@ -1,7 +1,6 @@
 //! Transaction-scoped Deferred phase capabilities.
 
 use super::*;
-use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 use crate::graph::{DrawReads, ForwardReadScope, ForwardReadState};
 
 const UPLOAD: u8 = 1;
@@ -9,8 +8,8 @@ const VERTEX: u8 = 2;
 const UNIFORM: u8 = 4;
 const MATERIAL: u8 = 8;
 const GBUFFER: u8 = 16;
-const GBUFFER_READ: u8 = 1;
-const COLOR: u8 = 2;
+pub(super) const GBUFFER_READ: u8 = 1;
+pub(super) const COLOR: u8 = 2;
 const DEFORMATION_SOURCE: u8 = 1;
 const DEFORMATION_PARAMETERS: u8 = 2;
 const DEFORMATION_PRODUCT: u8 = 4;
@@ -20,6 +19,7 @@ type DeferredPhaseDeclaration = (
     GraphPass,
     Option<GraphPass>,
     [super::super::definition::TextureHandle; 3],
+    Option<super::super::definition::TextureHandle>,
     Option<super::super::definition::TextureHandle>,
     GraphPass,
     Option<super::super::definition::TextureHandle>,
@@ -78,8 +78,10 @@ pub(crate) struct DeferredPhaseDriver<'graph> {
     pub(super) specular_mip_levels: Option<u32>,
     pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
     pub(super) effects: Option<super::super::definition::TextureHandle>,
+    pub(super) diffuse_roughness: Option<super::super::definition::TextureHandle>,
     pub(super) msaa_gbuffer: Option<[super::super::definition::TextureHandle; 3]>,
     pub(super) msaa_effects: Option<super::super::definition::TextureHandle>,
+    pub(super) msaa_diffuse_roughness: Option<super::super::definition::TextureHandle>,
     pub(super) target: Option<super::super::definition::TextureHandle>,
     pub(super) deformation: Option<DeferredDeformationGraph>,
     pub(super) indirect: Vec<(usize, super::super::indirect::IndirectGraph)>,
@@ -106,21 +108,23 @@ pub(crate) struct DeferredGeometryPass<'pass, 'builder> {
     reads: ForwardReadState,
     gbuffer: [super::super::definition::TextureHandle; 3],
     effects: Option<super::super::definition::TextureHandle>,
+    diffuse_roughness: Option<super::super::definition::TextureHandle>,
     declared: u8,
 }
 
 pub(crate) struct DeferredLightingPass<'pass, 'builder> {
-    pass: &'pass mut super::super::definition::PassBuilder<'builder>,
-    view: Option<(super::super::definition::BufferHandle, std::ops::Range<u64>)>,
-    gbuffer: [super::super::definition::TextureHandle; 3],
-    effects: Option<super::super::definition::TextureHandle>,
-    target: Option<super::super::definition::TextureHandle>,
-    environment: Option<super::super::definition::TextureHandle>,
-    specular_radiance: Option<super::super::definition::TextureHandle>,
-    specular_brdf_lut: Option<super::super::definition::TextureHandle>,
-    specular_view_uniform: Option<super::super::definition::BufferHandle>,
-    specular_mip_levels: Option<u32>,
-    declared: u8,
+    pub(super) pass: &'pass mut super::super::definition::PassBuilder<'builder>,
+    pub(super) view: Option<(super::super::definition::BufferHandle, std::ops::Range<u64>)>,
+    pub(super) gbuffer: [super::super::definition::TextureHandle; 3],
+    pub(super) effects: Option<super::super::definition::TextureHandle>,
+    pub(super) diffuse_roughness: Option<super::super::definition::TextureHandle>,
+    pub(super) target: Option<super::super::definition::TextureHandle>,
+    pub(super) environment: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_radiance: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_brdf_lut: Option<super::super::definition::TextureHandle>,
+    pub(super) specular_view_uniform: Option<super::super::definition::BufferHandle>,
+    pub(super) specular_mip_levels: Option<u32>,
+    pub(super) declared: u8,
 }
 
 impl DeferredPhaseDriver<'_> {
@@ -188,6 +192,7 @@ impl DeferredPhaseDriver<'_> {
         let materials = self.materials.clone();
         let gbuffer = self.msaa_gbuffer.unwrap_or(self.gbuffer);
         let effects = self.msaa_effects.or(self.effects);
+        let diffuse_roughness = self.msaa_diffuse_roughness.or(self.diffuse_roughness);
         let (pass, output) = self
             .graph
             .add_pass("deferred-geometry", |pass| {
@@ -210,6 +215,7 @@ impl DeferredPhaseDriver<'_> {
                     ),
                     gbuffer,
                     effects,
+                    diffuse_roughness,
                     declared: 0,
                 };
                 declare(&mut geometry).map_err(|_| GraphError::InvalidRange)?;
@@ -218,8 +224,10 @@ impl DeferredPhaseDriver<'_> {
             .map_err(|_| ())?;
         if self.msaa_gbuffer.is_some() {
             self.msaa_effects = output.1;
+            self.msaa_diffuse_roughness = output.2;
         } else {
             self.effects = output.1;
+            self.diffuse_roughness = output.2;
         }
         self.geometry = Some((pass, output.0));
         Ok(())
@@ -243,10 +251,12 @@ impl DeferredPhaseDriver<'_> {
         let specular_brdf_lut = self.specular_brdf_lut;
         let specular_view_uniform = self.specular_view_uniform;
         let specular_mip_levels = self.specular_mip_levels;
-        let (dependency, gbuffer, effects) = if self.msaa_gbuffer.is_some() {
+        let (dependency, gbuffer, effects, diffuse_roughness) = if self.msaa_gbuffer.is_some() {
             let resolved_gbuffer = self.gbuffer;
             let resolved_effects = self.effects;
             let msaa_effects = self.msaa_effects;
+            let resolved_diffuse_roughness = self.diffuse_roughness;
+            let msaa_diffuse_roughness = self.msaa_diffuse_roughness;
             let (resolve, output) = super::msaa_resolve::declare(
                 self.graph,
                 geometry,
@@ -254,13 +264,21 @@ impl DeferredPhaseDriver<'_> {
                 msaa_effects,
                 resolved_gbuffer,
                 resolved_effects,
+                msaa_diffuse_roughness,
+                resolved_diffuse_roughness,
             )?;
             self.resolve = Some(resolve);
             self.gbuffer = output.0;
             self.effects = output.1;
-            (resolve, self.gbuffer, self.effects)
+            self.diffuse_roughness = output.2;
+            (resolve, self.gbuffer, self.effects, self.diffuse_roughness)
         } else {
-            (geometry, raster_gbuffer, self.effects)
+            (
+                geometry,
+                raster_gbuffer,
+                self.effects,
+                self.diffuse_roughness,
+            )
         };
         let view = self
             .lighting_view
@@ -275,6 +293,7 @@ impl DeferredPhaseDriver<'_> {
                     view,
                     gbuffer,
                     effects,
+                    diffuse_roughness,
                     target,
                     environment,
                     specular_radiance,
@@ -304,6 +323,7 @@ impl DeferredPhaseDriver<'_> {
             self.resolve,
             self.gbuffer,
             self.effects,
+            self.diffuse_roughness,
             lighting,
             target,
         ))
@@ -432,6 +452,19 @@ impl DeferredGeometryPass<'_, '_> {
                     .map_err(|_| ())?,
             );
         }
+        if let Some(diffuse_roughness) = self.diffuse_roughness {
+            self.diffuse_roughness = Some(
+                self.pass
+                    .write_texture_with_use(
+                        diffuse_roughness,
+                        whole_color(),
+                        color_write().uses,
+                        ImageLayout::ColorAttachment,
+                        TextureUsage::RENDER_ATTACHMENT,
+                    )
+                    .map_err(|_| ())?,
+            );
+        }
         self.gbuffer[2] = self
             .pass
             .write_texture_with_use(
@@ -450,6 +483,7 @@ impl DeferredGeometryPass<'_, '_> {
         (
             [super::super::definition::TextureHandle; 3],
             Option<super::super::definition::TextureHandle>,
+            Option<super::super::definition::TextureHandle>,
         ),
         (),
     > {
@@ -461,7 +495,7 @@ impl DeferredGeometryPass<'_, '_> {
         if self.declared & (UPLOAD | GBUFFER) != UPLOAD | GBUFFER || !reads_complete {
             return Err(());
         }
-        Ok((self.gbuffer, self.effects))
+        Ok((self.gbuffer, self.effects, self.diffuse_roughness))
     }
 }
 
@@ -471,129 +505,5 @@ impl<'pass, 'builder> DeferredGeometryPass<'pass, 'builder> {
         indices: &[usize],
     ) -> std::result::Result<ForwardReadScope<'scope, 'builder>, ()> {
         self.reads.scope(&mut *self.pass, indices)
-    }
-}
-
-impl DeferredLightingPass<'_, '_> {
-    fn mark(&mut self, bit: u8) -> std::result::Result<(), ()> {
-        if self.declared & bit == 0 {
-            self.declared |= bit;
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-    pub(crate) fn read_gbuffer(&mut self) -> std::result::Result<(), ()> {
-        self.mark(GBUFFER_READ)?;
-        for (index, texture) in self.gbuffer.iter().enumerate() {
-            self.pass
-                .read_texture_with_use(
-                    *texture,
-                    if index == 2 {
-                        whole_depth()
-                    } else {
-                        whole_color()
-                    },
-                    sampled_read().uses,
-                    ImageLayout::ShaderReadOnly,
-                    TextureUsage::TEXTURE_BINDING,
-                )
-                .map_err(|_| ())?;
-        }
-        if let Some(effects) = self.effects {
-            self.pass
-                .read_texture_with_use(
-                    effects,
-                    whole_color(),
-                    sampled_read().uses,
-                    ImageLayout::ShaderReadOnly,
-                    TextureUsage::TEXTURE_BINDING,
-                )
-                .map_err(|_| ())?;
-        }
-        Ok(())
-    }
-    pub(crate) fn write_main_color(&mut self) -> std::result::Result<(), ()> {
-        self.mark(COLOR)?;
-        if let Some(target) = self.target {
-            self.target = Some(
-                self.pass
-                    .write_texture_with_use(
-                        target,
-                        whole_color(),
-                        color_write().uses,
-                        ImageLayout::ColorAttachment,
-                        TextureUsage::RENDER_ATTACHMENT,
-                    )
-                    .map_err(|_| ())?,
-            );
-        }
-        Ok(())
-    }
-    fn finish(
-        &mut self,
-    ) -> std::result::Result<Option<super::super::definition::TextureHandle>, ()> {
-        if self.declared != GBUFFER_READ | COLOR {
-            return Err(());
-        }
-        if let Some((buffer, range)) = &self.view {
-            self.pass
-                .read_with_use(
-                    *buffer,
-                    range.clone(),
-                    lighting_uniform_read().uses,
-                    BufferUsage::UNIFORM,
-                )
-                .map_err(|_| ())?;
-        }
-        if let Some(environment) = self.environment {
-            self.pass
-                .read_texture_with_use(
-                    environment,
-                    whole_color(),
-                    sampled_read().uses,
-                    ImageLayout::ShaderReadOnly,
-                    TextureUsage::TEXTURE_BINDING,
-                )
-                .map_err(|_| ())?;
-        }
-        match (
-            self.specular_radiance,
-            self.specular_brdf_lut,
-            self.specular_view_uniform,
-        ) {
-            (Some(radiance), Some(brdf_lut), Some(view_uniform)) => {
-                self.pass
-                    .read_texture_with_use(
-                        radiance,
-                        all_color_mips(self.specular_mip_levels.ok_or(())?),
-                        sampled_read().uses,
-                        ImageLayout::ShaderReadOnly,
-                        TextureUsage::TEXTURE_BINDING,
-                    )
-                    .map_err(|_| ())?;
-                self.pass
-                    .read_texture_with_use(
-                        brdf_lut,
-                        one_color_mip(0),
-                        sampled_read().uses,
-                        ImageLayout::ShaderReadOnly,
-                        TextureUsage::TEXTURE_BINDING,
-                    )
-                    .map_err(|_| ())?;
-                self.pass
-                    .read_with_use(
-                        view_uniform,
-                        0..SPECULAR_VIEW_BYTES,
-                        uniform_read().uses,
-                        BufferUsage::UNIFORM,
-                    )
-                    .map_err(|_| ())?;
-            }
-            (None, None, None) => {}
-            _ => return Err(()),
-        }
-        self.pass.side_effect();
-        Ok(self.target)
     }
 }

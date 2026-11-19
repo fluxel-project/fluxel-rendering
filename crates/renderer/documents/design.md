@@ -1054,6 +1054,16 @@ presents the acquired lease without a readback pass.
 The setting applies to ordinary Forward entry points. Forward OIT and capture
 use single-sample attachments shared between their passes.
 
+### Deferred diffuse roughness
+
+A Deferred scene with a diffuse roughness configuration adds a single
+`R32Float` G-buffer attachment. Geometry stores the material's diffuse-lobe
+roughness at the pixel and writes zero for material draws without that
+configuration. Lighting loads the value at the same pixel for EON direct
+diffuse lighting. Texture support and the color attachment limit are checked
+for the exact layout. Graph declarations, cache keys, and pooled owners
+include the attachment when selected.
+
 ### Deferred multisampled depth
 
 `Renderer::set_deferred_sample_count` selects the exact G-buffer raster count.
@@ -1064,7 +1074,8 @@ completion. The geometry executable and Graph shape include that count.
 
 The resolve pass uses the sample-zero selection in Babylon WebGPU's
 `webgpuTextureManager.ts::resolveDepthFragmentSource`. It loads albedo, normal,
-depth and optional surface effects from the same sample to preserve one
+depth, optional surface effects and optional diffuse roughness from the same
+sample to preserve one
 coherent surface per pixel. The single-sample Depth32Float attachment is
 written through `frag_depth` and supplies both Deferred lighting
 reconstruction and subsequent raster depth tests. This mode resolves a

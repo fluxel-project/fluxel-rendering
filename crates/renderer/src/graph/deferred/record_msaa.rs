@@ -54,6 +54,12 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let (Some(slot), Some(_)) = (self.msaa_effects_slot, msaa.effects.as_ref()) {
             pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
         }
+        if let (Some(slot), Some(_)) = (
+            self.msaa_diffuse_roughness_slot,
+            msaa.diffuse_roughness.as_ref(),
+        ) {
+            pass.texture(slot, whole_color(), AccessKind::Read, sampled_read())?;
+        }
         for (index, slot) in self.gbuffer_slots.into_iter().enumerate() {
             pass.texture(
                 slot,
@@ -71,6 +77,9 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             )?;
         }
         if let (Some(slot), Some(_)) = (self.effects_slot, frame.effects) {
+            pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
+        }
+        if let (Some(slot), Some(_)) = (self.diffuse_roughness_slot, frame.diffuse_roughness) {
             pass.texture(slot, whole_color(), AccessKind::Write, color_write())?;
         }
         pass.transition(encoder)?;
@@ -91,6 +100,14 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         if let Some(effects) = frame.effects {
             colors.push(Some(ColorAttachment {
                 view: AttachmentView::Texture(&effects.view),
+                resolve_target: None,
+                load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
+                store: StoreOp::Store,
+            }));
+        }
+        if let Some(diffuse_roughness) = frame.diffuse_roughness {
+            colors.push(Some(ColorAttachment {
+                view: AttachmentView::Texture(&diffuse_roughness.view),
                 resolve_target: None,
                 load: LoadOp::Clear(ClearColor::Float([0.0; 4])),
                 store: StoreOp::Store,

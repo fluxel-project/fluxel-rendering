@@ -6,8 +6,58 @@ use fluxel_shader::{
 
 use super::{direct_light, templates};
 
+pub(crate) const DIFFUSE_ROUGHNESS_BINDING: u32 = 12;
+
 pub(crate) fn basic_deferred_view_binding(effects: bool) -> u32 {
     if effects { 4 } else { 3 }
+}
+
+/// Adds the R32Float diffuse-roughness G-buffer read at the stable binding
+/// shared by all Deferred lighting variants.
+pub(crate) fn with_deferred_diffuse_roughness(
+    mut request: ShaderCompositionRequest,
+) -> ShaderCompositionRequest {
+    for unit in &mut request.source_units {
+        if !unit.id.0.starts_with("pbr-deferred-lighting") && unit.id.0 != "pbr-basic-light-view" {
+            continue;
+        }
+        unit.source = unit
+            .source
+            .replace(
+                "fn pbr_directional_light()",
+                &format!("@group(0) @binding({DIFFUSE_ROUGHNESS_BINDING}) var pbr_diffuse_roughness: texture_2d<f32>;\nfn pbr_directional_light()"),
+            )
+            .replace(
+                "let normal = normal_roughness.xyz;",
+                "let normal = normal_roughness.xyz;\n    let diffuse_roughness = textureLoad(pbr_diffuse_roughness, coordinate, 0).r;",
+            )
+            .replace(
+                "let normal = nr.xyz;",
+                "let normal = nr.xyz;\n    let diffuse_roughness = textureLoad(pbr_diffuse_roughness, coordinate, 0).r;",
+            )
+            .replace(
+                "pbr_direct_light_view(",
+                "pbr_direct_light_view_with_diffuse_roughness(",
+            )
+            .replace(
+                "pbr_direct_light_components(",
+                "pbr_direct_light_components_with_diffuse_roughness(",
+            )
+            .replace(
+                "vec3<f32>(0.04))",
+                "vec3<f32>(0.04), diffuse_roughness)",
+            )
+            .replace("normal, view, vec3(0.04));", "normal, view, vec3(0.04), diffuse_roughness);");
+    }
+    request.bindings.push(
+        BindingDeclaration::new(0, DIFFUSE_ROUGHNESS_BINDING, BindingKind::Texture)
+            .with_visibility([ShaderStage::Fragment]),
+    );
+    request.static_options.insert(
+        "renderer.deferred_diffuse_roughness".into(),
+        "r32float-v1".into(),
+    );
+    request
 }
 
 fn with_basic_deferred_view(

@@ -122,8 +122,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             specular_brdf_lut_slot: declaration.specular_brdf_lut_slot,
             gbuffer_slots: declaration.gbuffer_slots,
             effects_slot: declaration.effects_slot,
+            diffuse_roughness_slot: declaration.diffuse_roughness_slot,
             msaa_gbuffer_slots: declaration.msaa_gbuffer_slots,
             msaa_effects_slot: declaration.msaa_effects_slot,
+            msaa_diffuse_roughness_slot: declaration.msaa_diffuse_roughness_slot,
             scene_color_slot: declaration.scene_color_slot,
             surface_target_slot: declaration.surface_target_slot,
             target_slot: declaration.target_slot,
@@ -234,6 +236,8 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 != declaration.gbuffer_slots.map(|slot| slot.resource)
             || self.effects_slot.map(|slot| slot.resource)
                 != declaration.effects_slot.map(|slot| slot.resource)
+            || self.diffuse_roughness_slot.map(|slot| slot.resource)
+                != declaration.diffuse_roughness_slot.map(|slot| slot.resource)
             || self
                 .msaa_gbuffer_slots
                 .map(|items| items.map(|slot| slot.resource))
@@ -242,6 +246,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .map(|items| items.map(|slot| slot.resource))
             || self.msaa_effects_slot.map(|slot| slot.resource)
                 != declaration.msaa_effects_slot.map(|slot| slot.resource)
+            || self.msaa_diffuse_roughness_slot.map(|slot| slot.resource)
+                != declaration
+                    .msaa_diffuse_roughness_slot
+                    .map(|slot| slot.resource)
             || self.scene_color_slot.map(|slot| slot.resource)
                 != declaration.scene_color_slot.map(|slot| slot.resource)
             || self.surface_target_slot.map(|slot| slot.resource)
@@ -387,6 +395,10 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                 effects.texture.device() != self.id.device
                     || effects.view.device() != self.id.device
             })
+            || frame.diffuse_roughness.as_ref().is_some_and(|texture| {
+                texture.texture.device() != self.id.device
+                    || texture.view.device() != self.id.device
+            })
         {
             return Err(Error::WrongDevice);
         }
@@ -456,13 +468,27 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     fluxel_rhi::api::TextureFormat::Rgba16Float,
                 )
             })
+            || frame.diffuse_roughness.as_ref().is_some_and(|texture| {
+                !matches_gbuffer_template(
+                    &texture.desc,
+                    self.extent,
+                    fluxel_rhi::api::TextureFormat::R32Float,
+                )
+            })
             || self.effects_slot.is_some() != frame.effects.is_some()
+            || self.diffuse_roughness_slot.is_some() != frame.diffuse_roughness.is_some()
             || self.msaa_gbuffer_slots.is_some() != frame.msaa.is_some()
             || self.msaa_effects_slot.is_some()
                 != frame
                     .msaa
                     .as_ref()
                     .and_then(|msaa| msaa.effects.as_ref())
+                    .is_some()
+            || self.msaa_diffuse_roughness_slot.is_some()
+                != frame
+                    .msaa
+                    .as_ref()
+                    .and_then(|msaa| msaa.diffuse_roughness.as_ref())
                     .is_some()
             || (!matches!(self.output, DeferredOutputPlan::Capture)
                 && !matches_final_target_template(&frame.frame.target_desc, self.extent))
@@ -497,6 +523,18 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     .zip(frame.effects.as_ref())
                     .is_some_and(|(source, destination)| {
                         source.desc.format != destination.desc.format
+                            || source.desc.extent != destination.desc.extent
+                            || source.desc.samples != msaa.gbuffer[0].desc.samples
+                            || destination.desc.samples != 1
+                    })
+                || msaa
+                    .diffuse_roughness
+                    .as_ref()
+                    .zip(frame.diffuse_roughness.as_ref())
+                    .is_some_and(|(source, destination)| {
+                        source.texture.device() != self.id.device
+                            || source.view.device() != self.id.device
+                            || source.desc.format != destination.desc.format
                             || source.desc.extent != destination.desc.extent
                             || source.desc.samples != msaa.gbuffer[0].desc.samples
                             || destination.desc.samples != 1
