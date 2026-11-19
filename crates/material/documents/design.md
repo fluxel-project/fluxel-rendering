@@ -127,9 +127,11 @@ to compose a whole program:
 
 When a typed node topology is lowered, its generated wrappers are Material
 implementation details. The Color and legacy metallic-roughness contexts use
-zero-argument wrappers; ColorUv0 and the UV0 metallic-roughness contexts give every wrapper
-one `uv: vec2<f32>` argument. `MaterialNodeInputSource::Uv0` is the only
-external graph input and is legal only in those UV0 contexts. Author source and
+zero-argument wrappers. UV0 contexts supply `MaterialNodeInputSource::Uv0`
+as a `vec2<f32>`. A UV0 metallic-roughness graph can also connect
+`MaterialNodeInputSource::WorldPosition` to a `vec3<f32>` port. The
+Renderer supplies interpolated XYZ in the existing Fluxel world space.
+Other surface contexts reject the world-position connection. Author source and
 declared callable edges may not reference generated wrappers: every
 author-to-node edge must be represented by a typed port connection. This
 prevents hidden cross-graph recursion before a variant is published.
@@ -246,10 +248,11 @@ the Forward and Deferred textured-color consumers and captured-color receivers.
 Its output domain does not select lighting or render-target topology; alpha and
 raster intent are carried separately by `SurfacePolicy`.
 
-`MetallicRoughnessUv0` supplies the scoped PBR evaluator context: its root and
-named property callable each take exactly one `vec2<f32>` UV0 argument. It
-generates `evaluate_material_uv0(uv)` and
-`evaluate_metallic_roughness_uv0(uv)`. Its graph wrappers carry the same UV0
+`MetallicRoughnessUv0` supplies the PBR evaluator context. A direct root and
+the named property callable take one `vec2<f32>` UV0 argument. The Renderer
+calls `evaluate_pbr_material_uv0(uv, world_position)`; UV-only roots also
+expose `evaluate_material_uv0(uv)`. The property evaluator remains
+`evaluate_metallic_roughness_uv0(uv)`. Graph wrappers carry the UV0
 argument through typed node connections, so a Code Node can feed a real
 `textureSample` without bypassing the graph. Renderer owns the mesh ABI and
 must provide UV0 at its documented vertex location; Material does not invent

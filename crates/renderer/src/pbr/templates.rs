@@ -166,7 +166,7 @@ fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, 
     return output;
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
-    let material = evaluate_material_uv0(input.uv0);
+    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position);
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
     let normal = pbr_surface_normal(input.world_normal, front_facing);
     if material_alpha_rejected(material.a) { discard; }
@@ -183,6 +183,7 @@ struct PbrUv0VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_normal: vec3<f32>,
     @location(1) uv0: vec2<f32>,
+    @location(2) world_position: vec3<f32>,
 };
 @vertex
 fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>) -> PbrUv0VertexOutput {
@@ -190,12 +191,13 @@ fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: ve
     var output: PbrUv0VertexOutput;
     output.position = base.position;
     output.world_normal = base.world_normal;
+    output.world_position = base.world_position;
     output.uv0 = uv0;
     return output;
 }
 @fragment
 fn deferred_gbuffer_fs(input: PbrUv0VertexOutput, @builtin(front_facing) front_facing: bool) -> PbrGbufferUv0Output {
-    let material = evaluate_material_uv0(input.uv0);
+    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position);
     let base = max(material.rgb, vec3<f32>(0.0));
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
     let normal = pbr_surface_normal(input.world_normal, front_facing);
@@ -231,20 +233,20 @@ fn pbr_apply_normal_map(t: vec3<f32>, b: vec3<f32>, n: vec3<f32>, sampled: vec3<
 pub(super) const FORWARD_UV0_NORMAL: &str = r#"
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
 @vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
-fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_material_uv0(input.uv0); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(pbr_direct_light_view(material.rgb, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)), material_output_alpha(material.a)); }
+fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_pbr_material_uv0(input.uv0, input.world_position); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(pbr_direct_light_view(material.rgb, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)), material_output_alpha(material.a)); }
 "#;
 
 pub(super) const GBUFFER_UV0_NORMAL: &str = r#"
 struct PbrNormalGbufferOutput { @location(0) base_metal: vec4<f32>, @location(1) normal_roughness: vec4<f32>, };
-struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, };
-@vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; return o; }
-@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = max(material.rgb, vec3<f32>(0.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal, clamp(properties.y, 0.0, 1.0)); return o; }
+struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
+@vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
+@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalGbufferOutput { let material = evaluate_pbr_material_uv0(input.uv0, input.world_position); let base = max(material.rgb, vec3<f32>(0.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal, clamp(properties.y, 0.0, 1.0)); return o; }
 "#;
 
 pub(super) const FORWARD_UV0_NORMAL_EFFECT: &str = r#"
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
 @vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
-fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_material_uv0(input.uv0); let base = material.rgb; let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = pbr_emissive(input.uv0); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(max(pbr_direct_light_view(base, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)) + emissive, vec3<f32>(0.0)), material_output_alpha(material.a)); }
+fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_pbr_material_uv0(input.uv0, input.world_position); let base = material.rgb; let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = pbr_emissive(input.uv0); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(max(pbr_direct_light_view(base, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)) + emissive, vec3<f32>(0.0)), material_output_alpha(material.a)); }
 "#;
 
 pub(super) const FORWARD_UV0_NORMAL_EFFECT_IRRADIANCE: &str = r#"
@@ -252,7 +254,7 @@ pub(super) const FORWARD_UV0_NORMAL_EFFECT_IRRADIANCE: &str = r#"
 @group(2) @binding(1) var pbr_environment_sampler: sampler;
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
 @vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
-fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_material_uv0(input.uv0); let base = material.rgb; let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let direct = pbr_direct_light_view(base, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)); let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); let emissive = pbr_emissive(input.uv0); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(max(direct + indirect + emissive, vec3<f32>(0.0)), material_output_alpha(material.a)); }
+fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> { let material = evaluate_pbr_material_uv0(input.uv0, input.world_position); let base = material.rgb; let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let direct = pbr_direct_light_view(base, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)); let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04)) * clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); let emissive = pbr_emissive(input.uv0); if material_alpha_rejected(material.a) { discard; } return vec4<f32>(max(direct + indirect + emissive, vec3<f32>(0.0)), material_output_alpha(material.a)); }
 "#;
 
 /// Effect-enabled tangent-space-normal G-buffer. RGB retains signed linear
@@ -260,9 +262,9 @@ fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> v
 /// PBR final color composition. Alpha carries scalar ambient occlusion.
 pub(super) const GBUFFER_UV0_NORMAL_EFFECT: &str = r#"
 struct PbrNormalEffectGbufferOutput { @location(0) base_metal: vec4<f32>, @location(1) normal_roughness: vec4<f32>, @location(2) emissive_ao: vec4<f32>, };
-struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, };
-@vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; return o; }
-@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalEffectGbufferOutput { let material = evaluate_material_uv0(input.uv0); let base = max(material.rgb, vec3<f32>(0.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = pbr_emissive(input.uv0); let occlusion = clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalEffectGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal, clamp(properties.y, 0.0, 1.0)); o.emissive_ao = vec4<f32>(emissive, occlusion); return o; }
+struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
+@vertex fn deferred_gbuffer_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
+@fragment fn deferred_gbuffer_fs(input: PbrNormalVertexOutput, @builtin(front_facing) front_facing: bool) -> PbrNormalEffectGbufferOutput { let material = evaluate_pbr_material_uv0(input.uv0, input.world_position); let base = max(material.rgb, vec3<f32>(0.0)); let properties = evaluate_metallic_roughness_uv0(input.uv0); let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing); let emissive = pbr_emissive(input.uv0); let occlusion = clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0); if material_alpha_rejected(material.a) { discard; } var o: PbrNormalEffectGbufferOutput; o.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0)); o.normal_roughness = vec4<f32>(normal, clamp(properties.y, 0.0, 1.0)); o.emissive_ao = vec4<f32>(emissive, occlusion); return o; }
 "#;
 
 pub(super) const BASIC_LIGHT_VIEW: &str = r#"
@@ -376,7 +378,7 @@ fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, 
     return output;
 }
 fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4<f32> {
-    let material = evaluate_material_uv0(input.uv0);
+    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position);
     let base = material.rgb;
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
     let normal = pbr_surface_normal(input.world_normal, front_facing);
@@ -394,7 +396,7 @@ pub(super) const FORWARD_UV0_NORMAL_IRRADIANCE: &str = r#"
 struct PbrNormalVertexOutput { @builtin(position) position: vec4<f32>, @location(0) tangent_world: vec3<f32>, @location(1) bitangent_world: vec3<f32>, @location(2) normal_world: vec3<f32>, @location(3) uv0: vec2<f32>, @location(4) world_position: vec3<f32>, };
 @vertex fn forward_vs(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>, @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>) -> PbrNormalVertexOutput { var o: PbrNormalVertexOutput; o.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0); let basis = pbr_vertex_tangent_basis(normal, tangent); o.tangent_world = basis[0]; o.bitangent_world = basis[1]; o.normal_world = basis[2]; o.uv0 = uv0; o.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz; return o; }
 fn renderer_forward_shade(input: PbrNormalVertexOutput, front_facing: bool) -> vec4<f32> {
-    let material = evaluate_material_uv0(input.uv0);
+    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position);
     let base = material.rgb;
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
     let normal = pbr_surface_normal(pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0)), front_facing);

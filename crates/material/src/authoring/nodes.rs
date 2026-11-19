@@ -11,6 +11,8 @@ pub enum MaterialNodeInputSource {
     Node(MaterialNodeId),
     /// The mesh UV0 coordinate supplied by the UV0 surface evaluator.
     Uv0,
+    /// Interpolated XYZ in Fluxel world space, supplied by the UV0 PBR evaluator.
+    WorldPosition,
 }
 
 /// One connection from an upstream value to one named callable input.

@@ -125,7 +125,7 @@ fn actual_material_evaluators(request: &ShaderCompositionRequest) -> SourceUnit 
             ""
         };
         format!(
-            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{ return vec4<f32>(0.8 + uv.x * 0.0, 0.6, 0.4, 1.0); }} fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{ return vec2<f32>(0.2 + uv.x * 0.0, 0.7); }} {normal} {effects}"
+            "fn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>) -> vec4<f32> {{ return vec4<f32>(0.8 + uv.x * 0.0 + world_position.x * 0.0, 0.6, 0.4, 1.0); }} fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{ return vec2<f32>(0.2 + uv.x * 0.0, 0.7); }} {normal} {effects}"
         )
     } else {
         "fn evaluate_material() -> vec4<f32> { return vec4<f32>(0.8, 0.6, 0.4, 1.0); } fn evaluate_metallic_roughness() -> vec2<f32> { return vec2<f32>(0.2, 0.7); }".into()

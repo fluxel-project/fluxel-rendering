@@ -6,7 +6,9 @@ use super::canonical::{
     calls as canonical_calls, inputs as canonical_inputs, piece as canonical_piece,
     resources as canonical_resources, sorted_by_name, source_id as source_unit_id,
 };
-use super::names::wgsl_top_level_names;
+use super::names::{
+    shader_resource_name, validate_generated_node_references, validate_top_level_names,
+};
 use super::*;
 use fluxel_shader::CallableDeclaration;
 #[derive(Clone, Debug)]
@@ -52,6 +54,7 @@ impl NormalizedMaterialIr {
                     graph,
                     &functions,
                     super::surface::uses_uv0(definition.output()),
+                    super::surface::supplies_world_position(definition.output()),
                 )
             })
             .transpose()?;
@@ -66,14 +69,7 @@ impl NormalizedMaterialIr {
             functions.insert(
                 graph.root.clone(),
                 FunctionSignature {
-                    inputs: graph
-                        .accepts_uv0
-                        .then_some(FragmentInput {
-                            name: "uv".into(),
-                            ty: MaterialType::Vec2,
-                        })
-                        .into_iter()
-                        .collect(),
+                    inputs: graph.inputs.clone(),
                     output: graph.output,
                     calls: Vec::new(),
                 },
@@ -96,6 +92,9 @@ impl NormalizedMaterialIr {
             root,
             &functions,
             &root_fragment,
+            node_graph
+                .as_ref()
+                .is_some_and(|graph| graph.uses_world_position),
             definition.parameters(),
             &resources,
         )?;
@@ -134,6 +133,13 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
+        if super::surface::supplies_world_position(&self.output) {
+            canonical_piece(
+                &mut canonical,
+                "surface-evaluator-abi",
+                "pbr-uv0-world-position",
+            );
+        }
         super::surface::canonical_extensions(
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
@@ -217,6 +223,9 @@ impl NormalizedMaterialIr {
         super::surface::append_evaluators(
             &mut generated,
             &self.root_fragment,
+            self.node_graph
+                .as_ref()
+                .is_some_and(|graph| graph.uses_world_position),
             &self.output,
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
@@ -374,34 +383,6 @@ fn insert_signature(
     Ok(())
 }
 
-fn validate_generated_node_references(
-    fragments: &[MaterialFragment],
-    code_nodes: &[MaterialCodeNode],
-    graph: &super::node_graph::NormalizedNodeGraph,
-) -> Result<(), MaterialError> {
-    for (source, calls, wgsl) in fragments
-        .iter()
-        .map(|fragment| (&fragment.name, &fragment.calls, &fragment.wgsl))
-        .chain(
-            code_nodes
-                .iter()
-                .map(|node| (&node.name, &node.calls, &node.source.source)),
-        )
-    {
-        for generated in &graph.generated_names {
-            if calls.iter().any(|call| call.fragment == *generated)
-                || super::names::contains_identifier(wgsl, generated)?
-            {
-                return Err(MaterialError::GeneratedNodeReference {
-                    source: source.clone(),
-                    generated: generated.clone(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_parameters(
     parameters: &[MaterialParameter],
     functions: &BTreeMap<String, FunctionSignature>,
@@ -551,49 +532,6 @@ fn validate_calls(functions: &BTreeMap<String, FunctionSignature>) -> Result<(),
     Ok(())
 }
 
-fn validate_top_level_names(
-    fragments: &[MaterialFragment],
-    nodes: &[MaterialCodeNode],
-    resources: &[MaterialResource],
-    parameters: &[MaterialParameter],
-    static_options: &BTreeMap<String, StaticValue>,
-    output: &SurfaceOutput,
-    graph: Option<&super::node_graph::NormalizedNodeGraph>,
-) -> Result<(), MaterialError> {
-    let mut names = super::surface::reserved_names(output);
-    let mut insert = |name: &str| {
-        if names.insert(name.to_owned()) {
-            Ok(())
-        } else {
-            Err(MaterialError::TopLevelNameConflict {
-                name: name.to_owned(),
-            })
-        }
-    };
-    for name in static_options.keys() {
-        insert(name)?;
-    }
-    for resource in resources {
-        insert(shader_resource_name(resource, parameters))?;
-    }
-    for fragment in fragments {
-        for name in wgsl_top_level_names(&fragment.wgsl)? {
-            insert(&name)?;
-        }
-    }
-    for node in nodes {
-        for name in wgsl_top_level_names(&node.source.source)? {
-            insert(&name)?;
-        }
-    }
-    if let Some(graph) = graph {
-        for name in wgsl_top_level_names(&graph.source)? {
-            insert(&name)?;
-        }
-    }
-    Ok(())
-}
-
 fn callable_declarations(
     fragments: &[MaterialFragment],
     nodes: &[MaterialCodeNode],
@@ -619,16 +557,6 @@ fn callable_declarations(
         callables.extend(graph.callables.iter().cloned());
     }
     callables
-}
-
-fn shader_resource_name<'a>(
-    resource: &'a MaterialResource,
-    parameters: &'a [MaterialParameter],
-) -> &'a str {
-    parameters
-        .iter()
-        .find(|parameter| parameter.resource == resource.name)
-        .map_or(resource.name.as_str(), |parameter| parameter.name.as_str())
 }
 
 fn visit(

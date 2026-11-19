@@ -151,8 +151,57 @@ pub(super) fn canonical(factors: Option<&PbrSurfaceFactors>, target: &mut String
     }
 }
 
-pub(super) fn uv0_base_evaluator(root: &str, factors: &PbrSurfaceFactors) -> String {
+pub(super) fn append_uv0_evaluators(
+    generated: &mut String,
+    root: &str,
+    root_uses_world_position: bool,
+    properties: &str,
+    factors: Option<&PbrSurfaceFactors>,
+) {
+    let (name, position_parameter, position_argument) = if root_uses_world_position {
+        (
+            "evaluate_pbr_material_uv0",
+            ", pbr_world_position: vec3<f32>",
+            ", pbr_world_position",
+        )
+    } else {
+        ("evaluate_material_uv0", "", "")
+    };
+    if let Some(factors) = factors {
+        generated.push_str(&uv0_base_evaluator(root, factors, root_uses_world_position));
+        generated.push_str(&uv0_properties_evaluator(properties, factors));
+    } else {
+        generated.push_str(&format!(
+            "fn {name}(uv: vec2<f32>{position_parameter}) -> vec4<f32> {{\n    return {root}(uv{position_argument});\n}}\n"
+        ));
+        generated.push_str(&format!(
+            "fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{\n    return {properties}(uv);\n}}\n"
+        ));
+    }
+    if !root_uses_world_position {
+        generated.push_str("fn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>) -> vec4<f32> {\n    return evaluate_material_uv0(uv);\n}\n");
+    }
+}
+
+fn uv0_base_evaluator(
+    root: &str,
+    factors: &PbrSurfaceFactors,
+    uses_world_position: bool,
+) -> String {
     let uv = unique_local("pbr_uv", factor_symbols(factors, [root]));
+    let position = unique_local(
+        "pbr_world_position",
+        factor_symbols(factors, [root, uv.as_str()]),
+    );
+    let (name, position_parameter, position_argument) = if uses_world_position {
+        (
+            "evaluate_pbr_material_uv0",
+            format!(", {position}: vec3<f32>"),
+            format!(", {position}"),
+        )
+    } else {
+        ("evaluate_material_uv0", String::new(), String::new())
+    };
     let factor = factors
         .base_factor_parameter
         .as_deref()
@@ -167,7 +216,7 @@ pub(super) fn uv0_base_evaluator(root: &str, factors: &PbrSurfaceFactors) -> Str
         },
     );
     format!(
-        "fn evaluate_material_uv0({uv}: vec2<f32>) -> vec4<f32> {{\n    return {root}({uv}) * {factor} * {sample};\n}}\n"
+        "fn {name}({uv}: vec2<f32>{position_parameter}) -> vec4<f32> {{\n    return {root}({uv}{position_argument}) * {factor} * {sample};\n}}\n"
     )
 }
 

@@ -3,9 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    validation::FunctionSignature, EmissiveConfiguration, MaterialDefinition, MaterialError,
-    MaterialParameter, MaterialResource, MaterialResourceKind, MaterialType, PbrSurfaceFactors,
-    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
+    MaterialResourceKind, MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions,
+    SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
 };
 
 /// Validates all surface-owned extensions after the root callable is resolved.
@@ -14,6 +14,7 @@ pub(super) fn validate_definition(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
+    root_uses_world_position: bool,
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -25,6 +26,7 @@ pub(super) fn validate_definition(
         root,
         functions,
         root_name,
+        root_uses_world_position,
         parameters,
         resources,
     )?;
@@ -45,6 +47,7 @@ pub(super) fn validate(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
+    root_uses_world_position: bool,
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -64,7 +67,13 @@ pub(super) fn validate(
         });
     }
     let expects_uv0 = uses_uv0(output);
-    if !has_evaluator_inputs(root, expects_uv0) {
+    let valid_inputs = if root_uses_world_position {
+        matches!(root.inputs.as_slice(), [uv, position]
+            if uv.ty == MaterialType::Vec2 && position.ty == MaterialType::Vec3)
+    } else {
+        has_evaluator_inputs(root, expects_uv0)
+    };
+    if !valid_inputs {
         return Err(MaterialError::RootInputsUnsupported {
             fragment: root_name.into(),
         });
@@ -270,6 +279,14 @@ pub(super) fn uses_uv0(output: &SurfaceOutput) -> bool {
     )
 }
 
+pub(super) fn supplies_world_position(output: &SurfaceOutput) -> bool {
+    matches!(
+        output,
+        SurfaceOutput::MetallicRoughnessUv0 { .. }
+            | SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+    )
+}
+
 fn has_evaluator_inputs(signature: &FunctionSignature, expects_uv0: bool) -> bool {
     match (expects_uv0, signature.inputs.as_slice()) {
         (false, []) => true,
@@ -298,6 +315,9 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
             String::from("evaluate_emissive_uv0"),
         ]),
     };
+    if supplies_world_position(output) {
+        names.insert(String::from("evaluate_pbr_material_uv0"));
+    }
     names.extend([
         String::from("material_alpha_rejected"),
         String::from("material_output_alpha"),
@@ -432,6 +452,7 @@ pub(super) fn canonical(output: &SurfaceOutput, target: &mut String) {
 pub(super) fn append_evaluators(
     generated: &mut String,
     root_fragment: &str,
+    root_uses_world_position: bool,
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
@@ -454,10 +475,10 @@ pub(super) fn append_evaluators(
             ));
         }
         SurfaceOutput::MetallicRoughnessUv0 { properties } => {
-            append_uv0_pbr_evaluators(generated, root_fragment, properties, pbr_surface_factors);
+            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_uses_world_position, properties, pbr_surface_factors);
         }
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
-            append_uv0_pbr_evaluators(generated, root_fragment, properties, pbr_surface_factors);
+            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_uses_world_position, properties, pbr_surface_factors);
             generated.push_str(&format!("fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"));
             generated.push_str(&super::pbr_factors::uv0_occlusion_evaluator(
                 extensions.occlusion.as_deref(),
@@ -472,33 +493,6 @@ pub(super) fn append_evaluators(
         }
     }
     append_policy_helpers(generated, policy);
-}
-
-fn append_uv0_pbr_evaluators(
-    generated: &mut String,
-    root: &str,
-    properties: &str,
-    factors: Option<&PbrSurfaceFactors>,
-) {
-    if let Some(factors) = factors {
-        generated.push_str(&super::pbr_factors::uv0_base_evaluator(root, factors));
-        generated.push_str(&super::pbr_factors::uv0_properties_evaluator(
-            properties, factors,
-        ));
-    } else {
-        generated.push_str(&format!(
-            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{
-    return {root}(uv);
-}}
-"
-        ));
-        generated.push_str(&format!(
-            "fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{
-    return {properties}(uv);
-}}
-"
-        ));
-    }
 }
 
 fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {

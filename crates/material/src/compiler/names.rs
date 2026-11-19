@@ -1,6 +1,11 @@
 //! Private WGSL top-level declaration scanning for Material validation.
 
-use super::MaterialError;
+use std::collections::BTreeMap;
+
+use super::{
+    MaterialCodeNode, MaterialError, MaterialFragment, MaterialParameter, MaterialResource,
+    StaticValue, SurfaceOutput,
+};
 
 pub(super) fn wgsl_top_level_names(source: &str) -> Result<Vec<String>, MaterialError> {
     let mut names = Vec::new();
@@ -202,4 +207,85 @@ fn is_whitespace(character: char) -> bool {
 
 fn is_identifier_start(character: char) -> bool {
     character == '_' || unicode_ident::is_xid_start(character)
+}
+
+pub(super) fn validate_top_level_names(
+    fragments: &[MaterialFragment],
+    nodes: &[MaterialCodeNode],
+    resources: &[MaterialResource],
+    parameters: &[MaterialParameter],
+    static_options: &BTreeMap<String, StaticValue>,
+    output: &SurfaceOutput,
+    graph: Option<&super::node_graph::NormalizedNodeGraph>,
+) -> Result<(), MaterialError> {
+    let mut names = super::surface::reserved_names(output);
+    let mut insert = |name: &str| {
+        if names.insert(name.to_owned()) {
+            Ok(())
+        } else {
+            Err(MaterialError::TopLevelNameConflict {
+                name: name.to_owned(),
+            })
+        }
+    };
+    for name in static_options.keys() {
+        insert(name)?;
+    }
+    for resource in resources {
+        insert(shader_resource_name(resource, parameters))?;
+    }
+    for fragment in fragments {
+        for name in wgsl_top_level_names(&fragment.wgsl)? {
+            insert(&name)?;
+        }
+    }
+    for node in nodes {
+        for name in wgsl_top_level_names(&node.source.source)? {
+            insert(&name)?;
+        }
+    }
+    if let Some(graph) = graph {
+        for name in wgsl_top_level_names(&graph.source)? {
+            insert(&name)?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn shader_resource_name<'a>(
+    resource: &'a MaterialResource,
+    parameters: &'a [MaterialParameter],
+) -> &'a str {
+    parameters
+        .iter()
+        .find(|parameter| parameter.resource == resource.name)
+        .map_or(resource.name.as_str(), |parameter| parameter.name.as_str())
+}
+
+pub(super) fn validate_generated_node_references(
+    fragments: &[MaterialFragment],
+    code_nodes: &[MaterialCodeNode],
+    graph: &super::node_graph::NormalizedNodeGraph,
+) -> Result<(), MaterialError> {
+    for (source, calls, wgsl) in fragments
+        .iter()
+        .map(|fragment| (&fragment.name, &fragment.calls, &fragment.wgsl))
+        .chain(
+            code_nodes
+                .iter()
+                .map(|node| (&node.name, &node.calls, &node.source.source)),
+        )
+    {
+        for generated in &graph.generated_names {
+            if calls.iter().any(|call| call.fragment == *generated)
+                || contains_identifier(wgsl, generated)?
+            {
+                return Err(MaterialError::GeneratedNodeReference {
+                    source: source.clone(),
+                    generated: generated.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }

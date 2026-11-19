@@ -18,13 +18,15 @@ pub(super) struct NormalizedNodeGraph {
     pub(super) source: String,
     pub(super) callables: Vec<CallableDeclaration>,
     pub(super) generated_names: Vec<String>,
-    pub(super) accepts_uv0: bool,
+    pub(super) inputs: Vec<crate::FragmentInput>,
+    pub(super) uses_world_position: bool,
 }
 
 pub(super) fn normalize(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
     accepts_uv0: bool,
+    supplies_world_position: bool,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut nodes = BTreeMap::new();
     for node in &graph.nodes {
@@ -43,6 +45,7 @@ pub(super) fn normalize(
             &nodes,
             functions,
             accepts_uv0,
+            supplies_world_position,
         )?;
     }
     // Every declared node is emitted into the generated source.  Validate all
@@ -52,6 +55,36 @@ pub(super) fn normalize(
         validate_cycles(node, &nodes)?;
     }
 
+    let uses_world_position = nodes.values().any(|node| {
+        node.inputs
+            .iter()
+            .any(|input| input.source == MaterialNodeInputSource::WorldPosition)
+    });
+    let uv = context_name("uv", functions);
+    let world_position = context_name("world_position", functions);
+    let mut inputs = Vec::new();
+    if accepts_uv0 {
+        inputs.push(crate::FragmentInput {
+            name: uv.clone(),
+            ty: MaterialType::Vec2,
+        });
+    }
+    if uses_world_position {
+        inputs.push(crate::FragmentInput {
+            name: world_position.clone(),
+            ty: MaterialType::Vec3,
+        });
+    }
+    let parameters = inputs
+        .iter()
+        .map(|input| format!("{}: {}", input.name, input.ty.wgsl()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let arguments = inputs
+        .iter()
+        .map(|input| input.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut source = String::from("// Generated material node graph.\n");
     let mut callables = Vec::with_capacity(nodes.len());
     for node in nodes.values() {
@@ -61,7 +94,7 @@ pub(super) fn normalize(
         source.push_str(&format!(
             "fn {}({}) -> {} {{ return {}(",
             node_name(node.id),
-            evaluator_argument(accepts_uv0),
+            parameters,
             signature.output.wgsl(),
             node.callable
         ));
@@ -76,19 +109,18 @@ pub(super) fn normalize(
                 .expect("validated node input");
             match source_node.source {
                 MaterialNodeInputSource::Node(source_node) => {
-                    source.push_str(&format!(
-                        "{}({})",
-                        node_name(source_node),
-                        argument_name(accepts_uv0)
-                    ));
+                    source.push_str(&format!("{}({})", node_name(source_node), arguments));
                 }
-                MaterialNodeInputSource::Uv0 => source.push_str("uv"),
+                MaterialNodeInputSource::Uv0 => source.push_str(&uv),
+                MaterialNodeInputSource::WorldPosition => {
+                    source.push_str(&world_position);
+                }
             }
         }
         source.push_str("); }\n");
         callables.push(CallableDeclaration {
             name: node_name(node.id),
-            arguments: evaluator_arguments(accepts_uv0),
+            arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
             result: Some(signature.output.shader_type()),
         });
     }
@@ -104,7 +136,8 @@ pub(super) fn normalize(
             .map(|callable| callable.name.clone())
             .collect(),
         callables,
-        accepts_uv0,
+        inputs,
+        uses_world_position,
     })
 }
 
@@ -115,6 +148,7 @@ fn validate_node(
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
     functions: &BTreeMap<String, FunctionSignature>,
     accepts_uv0: bool,
+    supplies_world_position: bool,
 ) -> Result<(), MaterialError> {
     let signature = functions
         .get(callable)
@@ -157,6 +191,15 @@ fn validate_node(
                     });
                 }
                 MaterialType::Vec2
+            }
+            MaterialNodeInputSource::WorldPosition => {
+                if !supplies_world_position {
+                    return Err(MaterialError::NodeContextUnavailable {
+                        node,
+                        input: connection.input.clone(),
+                    });
+                }
+                MaterialType::Vec3
             }
         };
         if expected.ty != actual {
@@ -209,24 +252,15 @@ fn validate_cycles(
     visit(node, nodes, &mut BTreeSet::new(), &mut BTreeSet::new())
 }
 
-fn evaluator_argument(accepts_uv0: bool) -> &'static str {
-    if accepts_uv0 { "uv: vec2<f32>" } else { "" }
-}
-
-fn argument_name(accepts_uv0: bool) -> &'static str {
-    if accepts_uv0 { "uv" } else { "" }
-}
-
-fn evaluator_arguments(accepts_uv0: bool) -> Vec<fluxel_shader::ValueType> {
-    accepts_uv0
-        .then_some(fluxel_shader::ValueType::Vec2(
-            fluxel_shader::ScalarType::F32,
-        ))
-        .into_iter()
-        .collect()
-}
-
 pub(super) fn node_name(node: MaterialNodeId) -> String {
     // WGSL reserves identifiers beginning with a double underscore.
     format!("fluxel_material_node_{}", node.0)
+}
+
+fn context_name(seed: &str, functions: &BTreeMap<String, FunctionSignature>) -> String {
+    let mut name = seed.to_owned();
+    while functions.contains_key(&name) {
+        name.push('_');
+    }
+    name
 }
