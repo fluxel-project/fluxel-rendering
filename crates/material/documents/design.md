@@ -399,12 +399,14 @@ occlusion.
 Material resources describe generic shader-visible requirements. The current
 public subset has f32, i32, u32, float vector and column-major
 `mat4x4<f32>` uniforms, read-only `Texture2dF32`, `Texture2dArrayF32`,
-`TextureCubeF32`, `Texture3dF32`, `Texture2dDepth`, and
+`TextureCubeF32`, `Texture3dF32`, `Texture2dDepth`, `Texture2dArrayDepth`, and
 `StorageTexture2dRgba8UnormRead`,
 and `Sampler { comparison }`, each with a stable name and bind-group location.
 A `Texture2dArrayF32` resource uses a discrete layer argument in WGSL.
 A `TextureCubeF32` resource uses a direction coordinate; a `Texture3dF32`
 resource uses a three-dimensional coordinate. `Texture2dDepth` reads raw depth
+and has no RGB transfer-encoding metadata.
+`Texture2dArrayDepth` likewise reads raw depth through an `i32` layer coordinate
 and has no RGB transfer-encoding metadata.
 `StorageTexture2dRgba8UnormRead` is a raw `textureLoad`-only
 `rgba8unorm` storage image with exact read access; it likewise has no RGB

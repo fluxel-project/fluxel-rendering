@@ -18,9 +18,9 @@ use fluxel_rhi::{
 use crate::graph::material_read_contract;
 use crate::preparation::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
-    ColorTextureVolumeAsset, ColorTextureVolumeData, DepthTextureAsset, DepthTextureData,
-    ForwardAssets, ForwardDrawInput, GeometryAsset, GeometryData, RefractionRadianceAsset,
-    RefractionRadianceData, ResolvedForwardTexture,
+    ColorTextureVolumeAsset, ColorTextureVolumeData, DepthTextureArrayAsset, DepthTextureArrayData,
+    DepthTextureAsset, DepthTextureData, ForwardAssets, ForwardDrawInput, GeometryAsset,
+    GeometryData, RefractionRadianceAsset, RefractionRadianceData, ResolvedForwardTexture,
 };
 
 use super::{ForwardTexture, ForwardVertexStream, LayeredTextureView};
@@ -79,6 +79,11 @@ pub(crate) enum ForwardTextureCacheKey {
         generation: u64,
         device: DeviceId,
     },
+    DepthArray {
+        asset: AssetId<DepthTextureArrayAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
     RefractionRadiance {
         asset: AssetId<RefractionRadianceAsset>,
         generation: u64,
@@ -118,6 +123,7 @@ impl ForwardTextureCacheKey {
             | Self::ColorArray { device, .. }
             | Self::ColorVolume { device, .. }
             | Self::Depth { device, .. }
+            | Self::DepthArray { device, .. }
             | Self::RefractionRadiance { device, .. } => device,
         }
     }
@@ -138,6 +144,7 @@ pub(crate) struct ForwardResidentCache<B: ResourceBackend> {
     color_arrays: HashMap<ForwardTextureCacheKey, Weak<ColorTextureArrayData>>,
     color_volumes: HashMap<ForwardTextureCacheKey, Weak<ColorTextureVolumeData>>,
     depth_textures: HashMap<ForwardTextureCacheKey, Weak<DepthTextureData>>,
+    depth_arrays: HashMap<ForwardTextureCacheKey, Weak<DepthTextureArrayData>>,
 }
 
 impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
@@ -149,6 +156,7 @@ impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
             color_arrays: HashMap::new(),
             color_volumes: HashMap::new(),
             depth_textures: HashMap::new(),
+            depth_arrays: HashMap::new(),
         }
     }
 }
@@ -232,6 +240,16 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                     device,
                 };
                 self.depth_textures
+                    .insert(key, Arc::downgrade(&texture.value_arc()));
+                Some(key)
+            }
+            ResolvedForwardTexture::DepthArrayAsset(texture) => {
+                let key = ForwardTextureCacheKey::DepthArray {
+                    asset: texture.id(),
+                    generation: texture.generation().get(),
+                    device,
+                };
+                self.depth_arrays
                     .insert(key, Arc::downgrade(&texture.value_arc()));
                 Some(key)
             }
@@ -377,6 +395,8 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .retain(|_, source| source.strong_count() != 0);
         self.depth_textures
             .retain(|_, source| source.strong_count() != 0);
+        self.depth_arrays
+            .retain(|_, source| source.strong_count() != 0);
         self.textures.retain(|key, _| match key {
             ForwardTextureCacheKey::Color {
                 asset, generation, ..
@@ -387,6 +407,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             ForwardTextureCacheKey::ColorArray { .. } => self.color_arrays.contains_key(key),
             ForwardTextureCacheKey::ColorVolume { .. } => self.color_volumes.contains_key(key),
             ForwardTextureCacheKey::Depth { .. } => self.depth_textures.contains_key(key),
+            ForwardTextureCacheKey::DepthArray { .. } => self.depth_arrays.contains_key(key),
             ForwardTextureCacheKey::RefractionRadiance { .. } => {
                 self.refraction_radiance.contains_key(key)
             }
@@ -402,6 +423,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.color_arrays.retain(|key, _| key.device() != device);
         self.color_volumes.retain(|key, _| key.device() != device);
         self.depth_textures.retain(|key, _| key.device() != device);
+        self.depth_arrays.retain(|key, _| key.device() != device);
     }
 
     /// Removes every completed reusable product.
@@ -412,6 +434,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.color_arrays.clear();
         self.color_volumes.clear();
         self.depth_textures.clear();
+        self.depth_arrays.clear();
     }
 }
 

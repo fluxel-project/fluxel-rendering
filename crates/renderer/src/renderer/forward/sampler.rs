@@ -287,6 +287,16 @@ fn material_texture_properties(
                 ..MaterialTextureProperties::d2(TextureFormat::Depth32Float)
             }
         }
+        ResolvedForwardTexture::DepthArrayAsset(texture) => {
+            let data = texture.value();
+            let [width, height] = data.extent;
+            MaterialTextureProperties {
+                extent: Some([width, height, 1]),
+                layers: data.layers,
+                view_dimension: TextureViewDimension::D2Array,
+                ..MaterialTextureProperties::d2(TextureFormat::Depth32Float)
+            }
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
             MaterialTextureProperties {

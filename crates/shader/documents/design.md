@@ -184,6 +184,9 @@ one non-arrayed, non-multisampled sampled-float cube image, not a cube array.
 one non-arrayed, non-multisampled sampled-float volume image, not a 2D array.
 `texture_depth_2d` is separately reflected as `BindingShape::Texture2dDepth`:
 one non-arrayed, non-multisampled depth 2D image.
+`texture_depth_2d_array` is separately reflected as
+`BindingShape::Texture2dArrayDepth`: one arrayed, non-multisampled depth 2D
+image addressed with an `i32` layer coordinate.
 `texture_storage_2d<rgba8unorm, read>` is separately reflected as
 `BindingShape::StorageTexture2dRgba8UnormRead`: one non-arrayed `rgba8unorm`
 2D storage image with exactly `LOAD` access. Other storage formats/accesses,

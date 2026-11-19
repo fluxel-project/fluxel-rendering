@@ -90,29 +90,32 @@ pub(in crate::renderer) fn stage(
         }
         ResolvedForwardTexture::DepthAsset(texture) => {
             let data = texture.value();
+            stage_depth_layer(data.extent, &data.depth32f, max_buffer_bytes)
+                .map(ForwardResidentTextureInput::Depth)
+        }
+        ResolvedForwardTexture::DepthArrayAsset(texture) => {
+            let data = texture.value();
             let [width, height] = data.extent;
-            let extent = [width, height, 1];
-            let source_size = u64::try_from(data.depth32f.len())
-                .ok()
-                .and_then(|count| count.checked_mul(4))
+            let layer_texels = (width as usize)
+                .checked_mul(height as usize)
+                .filter(|&texels| texels != 0)
                 .ok_or(Error::InvalidRange)?;
-            let (mut bytes, bytes_per_row, _) =
-                allocate_staged_rows(extent, 4, source_size, max_buffer_bytes)?;
-            for (dest, source) in bytes
-                .chunks_exact_mut(bytes_per_row as usize)
-                .zip(data.depth32f.chunks_exact(width as usize))
-            {
-                for (texel, depth) in dest.chunks_exact_mut(4).zip(source) {
-                    texel.copy_from_slice(&depth.to_le_bytes());
-                }
+            let layers = data.layers as usize;
+            if layers == 0 || layer_texels.checked_mul(layers) != Some(data.depth32f.len()) {
+                return Err(Error::InvalidRange);
             }
-            Ok(ForwardResidentTextureInput::Depth(
-                ForwardTextureCopyInput {
-                    bytes,
-                    extent,
-                    bytes_per_row,
-                },
-            ))
+            let mut copies = Vec::new();
+            copies
+                .try_reserve_exact(layers)
+                .map_err(|_| Error::OutOfMemory)?;
+            let mut remaining = max_buffer_bytes;
+            for layer in data.depth32f.chunks_exact(layer_texels) {
+                let copy = stage_depth_layer(data.extent, layer, remaining)?;
+                remaining =
+                    remaining_after_copy(remaining, copy.bytes.len(), copies.len() + 1 < layers)?;
+                copies.push(copy);
+            }
+            Ok(ForwardResidentTextureInput::DepthArray(copies))
         }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
@@ -133,6 +136,33 @@ pub(in crate::renderer) fn stage(
         }
         ResolvedForwardTexture::CaptureSlot(_) => Err(Error::InvalidState),
     }
+}
+
+fn stage_depth_layer(
+    [width, height]: [u32; 2],
+    depth: &[f32],
+    max_buffer_bytes: u64,
+) -> Result<ForwardTextureCopyInput, Error> {
+    let extent = [width, height, 1];
+    let source_size = u64::try_from(depth.len())
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+        .ok_or(Error::InvalidRange)?;
+    let (mut bytes, bytes_per_row, _) =
+        allocate_staged_rows(extent, 4, source_size, max_buffer_bytes)?;
+    for (dest, source) in bytes
+        .chunks_exact_mut(bytes_per_row as usize)
+        .zip(depth.chunks_exact(width as usize))
+    {
+        for (texel, depth) in dest.chunks_exact_mut(4).zip(source) {
+            texel.copy_from_slice(&depth.to_le_bytes());
+        }
+    }
+    Ok(ForwardTextureCopyInput {
+        bytes,
+        extent,
+        bytes_per_row,
+    })
 }
 
 fn stage_array(

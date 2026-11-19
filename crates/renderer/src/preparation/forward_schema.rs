@@ -111,6 +111,7 @@ pub(crate) fn material_binding_schema(
             | MaterialResourceKind::TextureCubeF32
             | MaterialResourceKind::Texture3dF32
             | MaterialResourceKind::Texture2dDepth
+            | MaterialResourceKind::Texture2dArrayDepth
             | MaterialResourceKind::StorageTexture2dRgba8UnormRead => original_textures += 1,
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
             MaterialResourceKind::Sampler { comparison: true } => {}
@@ -130,6 +131,7 @@ pub(crate) fn material_binding_schema(
                 | MaterialResourceKind::TextureCubeF32
                 | MaterialResourceKind::Texture3dF32
                 | MaterialResourceKind::Texture2dDepth
+                | MaterialResourceKind::Texture2dArrayDepth
                 | MaterialResourceKind::StorageTexture2dRgba8UnormRead => {
                     schema.unused_textures.push(binding.name.clone())
                 }
@@ -156,6 +158,7 @@ pub(crate) fn material_binding_schema(
             | MaterialResourceKind::TextureCubeF32
             | MaterialResourceKind::Texture3dF32
             | MaterialResourceKind::Texture2dDepth
+            | MaterialResourceKind::Texture2dArrayDepth
                 if actual.kind == BindingKind::Texture =>
             {
                 let declared_encoding = prepared
@@ -190,6 +193,14 @@ pub(crate) fn material_binding_schema(
                     ),
                     (MaterialResourceKind::Texture2dDepth, Some(BindingShape::Texture2dDepth)) => (
                         TextureViewDimension::D2,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Depth),
+                        None,
+                    ),
+                    (
+                        MaterialResourceKind::Texture2dArrayDepth,
+                        Some(BindingShape::Texture2dArrayDepth),
+                    ) => (
+                        TextureViewDimension::D2Array,
                         MaterialTextureAccess::Sampled(TextureSampleType::Depth),
                         None,
                     ),

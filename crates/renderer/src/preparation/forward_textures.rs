@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 
 use super::forward_validation::{
-    validate_cube_texture_array, validate_depth_texture, validate_generated_cube_texture_array,
-    validate_generated_texture_array, validate_texture, validate_texture_array,
-    validate_texture_volume,
+    validate_cube_texture_array, validate_depth_texture, validate_depth_texture_array,
+    validate_generated_cube_texture_array, validate_generated_texture_array, validate_texture,
+    validate_texture_array, validate_texture_volume,
 };
 use super::*;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureAccess, MaterialTextureBinding};
@@ -101,6 +101,16 @@ pub(super) fn resolve_texture_asset(
             require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
             validate_depth_texture(asset.value(), source)?;
             Ok(ResolvedForwardTexture::DepthAsset(asset.clone()))
+        }
+        ForwardTextureSource::DepthArrayAsset(asset) => {
+            require_sampled_texture(expected, TextureSampleType::Depth, source)?;
+            require_texture_dimension(
+                expected,
+                fluxel_rhi::api::TextureViewDimension::D2Array,
+                source,
+            )?;
+            validate_depth_texture_array(asset.value(), source)?;
+            Ok(ResolvedForwardTexture::DepthArrayAsset(asset.clone()))
         }
         ForwardTextureSource::ArrayAsset(asset) => {
             require_sampled_texture(expected, TextureSampleType::Float, source)?;

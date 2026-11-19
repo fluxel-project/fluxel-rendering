@@ -299,7 +299,7 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
-2D depth textures, read-only RGBA8 storage textures, and independently named
+2D depth textures and depth arrays, read-only RGBA8 storage textures, and independently named
 ordinary and comparison samplers in material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
@@ -322,7 +322,10 @@ requested mip count participates in the resident cache key.
 finite normalized depth in the RHI's existing depth range. The resident view and
 Graph copy and shader-read ranges use the depth aspect. Material WGSL reads it
 through `texture_depth_2d`, for example with `textureLoad`. A depth source has
-no color transfer encoding.
+no color transfer encoding. `DepthTextureArrayData` supplies one full image
+per layer in ascending layer order. The Graph declares one depth copy per
+layer and the sampled array view covers every layer. WGSL selects the layer
+with an integer, as in Babylon.js cascaded shadow comparison.
 
 A `texture_storage_2d<rgba8unorm, read>` material binding accepts a single-mip
 linear RGBA8 asset through the named texture input. It uses a storage view

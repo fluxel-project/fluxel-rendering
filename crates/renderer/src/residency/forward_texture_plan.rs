@@ -111,6 +111,29 @@ pub(super) fn plan_texture_uploads(
             TextureFormat::Depth32Float,
             TextureUsage::TEXTURE_BINDING,
         ),
+        ForwardResidentTextureInput::DepthArray(copies) => {
+            let extent = copies.first().ok_or(Error::InvalidRange)?.extent;
+            let layers = u32::try_from(copies.len()).map_err(|_| Error::InvalidRange)?;
+            if extent[2] != 1 {
+                return Err(Error::InvalidRange);
+            }
+            for copy in &copies {
+                if copy.extent != extent {
+                    return Err(Error::InvalidRange);
+                }
+                validate_four_byte_copy(copy)?;
+            }
+            for (layer, copy) in copies.into_iter().enumerate() {
+                append_texture_upload(bytes, uploads, index, 0, layer as u32, copy)?;
+            }
+            Ok(typed_2d_allocation(
+                extent,
+                TextureFormat::Depth32Float,
+                TextureUsage::TEXTURE_BINDING,
+                layers,
+                TextureViewDimension::D2Array,
+            ))
+        }
         ForwardResidentTextureInput::Storage(copy) => plan_typed_2d_upload(
             bytes,
             uploads,
@@ -158,20 +181,36 @@ fn plan_typed_2d_upload(
     validate_four_byte_copy(&copy)?;
     let extent = copy.extent;
     append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
-    Ok(ForwardTextureAllocation {
+    Ok(typed_2d_allocation(
+        extent,
+        format,
+        binding_usage,
+        1,
+        TextureViewDimension::D2,
+    ))
+}
+
+fn typed_2d_allocation(
+    extent: [u32; 3],
+    format: TextureFormat,
+    binding_usage: TextureUsage,
+    array_layers: u32,
+    view_dimension: TextureViewDimension,
+) -> ForwardTextureAllocation {
+    ForwardTextureAllocation {
         desc: TextureDesc {
             label: Some("fluxel forward material texture".into()),
             dimension: TextureDimension::D2,
             extent,
-            array_layers: 1,
+            array_layers,
             format,
             mip_levels: 1,
             samples: 1,
             usage: TextureUsage::COPY_DST | binding_usage,
             view_formats: Vec::new(),
         },
-        view_dimension: TextureViewDimension::D2,
-    })
+        view_dimension,
+    }
 }
 
 fn rgba8_allocation(
