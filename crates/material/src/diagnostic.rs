@@ -3,8 +3,8 @@
 use std::fmt;
 
 use crate::{
-    BindingLocation, MaterialAssetRef, MaterialNodeId, MaterialResourceKind, MaterialType,
-    SurfaceOutput,
+    BindingLocation, MaterialAssetRef, MaterialNodeId, MaterialNodeOutput, MaterialResourceKind,
+    MaterialType, SurfaceOutput,
 };
 
 /// Material composition and instance validation failures.
@@ -47,6 +47,15 @@ pub enum MaterialError {
         node: MaterialNodeId,
         /// Unknown input-port name.
         input: String,
+    },
+    /// An upstream node cannot expose this port from its declared result type.
+    NodeOutputUnavailable {
+        /// Upstream node identity.
+        node: MaterialNodeId,
+        /// Requested output port.
+        output: MaterialNodeOutput,
+        /// Declared return type of the upstream callable.
+        actual: MaterialType,
     },
     /// A callable input had no source node.
     MissingNodeInput {

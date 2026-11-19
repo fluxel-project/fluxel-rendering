@@ -210,12 +210,14 @@ fn uv0_graph_lowers_texture_sample_and_composes_both_pbr_evaluators() {
             .source()
             .contains("fn fluxel_material_node_7(uv: vec2<f32>)")
     );
-    assert!(contribution.source().contains("return scale_uv(uv);"));
     assert!(
         contribution
             .source()
-            .contains("return sample_base(fluxel_material_node_6(uv));")
+            .contains("let fluxel_material_node_6_value: vec2<f32> = scale_uv(uv);")
     );
+    assert!(contribution.source().contains(
+        "let fluxel_material_node_7_value: vec4<f32> = sample_base(fluxel_material_node_6_value);"
+    ));
     assert!(
         contribution
             .source()

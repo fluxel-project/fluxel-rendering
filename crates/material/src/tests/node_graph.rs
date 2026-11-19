@@ -89,9 +89,9 @@ fn typed_connections_lower_to_deterministic_wgsl_and_compose() {
     ));
     let variant = MaterialCompiler::compile(&definition).unwrap();
     let source = variant.contribution().source();
-    assert!(source.contains("fn fluxel_material_node_10() -> vec4<f32> { return base(); }"));
+    assert!(source.contains("let fluxel_material_node_10_value: vec4<f32> = base();"));
     assert!(source.contains(
-        "fn fluxel_material_node_20() -> vec4<f32> { return tint(fluxel_material_node_10()); }"
+        "let fluxel_material_node_20_value: vec4<f32> = tint(fluxel_material_node_10_value);"
     ));
     assert!(source.contains("return fluxel_material_node_20();"));
 

@@ -1,11 +1,12 @@
-//! Typed runtime material-node topology lowered to WGSL call wrappers.
+//! Typed runtime material-node topology lowered to a WGSL evaluator.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use fluxel_shader::CallableDeclaration;
 
 use crate::{
-    MaterialError, MaterialNodeGraph, MaterialNodeId, MaterialNodeInputSource, MaterialType,
+    MaterialError, MaterialNodeGraph, MaterialNodeId, MaterialNodeInputSource, MaterialNodeOutput,
+    MaterialType,
 };
 
 use super::validation::FunctionSignature;
@@ -54,12 +55,7 @@ pub(super) fn normalize(
             supplies_pbr_context,
         )?;
     }
-    // Every declared node is emitted into the generated source.  Validate all
-    // components rather than only the selected output closure so an unreachable
-    // recursive pair cannot leak invalid WGSL into an otherwise valid material.
-    for node in nodes.keys().copied() {
-        validate_cycles(node, &nodes)?;
-    }
+    let order = evaluation_order(graph.output, &nodes)?;
 
     let uv = context_name("uv", functions);
     let context = PBR_CONTEXT_INPUTS
@@ -87,21 +83,27 @@ pub(super) fn normalize(
         .map(|input| format!("{}: {}", input.name, input.ty.wgsl()))
         .collect::<Vec<_>>()
         .join(", ");
-    let arguments = inputs
+    let root = node_name(output.id);
+    let output = functions[&output.callable].output;
+    let locals = order
         .iter()
-        .map(|input| input.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut source = String::from("// Generated material node graph.\n");
-    let mut callables = Vec::with_capacity(nodes.len());
-    for node in nodes.values() {
-        let signature = functions
-            .get(&node.callable)
-            .expect("validated material callable");
+        .map(|id| {
+            (
+                *id,
+                context_name(&format!("{}_value", node_name(*id)), functions),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut source = format!(
+        "// Generated material node graph.\nfn {root}({parameters}) -> {} {{\n",
+        output.wgsl(),
+    );
+    for id in order {
+        let node = nodes[&id];
+        let signature = &functions[&node.callable];
+        let local = &locals[&id];
         source.push_str(&format!(
-            "fn {}({}) -> {} {{ return {}(",
-            node_name(node.id),
-            parameters,
+            "    let {local}: {} = {}(",
             signature.output.wgsl(),
             node.callable
         ));
@@ -109,14 +111,19 @@ pub(super) fn normalize(
             if index != 0 {
                 source.push_str(", ");
             }
-            let source_node = node
+            let connection = node
                 .inputs
                 .iter()
                 .find(|connection| connection.input == input.name)
                 .expect("validated node input");
-            match source_node.source {
+            match connection.source {
                 MaterialNodeInputSource::Node(source_node) => {
-                    source.push_str(&format!("{}({})", node_name(source_node), arguments));
+                    source.push_str(&locals[&source_node])
+                }
+                MaterialNodeInputSource::NodeOutput { node, output } => {
+                    source.push_str(&locals[&node]);
+                    source.push('.');
+                    source.push_str(output.projection().0);
                 }
                 MaterialNodeInputSource::Uv0 => source.push_str(&uv),
                 pbr_input => {
@@ -128,25 +135,20 @@ pub(super) fn normalize(
                 }
             }
         }
-        source.push_str("); }\n");
-        callables.push(CallableDeclaration {
-            name: node_name(node.id),
-            arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
-            result: Some(signature.output.shader_type()),
-        });
+        source.push_str(");\n");
     }
+    source.push_str(&format!("    return {};\n}}\n", locals[&graph.output]));
+    let callable = CallableDeclaration {
+        name: root.clone(),
+        arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
+        result: Some(output.shader_type()),
+    };
     Ok(NormalizedNodeGraph {
-        root: node_name(output.id),
-        output: functions
-            .get(&output.callable)
-            .expect("validated output callable")
-            .output,
+        root,
+        output,
         source,
-        generated_names: callables
-            .iter()
-            .map(|callable| callable.name.clone())
-            .collect(),
-        callables,
+        generated_names: nodes.keys().map(|id| node_name(*id)).collect(),
+        callables: vec![callable],
         inputs,
         pbr_inputs: context.into_iter().map(|(source, _)| source).collect(),
     })
@@ -183,16 +185,16 @@ fn validate_node(
                 input: connection.input.clone(),
             })?;
         let actual = match connection.source {
-            MaterialNodeInputSource::Node(source_node) => {
-                let source = nodes
-                    .get(&source_node)
-                    .ok_or(MaterialError::MissingNode { node: source_node })?;
-                functions
-                    .get(&source.callable)
-                    .ok_or_else(|| MaterialError::MissingFragment {
-                        name: source.callable.clone(),
+            MaterialNodeInputSource::Node(node) => upstream_type(node, nodes, functions)?,
+            MaterialNodeInputSource::NodeOutput { node, output } => {
+                let actual = upstream_type(node, nodes, functions)?;
+                output
+                    .ty(actual)
+                    .ok_or(MaterialError::NodeOutputUnavailable {
+                        node,
+                        output,
+                        actual,
                     })?
-                    .output
             }
             MaterialNodeInputSource::Uv0 => {
                 if !accepts_uv0 {
@@ -237,15 +239,32 @@ fn validate_node(
     Ok(())
 }
 
-fn validate_cycles(
+fn upstream_type(
     node: MaterialNodeId,
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
-) -> Result<(), MaterialError> {
+    functions: &BTreeMap<String, FunctionSignature>,
+) -> Result<MaterialType, MaterialError> {
+    let source = nodes
+        .get(&node)
+        .ok_or(MaterialError::MissingNode { node })?;
+    functions
+        .get(&source.callable)
+        .map(|signature| signature.output)
+        .ok_or_else(|| MaterialError::MissingFragment {
+            name: source.callable.clone(),
+        })
+}
+
+fn evaluation_order(
+    root: MaterialNodeId,
+    nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
+) -> Result<Vec<MaterialNodeId>, MaterialError> {
     fn visit(
         node: MaterialNodeId,
         nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
         visiting: &mut BTreeSet<MaterialNodeId>,
         visited: &mut BTreeSet<MaterialNodeId>,
+        order: &mut Vec<MaterialNodeId>,
     ) -> Result<(), MaterialError> {
         if visited.contains(&node) {
             return Ok(());
@@ -253,16 +272,66 @@ fn validate_cycles(
         if !visiting.insert(node) {
             return Err(MaterialError::NodeCycle { node });
         }
-        for input in &nodes.get(&node).expect("checked node").inputs {
-            if let MaterialNodeInputSource::Node(source) = input.source {
-                visit(source, nodes, visiting, visited)?;
-            }
+        let dependencies: BTreeSet<_> = nodes[&node]
+            .inputs
+            .iter()
+            .filter_map(|input| match input.source {
+                MaterialNodeInputSource::Node(source)
+                | MaterialNodeInputSource::NodeOutput { node: source, .. } => Some(source),
+                _ => None,
+            })
+            .collect();
+        for source in dependencies {
+            visit(source, nodes, visiting, visited, order)?;
         }
         visiting.remove(&node);
         visited.insert(node);
+        order.push(node);
         Ok(())
     }
-    visit(node, nodes, &mut BTreeSet::new(), &mut BTreeSet::new())
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut order = Vec::with_capacity(nodes.len());
+    visit(root, nodes, &mut visiting, &mut visited, &mut order)?;
+    let reachable = order.len();
+    // Unused nodes still participate in authoring validation.
+    for node in nodes.keys().copied() {
+        visit(node, nodes, &mut visiting, &mut visited, &mut order)?;
+    }
+    order.truncate(reachable);
+    Ok(order)
+}
+
+impl MaterialNodeOutput {
+    fn projection(self) -> (&'static str, usize, MaterialType) {
+        use MaterialType::{F32, Vec2, Vec3, Vec4};
+        match self {
+            Self::X => ("x", 1, F32),
+            Self::Y => ("y", 2, F32),
+            Self::Z => ("z", 3, F32),
+            Self::W => ("w", 4, F32),
+            Self::Xy => ("xy", 2, Vec2),
+            Self::Zw => ("zw", 4, Vec2),
+            Self::Xyz => ("xyz", 3, Vec3),
+            Self::R => ("r", 1, F32),
+            Self::G => ("g", 2, F32),
+            Self::B => ("b", 3, F32),
+            Self::A => ("a", 4, F32),
+            Self::Rgb => ("rgb", 3, Vec3),
+            Self::Rgba => ("rgba", 4, Vec4),
+        }
+    }
+
+    fn ty(self, source: MaterialType) -> Option<MaterialType> {
+        let (_, minimum_width, result) = self.projection();
+        let width = match source {
+            MaterialType::Vec2 => 2,
+            MaterialType::Vec3 => 3,
+            MaterialType::Vec4 => 4,
+            _ => return None,
+        };
+        (width >= minimum_width).then_some(result)
+    }
 }
 
 pub(super) fn node_name(node: MaterialNodeId) -> String {

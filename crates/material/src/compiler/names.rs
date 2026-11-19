@@ -245,8 +245,8 @@ pub(super) fn validate_top_level_names(
         }
     }
     if let Some(graph) = graph {
-        for name in wgsl_top_level_names(&graph.source)? {
-            insert(&name)?;
+        for name in &graph.generated_names {
+            insert(name)?;
         }
     }
     Ok(())

@@ -125,9 +125,12 @@ to compose a whole program:
 - generated declarations, parameters, resources, fragments, Code Nodes, and
   static options share one WGSL top-level namespace.
 
-When a typed node topology is lowered, its generated wrappers are Material
-implementation details. The Color and legacy metallic-roughness contexts use
-zero-argument wrappers. UV0 contexts supply `MaterialNodeInputSource::Uv0`
+When a typed node topology is lowered, the generated evaluator binds each
+reachable callable result once in dependency order. An edge can read the
+entire result or a named vector output such as RGB and alpha from one texture
+sample. The compiler checks the port against the upstream vector width and the
+receiving input type. Color and legacy metallic-roughness evaluators take
+no arguments. UV0 contexts supply `MaterialNodeInputSource::Uv0`
 as a `vec2<f32>`. A UV0 metallic-roughness graph can connect `WorldPosition`,
 `WorldNormal` and `CameraPosition` to `vec3<f32>` ports. Renderer supplies
 the interpolated position, normalized geometric mesh normal and actual eye
