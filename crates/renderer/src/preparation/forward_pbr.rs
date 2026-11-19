@@ -32,6 +32,10 @@ pub(super) fn normal_from_local(
         matches!(
             output,
             fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+                | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
+                    normal: Some(_),
+                    ..
+                }
         ),
         source,
     )?;

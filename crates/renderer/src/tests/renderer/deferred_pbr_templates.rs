@@ -91,7 +91,7 @@ fn pbr_uv0_forward_and_deferred_requests_pass_uv0_to_material_evaluators() {
         let mut request = request.expect("POSITION/NORMAL/UV0 layout");
         request.source_units.push(SourceUnit::new(
             "pbr-uv0-material",
-            "fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0); }\nfn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }",
+            "struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, };\nfn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface { return FluxelPbrSurface(vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0), uv); }",
         ));
         let artifact = ShaderComposer::new()
             .compose(&request)
@@ -119,7 +119,7 @@ fn pbr_uv0_normal_requests_require_tangent_and_compose_tbn_path() {
         let mut request = request.expect("POSITION/NORMAL/UV0/TANGENT layout");
         request.source_units.push(SourceUnit::new(
             "pbr-uv0-normal-material",
-            "fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0); }\nfn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv, 1.0); }",
+            "struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, };\nfn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; }\nfn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface { return FluxelPbrSurface(vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0), uv); }\nfn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv, 1.0); }",
         ));
         ShaderComposer::new()
             .compose(&request)
@@ -163,7 +163,7 @@ fn forward_effect_requests_preserve_direct_light_and_route_ao_only_through_irrad
     assert!(environment_source.contains("* clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"));
     let evaluators = SourceUnit::new(
         "effect-evaluators",
-        "fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; } fn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0); } fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.6) + uv * 0.0; } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 1.0 + uv.x * 0.0); } fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 0.25 + uv.x * 0.0; } fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.2, 0.3, 0.4) + vec3<f32>(uv.x * 0.0); }",
+        "struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, }; fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; } fn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface { return FluxelPbrSurface(vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.5, 1.0), vec2<f32>(0.2, 0.6) + uv * 0.0); } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0, 0.0, 1.0 + uv.x * 0.0); } fn evaluate_occlusion_uv0(uv: vec2<f32>) -> f32 { return 0.25 + uv.x * 0.0; } fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.2, 0.3, 0.4) + vec3<f32>(uv.x * 0.0); }",
     );
     let mut request = environment;
     request.source_units.push(evaluators);
@@ -182,7 +182,7 @@ fn uv0_irradiance_requests_compose_with_and_without_tangent_space_normals() {
         }
         .unwrap();
         request.source_units.push(SourceUnit::new("uv-irradiance-evaluators",
-            "fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; } fn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> vec4<f32> { return vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.3, 1.0); } fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> { return vec2<f32>(0.2, 0.6) + uv * 0.01; } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv * 0.1, 1.0); }"));
+            "struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, }; fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> { return uv; } fn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface { return FluxelPbrSurface(vec4<f32>(uv + world_position.xy * 0.0 + world_normal.xy * 0.0 + camera_position.xy * 0.0 + vertex_uv0 * 0.0, 0.3, 1.0), vec2<f32>(0.2, 0.6) + uv * 0.01); } fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(uv * 0.1, 1.0); }"));
         let shader = ShaderComposer::new()
             .compose(&request)
             .expect("one UV-aware irradiance entry");

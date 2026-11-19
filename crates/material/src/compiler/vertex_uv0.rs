@@ -88,7 +88,7 @@ pub(super) fn canonical(
         piece(
             canonical,
             "surface-evaluator-abi",
-            "pbr-uv0-world-context-with-vertex-uv",
+            "pbr-uv0-surface-value-v1",
         );
     }
     match vertex_uv0 {

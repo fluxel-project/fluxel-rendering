@@ -27,7 +27,7 @@ pub(super) fn validate(
             Ok(())
         };
     };
-    if !matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. }) {
+    if !super::surface::supports_surface_effects(output) {
         return Err(MaterialError::TransmissionExtensionsUnsupported {
             output: output.clone(),
         });

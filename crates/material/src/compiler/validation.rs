@@ -60,6 +60,14 @@ impl NormalizedMaterialIr {
                 )
             })
             .transpose()?;
+        if node_graph.is_none()
+            && matches!(
+                definition.output(),
+                SurfaceOutput::MetallicRoughnessUv0Graph { .. }
+            )
+        {
+            return Err(MaterialError::PbrGraphRequired);
+        }
         let graphs = node_graph
             .iter()
             .chain(vertex_uv0.iter().filter_map(|uv| uv.graph()));

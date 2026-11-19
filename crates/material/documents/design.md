@@ -268,11 +268,17 @@ raster intent are carried separately by `SurfacePolicy`.
 the named property callable take one `vec2<f32>` UV0 argument. The Renderer
 calls `evaluate_pbr_vertex_uv0(uv)` at the vertex entry and passes its
 interpolated result to the fragment entry as the fifth argument of
-`evaluate_pbr_material_uv0(uv, world_position, world_normal, camera_position, vertex_uv0)`.
-UV-only roots also expose `evaluate_material_uv0(uv)`. The property evaluator remains
-`evaluate_metallic_roughness_uv0(uv)`. Graph wrappers carry the UV0
-argument through typed node connections, so a Code Node can feed a real
-`textureSample` without bypassing the graph. Renderer owns the mesh ABI and
+`evaluate_pbr_surface_uv0(uv, world_position, world_normal, camera_position, vertex_uv0)`.
+UV-only roots also expose `evaluate_material_uv0(uv)`. Existing
+property callables still expose `evaluate_metallic_roughness_uv0(uv)`.
+Renderer reads both values from one `evaluate_pbr_surface_uv0` call.
+`MetallicRoughnessUv0Graph` connects metallic and roughness to separate
+`f32` node values or vector output ports within the same fragment graph.
+The graph's selected output supplies the `vec4<f32>` base color. The
+compiler evaluates the union of their dependencies once, so multiple ports
+of a texture sample share its result. Each root can consume the same UV0,
+vertex-derived UV0, world-space position, geometric normal, and camera
+eye inputs. An optional normal callable supplies a tangent-space normal. Renderer owns the mesh ABI and
 must provide UV0 at its documented vertex location; Material does not invent
 normal, view, tangent, or filtering facts.
 

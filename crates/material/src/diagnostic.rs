@@ -230,6 +230,20 @@ pub enum MaterialError {
         /// Root fragment name.
         fragment: String,
     },
+    /// A graph metallic-roughness surface requires a selected node graph.
+    PbrGraphRequired,
+    /// A graph metallic-roughness property must select a node or node output.
+    PbrGraphPropertySource {
+        /// Property being selected.
+        property: &'static str,
+    },
+    /// A graph metallic-roughness property did not resolve to a scalar.
+    PbrGraphPropertyType {
+        /// Property being selected.
+        property: &'static str,
+        /// Resolved source type.
+        actual: MaterialType,
+    },
     /// The metallic-roughness surface domain named no property callable.
     MissingSurfaceProperties {
         /// Requested property callable name.

@@ -10,6 +10,10 @@ use super::{
     SurfaceOutput, SurfacePolicy, validation::FunctionSignature,
 };
 
+#[path = "surface_emission.rs"]
+mod surface_emission;
+pub(super) use surface_emission::append_evaluators;
+
 /// Validates all surface-owned extensions after the root callable is resolved.
 pub(super) fn validate_definition(
     definition: &MaterialDefinition,
@@ -56,7 +60,7 @@ pub(super) fn validate(
     if (extensions.occlusion.is_some()
         || extensions.emissive.is_some()
         || emissive_configuration.is_some())
-        && !matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
+        && !supports_surface_effects(output)
     {
         return Err(MaterialError::SurfaceExtensionsUnsupported {
             output: output.clone(),
@@ -84,54 +88,60 @@ pub(super) fn validate(
     }
     let (properties, properties_expect_uv0, normal) = match output {
         SurfaceOutput::Color | SurfaceOutput::ColorUv0 => return Ok(()),
-        SurfaceOutput::MetallicRoughness { properties } => (properties, false, None),
-        SurfaceOutput::MetallicRoughnessUv0 { properties } => (properties, true, None),
+        SurfaceOutput::MetallicRoughness { properties } => (Some(properties.as_str()), false, None),
+        SurfaceOutput::MetallicRoughnessUv0 { properties } => {
+            (Some(properties.as_str()), true, None)
+        }
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
-            (properties, true, Some(normal))
+            (Some(properties.as_str()), true, Some(normal.as_str()))
+        }
+        SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
+            (None, true, normal.as_deref())
         }
     };
     let reserved = reserved_names(output);
-    for name in [root_name, properties.as_str()]
-        .into_iter()
-        .chain(normal.iter().map(|name| name.as_str()))
+    for name in std::iter::once(root_name)
+        .chain(properties)
+        .chain(normal)
     {
         if reserved.contains(name) {
             return Err(MaterialError::TopLevelNameConflict { name: name.into() });
         }
     }
-    let properties_signature =
-        functions
-            .get(properties)
-            .ok_or_else(|| MaterialError::MissingSurfaceProperties {
-                properties: properties.clone(),
-            })?;
-    if properties_signature.output != MaterialType::Vec2 {
-        return Err(MaterialError::SurfacePropertiesTypeMismatch {
-            properties: properties.clone(),
-            actual: properties_signature.output,
-        });
-    }
-    if !has_evaluator_inputs(properties_signature, properties_expect_uv0) {
-        return Err(MaterialError::SurfacePropertiesInputsUnsupported {
-            properties: properties.clone(),
-        });
+    if let Some(properties) = properties {
+        let properties_signature = functions.get(properties).ok_or_else(|| {
+            MaterialError::MissingSurfaceProperties {
+                properties: properties.into(),
+            }
+        })?;
+        if properties_signature.output != MaterialType::Vec2 {
+            return Err(MaterialError::SurfacePropertiesTypeMismatch {
+                properties: properties.into(),
+                actual: properties_signature.output,
+            });
+        }
+        if !has_evaluator_inputs(properties_signature, properties_expect_uv0) {
+            return Err(MaterialError::SurfacePropertiesInputsUnsupported {
+                properties: properties.into(),
+            });
+        }
     }
     if let Some(normal) = normal {
         let normal_signature =
             functions
                 .get(normal)
                 .ok_or_else(|| MaterialError::MissingSurfaceNormal {
-                    normal: normal.clone(),
+                    normal: normal.into(),
                 })?;
         if normal_signature.output != MaterialType::Vec3 {
             return Err(MaterialError::SurfaceNormalTypeMismatch {
-                normal: normal.clone(),
+                normal: normal.into(),
                 actual: normal_signature.output,
             });
         }
         if !has_evaluator_inputs(normal_signature, true) {
             return Err(MaterialError::SurfaceNormalInputsUnsupported {
-                normal: normal.clone(),
+                normal: normal.into(),
             });
         }
     }
@@ -280,6 +290,7 @@ pub(super) fn uses_uv0(output: &SurfaceOutput) -> bool {
         SurfaceOutput::ColorUv0
             | SurfaceOutput::MetallicRoughnessUv0 { .. }
             | SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            | SurfaceOutput::MetallicRoughnessUv0Graph { .. }
     )
 }
 
@@ -288,7 +299,13 @@ pub(super) fn supplies_pbr_context(output: &SurfaceOutput) -> bool {
         output,
         SurfaceOutput::MetallicRoughnessUv0 { .. }
             | SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            | SurfaceOutput::MetallicRoughnessUv0Graph { .. }
     )
+}
+
+pub(super) fn supports_surface_effects(output: &SurfaceOutput) -> bool {
+    matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
+        || matches!(output, SurfaceOutput::MetallicRoughnessUv0Graph { normal: Some(_), .. })
 }
 
 fn has_evaluator_inputs(signature: &FunctionSignature, expects_uv0: bool) -> bool {
@@ -318,9 +335,22 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
             String::from("evaluate_occlusion_uv0"),
             String::from("evaluate_emissive_uv0"),
         ]),
+        SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
+            let mut names = BTreeSet::from([String::from("FluxelPbrGraphValues")]);
+            if normal.is_some() {
+                names.extend([
+                    String::from("evaluate_normal_uv0"),
+                    String::from("evaluate_occlusion_uv0"),
+                    String::from("evaluate_emissive_uv0"),
+                ]);
+            }
+            names
+        }
     };
     if supplies_pbr_context(output) {
         names.insert(String::from("evaluate_pbr_material_uv0"));
+        names.insert(String::from("evaluate_pbr_surface_uv0"));
+        names.insert(String::from("FluxelPbrSurface"));
         names.insert(String::from(super::vertex_uv0::EVALUATOR));
     }
     names.extend([
@@ -451,136 +481,13 @@ pub(super) fn canonical(output: &SurfaceOutput, target: &mut String) {
             canonical_piece(target, "surface-properties", properties);
             canonical_piece(target, "surface-normal", normal);
         }
-    }
-}
-
-pub(super) fn append_evaluators(
-    generated: &mut String,
-    root_fragment: &str,
-    root_pbr_inputs: &[MaterialNodeInputSource],
-    output: &SurfaceOutput,
-    extensions: &SurfaceExtensions,
-    emissive_configuration: Option<&EmissiveConfiguration>,
-    pbr_surface_factors: Option<&PbrSurfaceFactors>,
-    policy: SurfacePolicy,
-) {
-    match output {
-        SurfaceOutput::Color => generated.push_str(&format!(
-            "fn evaluate_material() -> vec4<f32> {{\n    return {root_fragment}();\n}}\n"
-        )),
-        SurfaceOutput::ColorUv0 => generated.push_str(&format!(
-            "fn evaluate_material_uv0(uv: vec2<f32>) -> vec4<f32> {{\n    return {root_fragment}(uv);\n}}\n"
-        )),
-        SurfaceOutput::MetallicRoughness { properties } => {
-            generated.push_str(&format!(
-                "fn evaluate_material() -> vec4<f32> {{\n    return {root_fragment}();\n}}\n"
-            ));
-            generated.push_str(&format!(
-                "fn evaluate_metallic_roughness() -> vec2<f32> {{\n    return {properties}();\n}}\n"
-            ));
-        }
-        SurfaceOutput::MetallicRoughnessUv0 { properties } => {
-            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_pbr_inputs, properties, pbr_surface_factors);
-        }
-        SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
-            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_pbr_inputs, properties, pbr_surface_factors);
-            generated.push_str(&format!("fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"));
-            generated.push_str(&super::pbr_factors::uv0_occlusion_evaluator(
-                extensions.occlusion.as_deref(),
-                pbr_surface_factors,
-            ));
-            match (&extensions.emissive, emissive_configuration) {
-                (Some(_), Some(_)) => unreachable!("validated emissive configuration conflict"),
-                (Some(emissive), None) => generated.push_str(&format!("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {emissive}(uv);\n}}\n")),
-                (None, Some(configuration)) => append_emissive_configuration(generated, configuration),
-                (None, None) => generated.push_str("fn evaluate_emissive_uv0(uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }\n"),
+        SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
+            canonical_piece(target, "surface-output", "metallic-roughness-uv0-graph");
+            if let Some(normal) = normal {
+                canonical_piece(target, "surface-normal", normal);
             }
         }
     }
-    append_policy_helpers(generated, policy);
-}
-
-fn append_emissive_configuration(generated: &mut String, configuration: &EmissiveConfiguration) {
-    let color = configuration
-        .color_parameter
-        .as_deref()
-        .unwrap_or("vec3<f32>(0.0)");
-    let intensity = configuration
-        .intensity_parameter
-        .as_deref()
-        .unwrap_or("1.0");
-    let texture = configuration.texture.as_ref();
-    let level = texture
-        .and_then(|texture| texture.level_parameter.as_deref())
-        .unwrap_or("1.0");
-    let mut bindings = [color, intensity, level, "", ""];
-    if let Some(texture) = texture {
-        bindings[3] = &texture.texture;
-        bindings[4] = &texture.sampler;
-    }
-    let uv = unique_emissive_local("emissive_uv", &bindings);
-    generated.push_str(&format!(
-        "fn evaluate_emissive_uv0({uv}: vec2<f32>) -> vec3<f32> {{\n"
-    ));
-
-    if let Some(texture) = texture {
-        let sample = format!(
-            "textureSample({}, {}, {uv}).rgb",
-            texture.texture, texture.sampler
-        );
-        let linear = match texture.encoding {
-            crate::MaterialTextureEncoding::Linear | crate::MaterialTextureEncoding::Srgb => sample,
-            crate::MaterialTextureEncoding::SrgbEncodedUnorm => {
-                let name = unique_emissive_local("emissive_sample", &bindings);
-                generated.push_str(&format!("    let {name} = {sample};\n"));
-                match configuration.srgb_encoded_unorm_decode {
-                    crate::EmissiveSrgbDecode::BabylonApproximate => {
-                        format!("pow({name}, vec3<f32>(2.2))")
-                    }
-                    crate::EmissiveSrgbDecode::Exact => format!(
-                        "select(\n        pow(0.947867299 * ({name} + vec3<f32>(0.055)), vec3<f32>(2.4)),\n        0.0773993808 * {name},\n        {name} <= vec3<f32>(0.04045)\n    )"
-                    ),
-                }
-            }
-        };
-        generated.push_str(&format!(
-            "    return {color} * {linear} * {level} * {intensity};\n"
-        ));
-    } else {
-        generated.push_str(&format!("    return {color} * {intensity};\n"));
-    }
-    generated.push_str("}\n");
-}
-
-fn unique_emissive_local(seed: &str, bindings: &[&str]) -> String {
-    let mut name = seed.to_owned();
-    while bindings.contains(&name.as_str()) {
-        name.push('_');
-    }
-    name
-}
-
-fn append_policy_helpers(generated: &mut String, policy: SurfacePolicy) {
-    let rejects_alpha = matches!(
-        policy.alpha_mode,
-        SurfaceAlphaMode::Mask | SurfaceAlphaMode::MaskBlend
-    );
-    let preserves_alpha = matches!(
-        policy.alpha_mode,
-        SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
-    );
-    generated.push_str(&format!(
-        "fn material_alpha_rejected(alpha: f32) -> bool {{ return {rejects_alpha} && alpha < {}; }}\n",
-        policy.alpha_cutoff,
-    ));
-    generated.push_str(&format!(
-        "fn material_output_alpha(alpha: f32) -> f32 {{ if ({preserves_alpha}) {{ return alpha; }} return 1.0; }}\n"
-    ));
-    let two_sided_lighting = !policy.back_face_culling && policy.two_sided_lighting;
-    generated.push_str(&format!(
-        "fn material_two_sided_lighting() -> bool {{ return {}; }}\n",
-        two_sided_lighting,
-    ));
 }
 
 fn canonical_piece(output: &mut String, label: &str, value: &str) {

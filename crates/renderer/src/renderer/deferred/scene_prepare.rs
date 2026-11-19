@@ -25,6 +25,10 @@ pub(super) fn materials(
             !matches!(
                 input.material().value().output(),
                 fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+                    | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
+                        normal: Some(_),
+                        ..
+                    }
             )
         })
     {
@@ -55,13 +59,16 @@ pub(super) fn materials(
     for input in inputs {
         let layout = &input.geometry().value().layout;
         let request = match input.material().value().output() {
-            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } if effects => {
-                crate::pbr::gbuffer_uv0_normal_effect_request(layout)
-            }
-            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. } => {
-                crate::pbr::gbuffer_uv0_normal_request(layout)
-            }
-            fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. } => {
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
+                normal: Some(_), ..
+            } if effects => crate::pbr::gbuffer_uv0_normal_effect_request(layout),
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph {
+                normal: Some(_), ..
+            } => crate::pbr::gbuffer_uv0_normal_request(layout),
+            fluxel_material::SurfaceOutput::MetallicRoughnessUv0 { .. }
+            | fluxel_material::SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } => {
                 crate::pbr::gbuffer_uv0_request(layout)
             }
             fluxel_material::SurfaceOutput::MetallicRoughness { .. } => {

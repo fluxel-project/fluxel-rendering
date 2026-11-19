@@ -5,7 +5,7 @@
 pub struct MaterialNodeId(pub u32);
 
 /// A named output port projected from a float vector returned by a node.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MaterialNodeOutput {
     /// First vector component.
     X,
@@ -36,7 +36,7 @@ pub enum MaterialNodeOutput {
 }
 
 /// The value supplied to one material-node input port.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum MaterialNodeInputSource {
     /// Output of another node in the same graph.
     Node(MaterialNodeId),

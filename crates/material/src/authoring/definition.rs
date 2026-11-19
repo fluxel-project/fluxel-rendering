@@ -37,6 +37,16 @@ pub enum SurfaceOutput {
         /// One-argument vec2<f32> callable yielding a tangent-space normal.
         normal: String,
     },
+    /// A UV0 PBR surface whose base color is the node-graph root and whose
+    /// metallic and roughness values are independently selected graph values.
+    MetallicRoughnessUv0Graph {
+        /// Node graph source yielding one scalar metallic value.
+        metallic: MaterialNodeInputSource,
+        /// Node graph source yielding one scalar perceptual-roughness value.
+        roughness: MaterialNodeInputSource,
+        /// Optional UV0 tangent-space normal callable.
+        normal: Option<String>,
+    },
 }
 
 /// Optional UV0 normal-surface evaluation channels.

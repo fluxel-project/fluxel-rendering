@@ -36,19 +36,26 @@ pub(super) fn material_request(
             crate::pbr::forward_request(geometry)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
-        SurfaceOutput::MetallicRoughnessUv0 { .. } => (if environment {
+        SurfaceOutput::MetallicRoughnessUv0 { .. }
+        | SurfaceOutput::MetallicRoughnessUv0Graph { normal: None, .. } => (if environment {
             crate::pbr::forward_uv0_irradiance_request(geometry)
         } else {
             crate::pbr::forward_uv0_request(geometry)
         })
         .ok_or(ForwardPreparationError::MissingUv0 { source })?,
-        SurfaceOutput::MetallicRoughnessUv0Normal { .. } if has_effects => (if environment {
+        SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+        | SurfaceOutput::MetallicRoughnessUv0Graph {
+            normal: Some(_), ..
+        } if has_effects => (if environment {
             crate::pbr::forward_uv0_normal_effect_irradiance_request(geometry)
         } else {
             crate::pbr::forward_uv0_normal_effect_request(geometry)
         })
         .ok_or(ForwardPreparationError::MissingNormal { source })?,
-        SurfaceOutput::MetallicRoughnessUv0Normal { .. } => (if environment {
+        SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+        | SurfaceOutput::MetallicRoughnessUv0Graph {
+            normal: Some(_), ..
+        } => (if environment {
             crate::pbr::forward_uv0_normal_irradiance_request(geometry)
         } else {
             crate::pbr::forward_uv0_normal_request(geometry)

@@ -21,8 +21,8 @@ pub(super) fn validate(
         .packed_metallic_roughness
         .as_ref()
         .is_some_and(|packed| packed.occlusion.is_some());
-    if !matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
-        && (!matches!(output, SurfaceOutput::MetallicRoughnessUv0 { .. }) || packed_occlusion)
+    if !super::surface::supplies_pbr_context(output)
+        || (packed_occlusion && !super::surface::supports_surface_effects(output))
     {
         return Err(MaterialError::PbrSurfaceFactorsUnsupported {
             output: output.clone(),
@@ -155,7 +155,7 @@ pub(super) fn append_uv0_evaluators(
     generated: &mut String,
     root: &str,
     root_pbr_inputs: &[MaterialNodeInputSource],
-    properties: &str,
+    properties: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
 ) {
     let forbidden = factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
@@ -166,56 +166,127 @@ pub(super) fn append_uv0_evaluators(
     };
     let mut parameters = format!("{uv}: vec2<f32>");
     let mut arguments = uv.clone();
-    let mut context_parameters = String::new();
+    let mut full_arguments = uv.clone();
     for (input, seed, ty) in PBR_CONTEXT_INPUTS {
         let name = unique_local(seed, forbidden.iter().copied());
-        let parameter = format!(", {name}: {}", ty.wgsl());
-        context_parameters.push_str(&parameter);
+        parameters.push_str(&format!(", {name}: {}", ty.wgsl()));
+        full_arguments.push_str(&format!(", {name}"));
         if root_pbr_inputs.contains(&input) {
             arguments.push_str(&format!(", {name}"));
         }
     }
-    let name = if root_pbr_inputs.is_empty() {
-        "evaluate_material_uv0"
-    } else {
-        parameters.push_str(&context_parameters);
-        "evaluate_pbr_material_uv0"
-    };
-    let value = format!("{root}({arguments})");
-    let value = if let Some(factors) = factors {
-        generated.push_str(&uv0_properties_evaluator(properties, factors));
-        let factor = factors
-            .base_factor_parameter
-            .as_deref()
-            .unwrap_or("vec4<f32>(1.0)");
-        let sample = factors.base_texture.as_ref().map_or_else(
-            || String::from("vec4<f32>(1.0)"),
-            |texture| {
-                format!(
-                    "textureSample({}, {}, {uv})",
-                    texture.texture, texture.sampler
-                )
-            },
+
+    let raw = format!("{root}({arguments})");
+    if let Some(properties) = properties {
+        append_legacy_uv0(
+            generated,
+            &raw,
+            &uv,
+            &parameters,
+            root_pbr_inputs.is_empty(),
+            properties,
+            factors,
         );
-        format!("{value} * {factor} * {sample}")
+    }
+    generated.push_str("struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32> };\n");
+    generated.push_str(&format!(
+        "fn evaluate_pbr_surface_uv0({parameters}) -> FluxelPbrSurface {{\n"
+    ));
+    let (base, properties) = if properties.is_some() {
+        (
+            format!("evaluate_pbr_material_uv0({full_arguments})"),
+            format!("evaluate_metallic_roughness_uv0({uv})"),
+        )
     } else {
-        generated.push_str(&format!(
-            "fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{\n    return {properties}(uv);\n}}\n"
-        ));
-        value
+        let values = unique_local("pbr_graph_values", forbidden.iter().copied());
+        generated.push_str(&format!("    let {values} = {raw};\n"));
+        let base = apply_base_factors(&format!("{values}.base"), &uv, factors);
+        let properties = apply_property_factors(
+            generated,
+            format!("{values}.properties"),
+            &uv,
+            factors,
+            forbidden.iter().copied(),
+        );
+        (base, properties)
     };
     generated.push_str(&format!(
-        "fn {name}({parameters}) -> vec4<f32> {{\n    return {value};\n}}\n"
+        "    return FluxelPbrSurface({base}, {properties});\n}}\n"
     ));
-    if root_pbr_inputs.is_empty() {
-        generated.push_str(&format!(
-            "fn evaluate_pbr_material_uv0({parameters}{context_parameters}) -> vec4<f32> {{\n    return evaluate_material_uv0({uv});\n}}\n"
-        ));
-    }
 }
 
-pub(super) fn uv0_properties_evaluator(properties: &str, factors: &PbrSurfaceFactors) -> String {
-    let uv = unique_local("pbr_uv", factor_symbols(factors, [properties]));
+fn append_legacy_uv0(
+    generated: &mut String,
+    raw: &str,
+    uv: &str,
+    parameters: &str,
+    is_uv_only: bool,
+    properties: &str,
+    factors: Option<&PbrSurfaceFactors>,
+) {
+    let property_symbols = factors.map_or_else(
+        || vec![properties],
+        |factors| factor_symbols(factors, [properties].into_iter()),
+    );
+    let property_uv = unique_local("uv", property_symbols.iter().copied());
+    generated.push_str(&format!(
+        "fn evaluate_metallic_roughness_uv0({property_uv}: vec2<f32>) -> vec2<f32> {{\n"
+    ));
+    let properties = apply_property_factors(
+        generated,
+        format!("{properties}({property_uv})"),
+        &property_uv,
+        factors,
+        property_symbols.iter().copied(),
+    );
+    generated.push_str(&format!("    return {properties};\n}}\n"));
+
+    let base = apply_base_factors(raw, uv, factors);
+    if is_uv_only {
+        generated.push_str(&format!(
+            "fn evaluate_material_uv0({uv}: vec2<f32>) -> vec4<f32> {{\n    return {base};\n}}\n"
+        ));
+    }
+    let base = if is_uv_only {
+        format!("evaluate_material_uv0({uv})")
+    } else {
+        base
+    };
+    generated.push_str(&format!(
+        "fn evaluate_pbr_material_uv0({parameters}) -> vec4<f32> {{\n    return {base};\n}}\n"
+    ));
+}
+
+fn apply_base_factors(value: &str, uv: &str, factors: Option<&PbrSurfaceFactors>) -> String {
+    let Some(factors) = factors else {
+        return value.into();
+    };
+    let factor = factors
+        .base_factor_parameter
+        .as_deref()
+        .unwrap_or("vec4<f32>(1.0)");
+    let sample = factors.base_texture.as_ref().map_or_else(
+        || String::from("vec4<f32>(1.0)"),
+        |texture| {
+            format!(
+                "textureSample({}, {}, {uv})",
+                texture.texture, texture.sampler
+            )
+        },
+    );
+    format!("{value} * {factor} * {sample}")
+}
+
+fn apply_property_factors<'a>(
+    generated: &mut String,
+    value: String,
+    uv: &str,
+    factors: Option<&PbrSurfaceFactors>,
+    forbidden: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let Some(factors) = factors else {
+        return value;
+    };
     let metallic = factors
         .metallic_factor_parameter
         .as_deref()
@@ -224,22 +295,20 @@ pub(super) fn uv0_properties_evaluator(properties: &str, factors: &PbrSurfaceFac
         .roughness_factor_parameter
         .as_deref()
         .unwrap_or("1.0");
-    let Some(texture) = factors.packed_metallic_roughness.as_ref() else {
-        return format!(
-            "fn evaluate_metallic_roughness_uv0({uv}: vec2<f32>) -> vec2<f32> {{\n    return {properties}({uv}) * vec2<f32>({metallic}, {roughness});\n}}\n"
-        );
-    };
-    let sample = unique_local(
-        "pbr_packed_sample",
-        factor_symbols(factors, [properties, uv.as_str()]),
-    );
-    format!(
-        "fn evaluate_metallic_roughness_uv0({uv}: vec2<f32>) -> vec2<f32> {{\n    let {sample} = textureSample({}, {}, {uv});\n    return {properties}({uv}) * vec2<f32>({metallic}, {roughness}) * vec2<f32>({sample}.{}, {sample}.{});\n}}\n",
-        texture.texture,
-        texture.sampler,
-        channel_expression(texture.metallic),
-        channel_expression(texture.roughness),
-    )
+    let mut value = format!("{value} * vec2<f32>({metallic}, {roughness})");
+    if let Some(texture) = &factors.packed_metallic_roughness {
+        let sample = unique_local("pbr_packed_sample", forbidden);
+        generated.push_str(&format!(
+            "    let {sample} = textureSample({}, {}, {uv});\n",
+            texture.texture, texture.sampler
+        ));
+        value.push_str(&format!(
+            " * vec2<f32>({sample}.{}, {sample}.{})",
+            channel_expression(texture.metallic),
+            channel_expression(texture.roughness)
+        ));
+    }
+    value
 }
 
 pub(super) fn uv0_occlusion_evaluator(

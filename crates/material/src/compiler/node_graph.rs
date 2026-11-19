@@ -62,6 +62,8 @@ impl NodeGraphStage {
     }
 }
 
+type PropertyRoot = (MaterialNodeId, Option<MaterialNodeOutput>);
+
 pub(super) fn normalize_surface(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
@@ -75,12 +77,21 @@ pub(super) fn normalize_surface(
                 && (*source != MaterialNodeInputSource::VertexUv0 || has_vertex_uv0)
         })
         .collect::<Vec<_>>();
+    let properties = match surface_output {
+        SurfaceOutput::MetallicRoughnessUv0Graph {
+            metallic,
+            roughness,
+            ..
+        } => Some([("metallic", *metallic), ("roughness", *roughness)]),
+        _ => None,
+    };
     normalize(
         graph,
         functions,
         NodeGraphStage::Surface,
         super::surface::uses_uv0(surface_output),
         &context,
+        properties,
     )
 }
 
@@ -88,7 +99,7 @@ pub(super) fn normalize_vertex_uv0(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
-    normalize(graph, functions, NodeGraphStage::VertexUv0, true, &[])
+    normalize(graph, functions, NodeGraphStage::VertexUv0, true, &[], None)
 }
 
 fn normalize(
@@ -97,6 +108,7 @@ fn normalize(
     stage: NodeGraphStage,
     accepts_uv0: bool,
     available_context: &[(MaterialNodeInputSource, &str, MaterialType)],
+    properties: Option<[(&'static str, MaterialNodeInputSource); 2]>,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut context_types = Vec::new();
     if accepts_uv0 {
@@ -126,7 +138,19 @@ fn normalize(
             &context_types,
         )?;
     }
-    let order = evaluation_order(graph.output, &nodes)?;
+    let properties = properties
+        .map(
+            |[(metallic, metallic_source), (roughness, roughness_source)]| -> Result<_, MaterialError> {
+                Ok([
+                    property_root(metallic, metallic_source, &nodes, functions)?,
+                    property_root(roughness, roughness_source, &nodes, functions)?,
+                ])
+            },
+        )
+        .transpose()?;
+    let output_roots =
+        std::iter::once(graph.output).chain(properties.iter().flatten().map(|(node, _)| *node));
+    let order = evaluation_order(output_roots, &nodes)?;
 
     let uv = context_name("uv", functions);
     let context = available_context
@@ -166,10 +190,15 @@ fn normalize(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let mut source = format!(
-        "// Generated material node graph.\nfn {root}({parameters}) -> {} {{\n",
-        output.wgsl(),
-    );
+    let mut source = String::from("// Generated material node graph.\n");
+    let result_type = if properties.is_some() {
+        source
+            .push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32> };\n");
+        "FluxelPbrGraphValues"
+    } else {
+        output.wgsl()
+    };
+    source.push_str(&format!("fn {root}({parameters}) -> {result_type} {{\n"));
     for id in order {
         let node = nodes[&id];
         let signature = &functions[&node.callable];
@@ -209,21 +238,70 @@ fn normalize(
         }
         source.push_str(");\n");
     }
-    source.push_str(&format!("    return {};\n}}\n", locals[&graph.output]));
-    let callable = CallableDeclaration {
-        name: root.clone(),
-        arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
-        result: Some(output.shader_type()),
-    };
+    let base = &locals[&graph.output];
+    let mut callables = Vec::new();
+    if let Some([metallic, roughness]) = properties {
+        let metallic = property_expression(metallic, &locals);
+        let roughness = property_expression(roughness, &locals);
+        source.push_str(&format!(
+            "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}));\n}}\n"
+        ));
+    } else {
+        source.push_str(&format!("    return {base};\n}}\n"));
+        callables.push(CallableDeclaration {
+            name: root.clone(),
+            arguments: inputs.iter().map(|input| input.ty.shader_type()).collect(),
+            result: Some(output.shader_type()),
+        });
+    }
     Ok(NormalizedNodeGraph {
         root,
         output,
         source,
         generated_names: nodes.keys().map(|id| stage.node_name(*id)).collect(),
-        callables: vec![callable],
+        callables,
         inputs,
         pbr_inputs: context.into_iter().map(|(source, _, _)| source).collect(),
     })
+}
+
+fn property_root(
+    property: &'static str,
+    source: MaterialNodeInputSource,
+    nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
+    functions: &BTreeMap<String, FunctionSignature>,
+) -> Result<PropertyRoot, MaterialError> {
+    let (node, port) = match source {
+        MaterialNodeInputSource::Node(node) => (node, None),
+        MaterialNodeInputSource::NodeOutput { node, output } => (node, Some(output)),
+        _ => return Err(MaterialError::PbrGraphPropertySource { property }),
+    };
+    let upstream = upstream_type(node, nodes, functions)?;
+    let actual = match port {
+        Some(output) => output
+            .ty(upstream)
+            .ok_or(MaterialError::NodeOutputUnavailable {
+                node,
+                output,
+                actual: upstream,
+            })?,
+        None => upstream,
+    };
+    if actual != MaterialType::F32 {
+        return Err(MaterialError::PbrGraphPropertyType { property, actual });
+    }
+    Ok((node, port))
+}
+
+fn property_expression(
+    (node, port): PropertyRoot,
+    locals: &BTreeMap<MaterialNodeId, String>,
+) -> String {
+    let value = &locals[&node];
+    port.map_or_else(
+        || value.clone(),
+        |port| format!("{value}.{}", port.projection().0),
+    )
 }
 
 fn validate_node(
@@ -314,7 +392,7 @@ fn upstream_type(
 }
 
 fn evaluation_order(
-    root: MaterialNodeId,
+    roots: impl IntoIterator<Item = MaterialNodeId>,
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
 ) -> Result<Vec<MaterialNodeId>, MaterialError> {
     fn visit(
@@ -350,7 +428,9 @@ fn evaluation_order(
     let mut visiting = BTreeSet::new();
     let mut visited = BTreeSet::new();
     let mut order = Vec::with_capacity(nodes.len());
-    visit(root, nodes, &mut visiting, &mut visited, &mut order)?;
+    for root in roots {
+        visit(root, nodes, &mut visiting, &mut visited, &mut order)?;
+    }
     let reachable = order.len();
     // Unused nodes still participate in authoring validation.
     for node in nodes.keys().copied() {

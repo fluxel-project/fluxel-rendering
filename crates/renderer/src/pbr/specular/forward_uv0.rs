@@ -153,9 +153,10 @@ struct PbrSpecularVertexOutput {
     format!(
         r#"{input}
 fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
-    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0);
+    let surface = evaluate_pbr_surface_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0);
+    let material = surface.base;
     let base = {base};
-    let properties = evaluate_metallic_roughness_uv0(input.uv0);
+    let properties = surface.properties;
     let normal = pbr_surface_normal({normal}, front_facing);
     let dielectric_f0 = {dielectric_f0};
     {transmission_values}

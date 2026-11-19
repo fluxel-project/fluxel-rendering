@@ -17,9 +17,13 @@ use crate::preparation::forward_fragment::{
 };
 
 mod direct_light;
+mod request_options;
 mod scene_refraction;
 pub(crate) mod specular;
 mod templates;
+
+use request_options::{VIEW_FACING, install_emissive_evaluator};
+pub(crate) use request_options::{with_mirrored_view, without_emissive};
 
 pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {
     matches!(
@@ -27,6 +31,7 @@ pub(crate) fn is_pbr(output: &SurfaceOutput) -> bool {
         SurfaceOutput::MetallicRoughness { .. }
             | SurfaceOutput::MetallicRoughnessUv0 { .. }
             | SurfaceOutput::MetallicRoughnessUv0Normal { .. }
+            | SurfaceOutput::MetallicRoughnessUv0Graph { .. }
     )
 }
 
@@ -208,51 +213,6 @@ pub(crate) fn gbuffer_uv0_normal_effect_request(
     );
     install_emissive_evaluator(&mut request);
     Some(request)
-}
-
-const VIEW_FACING: &str = "pbr-view-facing";
-const EMISSIVE_EVALUATOR: &str = "pbr-emissive";
-
-fn install_emissive_evaluator(request: &mut ShaderCompositionRequest) {
-    request.source_units.push(SourceUnit::new(
-        EMISSIVE_EVALUATOR,
-        "fn pbr_emissive(uv: vec2<f32>) -> vec3<f32> { return evaluate_emissive_uv0(uv); }",
-    ));
-}
-
-/// Removes the material emissive evaluator from an effect-enabled PBR request.
-///
-/// The material declaration remains intact so that resource ownership stays
-/// material-local; the selected fragment route cannot reach it. This mirrors
-/// Babylon's global emissive admission without importing its coordinate rules.
-pub(crate) fn without_emissive(mut request: ShaderCompositionRequest) -> ShaderCompositionRequest {
-    let unit = request
-        .source_units
-        .iter_mut()
-        .find(|unit| unit.id.0 == EMISSIVE_EVALUATOR)
-        .expect("surface-effect PBR request includes its emissive evaluator");
-    *unit = SourceUnit::new(
-        EMISSIVE_EVALUATOR,
-        "fn pbr_emissive(_uv: vec2<f32>) -> vec3<f32> { return vec3<f32>(0.0); }",
-    );
-    request
-        .static_options
-        .insert("renderer.emissive".into(), "disabled".into());
-    request
-}
-
-/// Specializes the PBR normal-facing predicate for a reflected camera.
-pub(crate) fn with_mirrored_view(mut request: ShaderCompositionRequest) -> ShaderCompositionRequest {
-    let unit = request
-        .source_units
-        .iter_mut()
-        .find(|unit| unit.id.0 == VIEW_FACING)
-        .expect("PBR geometry includes its view-facing predicate");
-    *unit = SourceUnit::new(
-        VIEW_FACING,
-        "fn pbr_flip_back_normal(front_facing: bool) -> bool { return front_facing; }",
-    );
-    request
 }
 
 fn geometry_request(layout: &GeometryLayout, deferred: bool) -> Option<ShaderCompositionRequest> {
