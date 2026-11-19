@@ -18,6 +18,8 @@ use crate::preparation::forward_fragment::{
 
 mod deferred_lighting;
 mod direct_light;
+mod normal_basis;
+pub(crate) use normal_basis::specialize_normal_basis;
 mod request_options;
 mod scene_refraction;
 pub(crate) mod specular;
@@ -413,17 +415,16 @@ fn geometry_uv0_normal_request(
         .flat_map(|stream| &stream.attributes)
         .filter(|attribute| attribute.semantic != "UV1")
         .collect();
-    if attributes.len() != 4
+    let tangent = attributes
+        .iter()
+        .find(|attribute| attribute.semantic == "TANGENT");
+    if attributes.len() != 3 + usize::from(tangent.is_some())
         || attributes
             .iter()
             .filter(|a| a.semantic == "UV0" && matches!(a.format, VertexFormat::Float32(2)))
             .count()
             != 1
-        || attributes
-            .iter()
-            .filter(|a| a.semantic == "TANGENT" && matches!(a.format, VertexFormat::Float32(4)))
-            .count()
-            != 1
+        || tangent.is_some_and(|attribute| !matches!(attribute.format, VertexFormat::Float32(4)))
     {
         return None;
     }
@@ -452,11 +453,15 @@ fn geometry_uv0_normal_request(
         2,
         VertexType::Vec2(ScalarType::F32),
     ));
-    request.vertex_inputs.push(VertexInputDeclaration::new(
-        "TANGENT",
-        3,
-        VertexType::Vec4(ScalarType::F32),
-    ));
+    if tangent.is_some() {
+        request.vertex_inputs.push(VertexInputDeclaration::new(
+            "TANGENT",
+            3,
+            VertexType::Vec4(ScalarType::F32),
+        ));
+    } else {
+        normal_basis::mark_derivative(&mut request);
+    }
     request.source_units.push(SourceUnit::new(
         "pbr-tangent-basis",
         templates::TANGENT_BASIS,

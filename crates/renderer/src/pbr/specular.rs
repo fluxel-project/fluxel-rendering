@@ -270,7 +270,9 @@ fn forward_specular_request_inner(
         "emissive-ao-rgba16float-v1",
     );
     let uv0 = has_vertex_semantic(&request, "UV0");
-    let normal_map = uv0 && has_vertex_semantic(&request, "TANGENT");
+    let normal_map = uv0
+        && (has_vertex_semantic(&request, "TANGENT")
+            || super::normal_basis::uses_derivatives(&request));
     let source = if uv0 {
         forward_uv0::source(
             normal_map,

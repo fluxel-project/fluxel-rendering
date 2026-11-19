@@ -18,8 +18,8 @@ use crate::{
     MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
     MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
     MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType, MaterialVariantKey,
-    PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode, SurfaceExtensions,
-    SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    NormalMapSettings, PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode,
+    SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
 };
 use fluxel_assets::AssetSnapshot;
 

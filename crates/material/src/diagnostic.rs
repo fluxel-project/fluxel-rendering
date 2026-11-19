@@ -416,6 +416,11 @@ pub enum MaterialError {
     },
     /// A surface alpha cutoff must be finite before it can become WGSL source.
     SurfaceAlphaCutoffNonFinite,
+    /// Normal-map controls require a tangent-space normal PBR surface.
+    NormalMapSettingsUnsupported {
+        /// Selected output.
+        output: SurfaceOutput,
+    },
     /// Transmission controls require a UV0 normal PBR surface.
     TransmissionExtensionsUnsupported {
         /// Selected output.

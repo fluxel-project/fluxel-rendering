@@ -213,6 +213,7 @@ pub(super) fn prepare_compiled_material(
     {
         super::forward_fragment::use_premultiplied_rgb(&mut request);
     }
+    crate::pbr::specialize_normal_basis(&mut request, material.normal_map_settings());
     let contribution = material.contribution();
     let uv1_argument = contribution.requires_texture_uv1();
     // A view-disabled emissive sampler cannot reach the supplied secondary UV.

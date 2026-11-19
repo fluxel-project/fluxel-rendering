@@ -4,6 +4,7 @@ mod assets;
 mod code_node;
 mod definition;
 mod nodes;
+mod normal_map;
 mod surface_policy;
 mod transmission;
 mod types;
@@ -17,6 +18,7 @@ pub use definition::{
     PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions, SurfaceOutput, TextureUvSet,
 };
 pub use nodes::*;
+pub use normal_map::NormalMapSettings;
 pub use surface_policy::{
     SurfaceAlphaMode, SurfaceBlendMode, SurfacePolicy, SurfaceSideOrientation,
 };

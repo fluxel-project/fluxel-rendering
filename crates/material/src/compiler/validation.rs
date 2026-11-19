@@ -25,6 +25,7 @@ pub(super) struct NormalizedMaterialIr {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pub(super) normal_map_settings: Option<NormalMapSettings>,
     pub(super) surface_policy: SurfacePolicy,
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
@@ -42,6 +43,13 @@ impl NormalizedMaterialIr {
     pub(super) fn from_definition(definition: &MaterialDefinition) -> Result<Self, MaterialError> {
         if !definition.surface_policy().alpha_cutoff.is_finite() {
             return Err(MaterialError::SurfaceAlphaCutoffNonFinite);
+        }
+        if definition.normal_map_settings().is_some()
+            && !super::surface::has_tangent_space_normal(definition.output())
+        {
+            return Err(MaterialError::NormalMapSettingsUnsupported {
+                output: definition.output().clone(),
+            });
         }
         let mut fragments = definition.fragments().to_vec();
         fragments.sort_by(|left, right| left.name.cmp(&right.name));
@@ -144,6 +152,7 @@ impl NormalizedMaterialIr {
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
+            normal_map_settings: definition.normal_map_settings(),
             surface_policy: definition.surface_policy(),
             transmission_extensions: definition.transmission_extensions().cloned(),
             refraction_environment: definition.refraction_environment().cloned(),
@@ -163,6 +172,7 @@ impl NormalizedMaterialIr {
             self.pbr_surface_factors.as_ref(),
             &mut canonical,
         );
+        super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
         super::transmission::canonical(self.transmission_extensions.as_ref(), &mut canonical);
         super::transmission::canonical_environment(
@@ -251,6 +261,7 @@ impl NormalizedMaterialIr {
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
             self.pbr_surface_factors.as_ref(),
+            self.normal_map_settings,
             self.surface_policy,
             vertex_varyings,
             &self.texture_uv,

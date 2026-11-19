@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use super::{
     MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialNodeInputSource,
     MaterialParameter, MaterialResource, MaterialTextureEncoding,
-    MaterialTextureEncodingRequirement, RefractionEnvironment, StaticValue, SurfacePolicy,
-    TransmissionExtensions,
+    MaterialTextureEncodingRequirement, NormalMapSettings, RefractionEnvironment, StaticValue,
+    SurfacePolicy, TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -282,6 +282,7 @@ pub struct MaterialDefinition {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
@@ -329,6 +330,7 @@ impl MaterialDefinition {
             surface_extensions: SurfaceExtensions::default(),
             emissive_configuration: None,
             pbr_surface_factors: None,
+            normal_map_settings: None,
             surface_policy: SurfacePolicy::default(),
             transmission_extensions: None,
             refraction_environment: None,
@@ -407,6 +409,14 @@ impl MaterialDefinition {
         self
     }
 
+    /// Selects static strength and channel-convention controls for the
+    /// tangent-space normal callable of this PBR surface.
+    #[must_use]
+    pub fn with_normal_map_settings(mut self, settings: NormalMapSettings) -> Self {
+        self.normal_map_settings = Some(settings);
+        self
+    }
+
     /// Requires transfer encodings for selected texture resources when an
     /// asset source is bound by a renderer consumer.
     #[must_use]
@@ -474,6 +484,12 @@ impl MaterialDefinition {
     #[must_use]
     pub fn pbr_surface_factors(&self) -> Option<&PbrSurfaceFactors> {
         self.pbr_surface_factors.as_ref()
+    }
+
+    /// Returns tangent-space normal-map settings when explicitly selected.
+    #[must_use]
+    pub const fn normal_map_settings(&self) -> Option<NormalMapSettings> {
+        self.normal_map_settings
     }
 
     /// Returns whether this material needs the renderer effects route.

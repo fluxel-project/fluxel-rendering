@@ -2,7 +2,8 @@
 
 use crate::{
     MaterialAssetRef, MaterialParameter, MaterialResource, MaterialShaderContribution,
-    MaterialTextureEncodingRequirement, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    MaterialTextureEncodingRequirement, NormalMapSettings, SurfaceOutput, SurfacePolicy,
+    TransmissionExtensions,
 };
 
 /// A stable static-variant identity derived from canonical material input.
@@ -36,6 +37,7 @@ pub struct CompiledMaterialVariant {
     resources: Vec<MaterialResource>,
     texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
     output: SurfaceOutput,
+    normal_map_settings: Option<NormalMapSettings>,
     surface_policy: SurfacePolicy,
     transmission_extensions: Option<TransmissionExtensions>,
 }
@@ -48,6 +50,7 @@ impl CompiledMaterialVariant {
         resources: Vec<MaterialResource>,
         texture_encoding_requirements: Vec<MaterialTextureEncodingRequirement>,
         output: SurfaceOutput,
+        normal_map_settings: Option<NormalMapSettings>,
         surface_policy: SurfacePolicy,
         transmission_extensions: Option<TransmissionExtensions>,
     ) -> Self {
@@ -59,6 +62,7 @@ impl CompiledMaterialVariant {
             resources,
             texture_encoding_requirements,
             output,
+            normal_map_settings,
             surface_policy,
             transmission_extensions,
         }
@@ -91,6 +95,13 @@ impl CompiledMaterialVariant {
     #[must_use]
     pub fn output(&self) -> &SurfaceOutput {
         &self.output
+    }
+
+    /// Returns tangent-space normal-map settings, defaulting to unit strength
+    /// with no channel inversion when the author selected none.
+    #[must_use]
+    pub fn normal_map_settings(&self) -> NormalMapSettings {
+        self.normal_map_settings.unwrap_or_default()
     }
 
     /// Returns the static alpha and raster facts for this compiled variant.

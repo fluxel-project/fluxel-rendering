@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use super::super::pbr_factors;
 use crate::{
     EmissiveConfiguration, MaterialNodeInputSource, MaterialTextureUv, MaterialType,
-    PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    NormalMapSettings, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput,
+    SurfacePolicy,
 };
 
 pub(in crate::compiler) fn append_evaluators(
@@ -16,6 +17,7 @@ pub(in crate::compiler) fn append_evaluators(
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
+    normal_map_settings: Option<NormalMapSettings>,
     policy: SurfacePolicy,
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
@@ -60,6 +62,7 @@ pub(in crate::compiler) fn append_evaluators(
                 extensions,
                 emissive_configuration,
                 pbr_surface_factors,
+                normal_map_settings,
                 texture_uv,
             );
         }
@@ -80,6 +83,7 @@ pub(in crate::compiler) fn append_evaluators(
                     extensions,
                     emissive_configuration,
                     pbr_surface_factors,
+                    normal_map_settings,
                     texture_uv,
                 );
             } else {
@@ -108,11 +112,18 @@ fn append_normal_extensions(
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
+    normal_map_settings: Option<NormalMapSettings>,
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
-    generated.push_str(&format!(
-        "fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"
-    ));
+    match normal_map_settings {
+        Some(settings) if settings.strength() != 1.0 => generated.push_str(&format!(
+            "fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    let normal = {normal}(uv);\n    let scaled_normal = normal * vec3<f32>({strength:?}, {strength:?}, 1.0);\n    let magnitude = max(abs(scaled_normal.x), max(abs(scaled_normal.y), abs(scaled_normal.z)));\n    if magnitude == 0.0 {{ return vec3<f32>(0.0, 0.0, 1.0); }}\n    return normalize(scaled_normal / magnitude);\n}}\n",
+            strength = settings.strength(),
+        )),
+        _ => generated.push_str(&format!(
+            "fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"
+        )),
+    }
     generated.push_str(&pbr_factors::uv0_occlusion_evaluator(
         extensions.occlusion.as_deref(),
         pbr_surface_factors,

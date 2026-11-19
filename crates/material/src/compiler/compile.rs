@@ -19,6 +19,7 @@ impl MaterialCompiler {
             ir.resources,
             ir.texture_encoding_requirements,
             ir.output,
+            ir.normal_map_settings,
             ir.surface_policy,
             ir.transmission_extensions,
         ))

@@ -228,6 +228,12 @@ preserves destination alpha. The ordinary transparent phase uses these factors.
 For a depth-peeling frame, place additive draws in the explicitly excluded
 ordinary transparency segment.
 
+A normal-bearing PBR definition can use `with_normal_map_settings` to select a
+finite, nonnegative tangent-space XY strength. The normal callable supplies a
+decoded tangent-space vector. Strength applies Babylon's XY scale before the
+basis transform and defaults to one. The authored tangent-axis inversions
+apply when the renderer reconstructs the basis from derivatives.
+
 `SurfacePolicy::with_separate_culling_pass` opts into two ordered raster
 draws when ordinary back-face culling is disabled. It is a static variant
 fact. The consumer retains ownership of both raster states and their order.

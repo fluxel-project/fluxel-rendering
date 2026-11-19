@@ -190,6 +190,15 @@ transform locations 4 through 7. The template supplies a perspective-correct
 varying for the affine sample coordinates. Disabling emissive omits the UV1
 attribute when emissive is its only consumer.
 
+### Tangent-space normal maps
+
+A normal-mapped material uses the mesh's tangent basis when it has a tangent
+stream. With position, normal, and UV0 alone, the fragment program reconstructs
+the cotangent frame from world-position and UV0 derivatives. The shader applies
+Babylon's back-face UV sign and the authored tangent-axis signs, reducing a
+degenerate cotangent frame to its normal axis. This preparation works for the
+same material in Forward, Deferred geometry, and Forward effects.
+
 ### GPU particle material draws
 
 An externally seeded particle system retains two state buffers with storage and

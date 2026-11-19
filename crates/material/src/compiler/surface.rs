@@ -45,6 +45,46 @@ pub(super) fn validate_definition(
     )
 }
 
+/// Whether this output supplies a tangent-space normal callable.
+pub(super) fn has_tangent_space_normal(output: &SurfaceOutput) -> bool {
+    matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
+        || matches!(
+            output,
+            SurfaceOutput::MetallicRoughnessUv0Graph {
+                normal: Some(_),
+                ..
+            }
+        )
+}
+
+/// Adds normal-map metadata to the static variant identity.
+pub(super) fn canonical_normal_map_settings(
+    settings: Option<crate::NormalMapSettings>,
+    canonical: &mut String,
+) {
+    use super::canonical::piece;
+    let Some(settings) =
+        settings.filter(|settings| *settings != crate::NormalMapSettings::default())
+    else {
+        return;
+    };
+    piece(
+        canonical,
+        "normal-map-strength",
+        &settings.strength().to_bits().to_string(),
+    );
+    piece(
+        canonical,
+        "normal-map-invert-x",
+        &settings.invert_x.to_string(),
+    );
+    piece(
+        canonical,
+        "normal-map-invert-y",
+        &settings.invert_y.to_string(),
+    );
+}
+
 pub(super) fn validate(
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
