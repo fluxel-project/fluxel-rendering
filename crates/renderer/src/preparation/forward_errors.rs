@@ -100,6 +100,11 @@ pub enum ForwardPreparationError {
         /// Draw requesting the geometry.
         source: ForwardDrawSource,
     },
+    /// Additive blend requires the ordinary transparent composition phase.
+    AdditiveOitUnsupported {
+        /// Draw requesting the unsupported peel composition.
+        source: ForwardDrawSource,
+    },
     /// A CPU stream cannot satisfy its selected draw's physical attribute footprint.
     GeometryPayloadTooShort {
         /// Draw requesting the geometry.

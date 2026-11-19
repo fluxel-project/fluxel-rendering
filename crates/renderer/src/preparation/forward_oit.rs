@@ -4,7 +4,7 @@ use super::*;
 use crate::preparation::forward_fragment::{
     OitDepthPrecision, OitDrawStage, with_oit_forward_fragment,
 };
-use fluxel_material::SurfaceAlphaMode;
+use fluxel_material::{SurfaceAlphaMode, SurfaceBlendMode};
 
 /// One stable OIT partition of already prepared Forward draws.
 ///
@@ -60,6 +60,11 @@ pub(crate) fn prepare_oit_material(
     precision: OitDepthPrecision,
     composer: &mut ShaderComposer,
 ) -> Result<PreparedMaterial, ForwardPreparationError> {
+    if input.prepared().material().surface_policy().blend_mode == SurfaceBlendMode::Add {
+        return Err(ForwardPreparationError::AdditiveOitUnsupported {
+            source: input.source(),
+        });
+    }
     // OIT recompiles a distinct fragment entry and has no per-instance
     // ordering policy. Ordinary preparation refuses transparent instanced
     // surfaces; retain that boundary if a retained input is ever routed here.

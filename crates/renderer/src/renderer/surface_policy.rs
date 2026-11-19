@@ -85,6 +85,20 @@ impl RasterSurfaceState {
     /// Returns Babylon's selected fixed-function blend factors.
     pub(crate) fn blend_state(self) -> Option<BlendState> {
         let mode = self.blend_mode?;
+        if mode == SurfaceBlendMode::Add {
+            return Some(BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::SrcAlpha,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: BlendFactor::Zero,
+                    dst_factor: BlendFactor::One,
+                    operation: BlendOperation::Add,
+                },
+            });
+        }
         Some(BlendState {
             color: BlendComponent {
                 src_factor: if mode.uses_premultiplied_rgb() {

@@ -445,6 +445,7 @@ pub(super) fn canonical_policy(policy: SurfacePolicy, target: &mut String) {
     canonical_piece(target, "surface-alpha-mode", alpha_mode);
     let blend_mode = match policy.blend_mode {
         crate::SurfaceBlendMode::Combine => None,
+        crate::SurfaceBlendMode::Add => Some("add"),
         crate::SurfaceBlendMode::Premultiplied => Some("premultiplied"),
         crate::SurfaceBlendMode::PremultipliedPorterDuff => Some("premultiplied-porter-duff"),
     };

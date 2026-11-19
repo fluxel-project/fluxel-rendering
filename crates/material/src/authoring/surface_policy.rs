@@ -22,6 +22,9 @@ pub enum SurfaceBlendMode {
     /// Straight RGB and additive alpha, matching Babylon's `ALPHA_COMBINE`.
     #[default]
     Combine,
+    /// Adds source RGB weighted by source alpha and preserves destination alpha.
+    /// Matches Babylon's `ALPHA_ADD` particle blend mode.
+    Add,
     /// Premultiplied RGB and additive alpha.
     Premultiplied,
     /// Premultiplied RGB and source-over alpha.
@@ -31,7 +34,7 @@ pub enum SurfaceBlendMode {
 impl SurfaceBlendMode {
     /// Returns whether the fragment must multiply RGB by final alpha.
     pub const fn uses_premultiplied_rgb(self) -> bool {
-        !matches!(self, Self::Combine)
+        matches!(self, Self::Premultiplied | Self::PremultipliedPorterDuff)
     }
 }
 
