@@ -2,26 +2,119 @@
 
 use super::*;
 
-pub(super) fn validate_generated_texture(texture: &ForwardTextureInput) -> Result<()> {
-    if texture.extent.contains(&0)
-        || texture.mip_levels == 0
-        || texture.bytes_per_row == 0
-        || texture.bytes_per_row % 256 != 0
-        || texture.bytes_per_row
-            < texture.extent[0]
-                .checked_mul(4)
-                .ok_or(Error::InvalidRange)?
+pub(super) fn plan_texture_uploads(
+    bytes: &mut Vec<u8>,
+    uploads: &mut Vec<ForwardTextureUpload>,
+    index: usize,
+    texture: ForwardResidentTextureInput,
+) -> Result<ForwardTextureAllocation> {
+    match texture {
+        ForwardResidentTextureInput::Generated(texture) => {
+            let copy = ForwardTextureCopyInput {
+                bytes: texture.bytes,
+                extent: texture.extent,
+                bytes_per_row: texture.bytes_per_row,
+            };
+            validate_rgba8_copy(&copy)?;
+            let max_mips = 1 + copy.extent[0].max(copy.extent[1]).ilog2();
+            if texture.mip_levels == 0 || texture.mip_levels > max_mips {
+                return Err(Error::InvalidRange);
+            }
+            let allocation = rgba8_allocation(
+                copy.extent,
+                texture.encoding,
+                texture.mip_levels,
+                1,
+                TextureViewDimension::D2,
+            );
+            append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
+            Ok(allocation)
+        }
+        ForwardResidentTextureInput::Array(texture) => {
+            let extent = texture.layers.first().ok_or(Error::InvalidRange)?.extent;
+            let layer_count =
+                u32::try_from(texture.layers.len()).map_err(|_| Error::InvalidRange)?;
+            for layer in &texture.layers {
+                if layer.extent != extent {
+                    return Err(Error::InvalidRange);
+                }
+                validate_rgba8_copy(layer)?;
+            }
+            for (layer_index, layer) in texture.layers.into_iter().enumerate() {
+                append_texture_upload(bytes, uploads, index, 0, layer_index as u32, layer)?;
+            }
+            Ok(rgba8_allocation(
+                extent,
+                texture.encoding,
+                1,
+                layer_count,
+                TextureViewDimension::D2Array,
+            ))
+        }
+        ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
+            validate_authored_rgba16float_texture(&texture)?;
+            let base_extent = texture.mips[0].extent;
+            let mip_levels = u32::try_from(texture.mips.len()).map_err(|_| Error::InvalidRange)?;
+            for (mip_level, mip) in texture.mips.into_iter().enumerate() {
+                append_texture_upload(bytes, uploads, index, mip_level as u32, 0, mip)?;
+            }
+            Ok(ForwardTextureAllocation {
+                desc: TextureDesc {
+                    label: Some("fluxel forward authored radiance texture".into()),
+                    dimension: TextureDimension::D2,
+                    extent: [base_extent[0], base_extent[1], 1],
+                    array_layers: 1,
+                    format: TextureFormat::Rgba16Float,
+                    mip_levels,
+                    samples: 1,
+                    usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
+                    view_formats: Vec::new(),
+                },
+                view_dimension: TextureViewDimension::D2,
+            })
+        }
+    }
+}
+
+fn rgba8_allocation(
+    extent: [u32; 2],
+    encoding: crate::preparation::TextureEncoding,
+    mip_levels: u32,
+    array_layers: u32,
+    view_dimension: TextureViewDimension,
+) -> ForwardTextureAllocation {
+    let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
+    if mip_levels > 1 {
+        usage |= TextureUsage::COPY_SRC;
+    }
+    ForwardTextureAllocation {
+        desc: TextureDesc {
+            label: Some("fluxel forward material texture".into()),
+            dimension: TextureDimension::D2,
+            extent: [extent[0], extent[1], 1],
+            array_layers,
+            format: encoding.rgba8_format(),
+            mip_levels,
+            samples: 1,
+            usage,
+            view_formats: Vec::new(),
+        },
+        view_dimension,
+    }
+}
+
+fn validate_rgba8_copy(copy: &ForwardTextureCopyInput) -> Result<()> {
+    if copy.extent.contains(&0)
+        || copy.bytes_per_row == 0
+        || copy.bytes_per_row % 256 != 0
+        || copy.bytes_per_row < copy.extent[0].checked_mul(4).ok_or(Error::InvalidRange)?
     {
         return Err(Error::InvalidRange);
     }
-    let max_mip_levels = 1 + texture.extent[0].max(texture.extent[1]).ilog2();
-    if texture.mip_levels > max_mip_levels {
-        return Err(Error::InvalidRange);
-    }
-    validate_texture_copy_bytes(texture.bytes_per_row, texture.extent, &texture.bytes)
+    validate_texture_copy_bytes(copy.bytes_per_row, copy.extent, &copy.bytes)
 }
 
-pub(super) fn validate_authored_rgba16float_texture(
+fn validate_authored_rgba16float_texture(
     texture: &ForwardAuthoredRgba16FloatTextureInput,
 ) -> Result<()> {
     let Some(first) = texture.mips.first() else {
@@ -59,25 +152,28 @@ fn validate_texture_copy_bytes(bytes_per_row: u32, extent: [u32; 2], bytes: &[u8
     Ok(())
 }
 
-pub(super) fn append_texture_upload(
+fn append_texture_upload(
     bytes: &mut Vec<u8>,
     uploads: &mut Vec<ForwardTextureUpload>,
     texture: usize,
     mip_level: u32,
-    source: Vec<u8>,
-    bytes_per_row: u32,
-    extent: [u32; 2],
+    array_layer: u32,
+    source: ForwardTextureCopyInput,
 ) -> Result<()> {
     pad_to(bytes, 512)?;
     let source_offset = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
-    bytes.extend_from_slice(&source);
+    bytes
+        .try_reserve(source.bytes.len())
+        .map_err(|_| Error::OutOfMemory)?;
+    bytes.extend_from_slice(&source.bytes);
     uploads.push(ForwardTextureUpload {
         texture,
         mip_level,
+        array_layer,
         source_offset,
-        bytes_per_row,
-        rows_per_image: extent[1],
-        extent: [extent[0], extent[1], 1],
+        bytes_per_row: source.bytes_per_row,
+        rows_per_image: source.extent[1],
+        extent: [source.extent[0], source.extent[1], 1],
     });
     Ok(())
 }

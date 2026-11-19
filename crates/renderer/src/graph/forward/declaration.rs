@@ -281,7 +281,7 @@ where
                 )?;
                 output_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip(upload.mip_level),
+                    one_color_mip_layer(upload.mip_level, upload.array_layer),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -388,7 +388,11 @@ where
     for upload in &frame.resident_upload.textures {
         let index = upload.texture;
         let owner = &frame.resident.textures[index];
-        if upload.mip_level == 0 && owner.desc.usage.contains(TextureUsage::COPY_SRC) {
+        if upload.mip_level == 0
+            && owner.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && owner.desc.array_layers == 1
+            && owner.desc.usage.contains(TextureUsage::COPY_SRC)
+        {
             let (texture, passes) = super::super::mip_generation::declare_chain(
                 &mut graph,
                 textures[index],

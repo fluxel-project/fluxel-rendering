@@ -207,7 +207,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         .texture_slots
                         .get(*texture_index)
                         .ok_or(Error::InvalidRange)?,
-                    all_color_mips(texture.desc.mip_levels),
+                    all_color_mips_layers(texture.desc.mip_levels, texture.desc.array_layers),
                     AccessKind::Read,
                     sampled_read(),
                 )?;

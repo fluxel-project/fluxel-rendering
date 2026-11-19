@@ -37,16 +37,25 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
     let mut textures = resident
         .textures
         .iter()
-        .map(|texture| vec![false; texture.desc.mip_levels as usize])
+        .map(|texture| {
+            vec![vec![false; texture.desc.array_layers as usize]; texture.desc.mip_levels as usize]
+        })
         .collect::<Vec<_>>();
     for copy in &uploads.textures {
         let texture = resident
             .textures
             .get(copy.texture)
             .ok_or(Error::InvalidRange)?;
+        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+            || texture.desc.extent[2] != 1
+            || texture.desc.array_layers == 0
+        {
+            return Err(Error::InvalidRange);
+        }
         let uploaded = textures
             .get_mut(copy.texture)
             .and_then(|mips| mips.get_mut(copy.mip_level as usize))
+            .and_then(|layers| layers.get_mut(copy.array_layer as usize))
             .ok_or(Error::InvalidRange)?;
         let expected = [
             (texture.desc.extent[0] >> copy.mip_level).max(1),
@@ -72,10 +81,20 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
         .iter()
         .zip(&resident.textures)
         .all(|(uploaded, texture)| {
+            if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+                || texture.desc.extent[2] != 1
+                || texture.desc.array_layers == 0
+            {
+                return false;
+            }
+            // Mip generation has a D2-only producer contract. Layered
+            // textures therefore require explicit copies for every mip/layer.
             (texture.desc.usage.contains(TextureUsage::COPY_SRC)
-                && uploaded.first().copied() == Some(true))
-                || (!texture.desc.usage.contains(TextureUsage::COPY_SRC)
-                    && uploaded.iter().all(|uploaded| *uploaded))
+                && texture.desc.array_layers == 1
+                && uploaded.first().is_some_and(|layers| layers.iter().all(|layer| *layer)))
+                || ((!texture.desc.usage.contains(TextureUsage::COPY_SRC)
+                    || texture.desc.array_layers != 1)
+                    && uploaded.iter().flatten().all(|uploaded| *uploaded))
                 || (texture.incoming
                     == TextureUses {
                         stages: StageMask::FRAGMENT,

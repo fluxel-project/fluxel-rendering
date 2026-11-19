@@ -58,7 +58,9 @@ pub(crate) fn material_sampler_for_input_with_capture(
     let mip_levels = input
         .resolved_textures()
         .iter()
-        .filter_map(|texture| material_texture_properties(texture).map(|(_, _, levels, _)| levels))
+        .filter_map(|texture| {
+            material_texture_properties(texture).map(|properties| properties.mip_levels)
+        })
         .chain(
             input
                 .prepared()
@@ -147,31 +149,63 @@ pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Resu
     }
     Ok(())
 }
-// Format and size come from the immutable CPU payload admitted during preparation.
+// Image facts come from the immutable CPU payload admitted during preparation.
+struct MaterialTextureProperties {
+    extent: Option<[u32; 2]>,
+    format: TextureFormat,
+    layers: u32,
+    mip_levels: u32,
+    generate_mips: bool,
+    view_dimension: TextureViewDimension,
+}
+
+impl MaterialTextureProperties {
+    fn d2(format: TextureFormat) -> Self {
+        Self {
+            extent: None,
+            format,
+            layers: 1,
+            mip_levels: 1,
+            generate_mips: false,
+            view_dimension: TextureViewDimension::D2,
+        }
+    }
+}
+
 fn material_texture_properties(
     texture: &ResolvedForwardTexture,
-) -> Option<([u32; 2], TextureFormat, u32, bool)> {
-    match texture {
+) -> Option<MaterialTextureProperties> {
+    Some(match texture {
         ResolvedForwardTexture::Asset(texture) => {
             let data = texture.value();
-            Some((
-                data.extent,
-                data.encoding.rgba8_format(),
-                data.mip_levels,
-                data.mip_levels > 1,
-            ))
+            MaterialTextureProperties {
+                extent: Some(data.extent),
+                mip_levels: data.mip_levels,
+                generate_mips: data.mip_levels > 1,
+                ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
+            }
+        }
+        ResolvedForwardTexture::ArrayAsset(texture) => {
+            let data = texture.value();
+            MaterialTextureProperties {
+                extent: Some(data.extent),
+                format: data.encoding.rgba8_format(),
+                layers: data.layers,
+                mip_levels: data.mip_levels,
+                generate_mips: false,
+                view_dimension: TextureViewDimension::D2Array,
+            }
         }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
-            Some((
-                mips[0].extent,
-                TextureFormat::Rgba16Float,
-                mips.len() as u32,
-                false,
-            ))
+            MaterialTextureProperties {
+                extent: Some(mips[0].extent),
+                mip_levels: mips.len() as u32,
+                ..MaterialTextureProperties::d2(TextureFormat::Rgba16Float)
+            }
         }
-        ResolvedForwardTexture::CaptureSlot(_) => None,
-    }
+        ResolvedForwardTexture::CaptureSlot(_) => return None,
+    })
 }
 
 /// Admits the descriptor required to bind an immutable material image.
@@ -179,9 +213,10 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
     device: &Device<B>,
     texture: &ResolvedForwardTexture,
 ) -> std::result::Result<(), Error> {
-    let (extent, format, mip_levels, generate_mips) =
-        material_texture_properties(texture).ok_or(Error::InvalidState)?;
-    if extent.contains(&0) || mip_levels == 0 {
+    let properties = material_texture_properties(texture).ok_or(Error::InvalidState)?;
+    let extent = properties.extent.ok_or(Error::InvalidState)?;
+    let mip_levels = properties.mip_levels;
+    if extent.contains(&0) || mip_levels == 0 || properties.layers == 0 {
         return Err(Error::InvalidRange);
     }
     let max_mip_levels = 1 + extent[0].max(extent[1]).ilog2();
@@ -189,15 +224,15 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
         return Err(Error::InvalidRange);
     }
     let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
-    if generate_mips {
+    if properties.generate_mips {
         usage |= TextureUsage::COPY_SRC;
     }
     let desc = TextureDesc {
         label: Some("Fluxel Forward sampled material texture".into()),
         dimension: TextureDimension::D2,
         extent: [extent[0], extent[1], 1],
-        array_layers: 1,
-        format,
+        array_layers: properties.layers,
+        format: properties.format,
         mip_levels,
         samples: 1,
         usage,
@@ -220,23 +255,21 @@ pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
     expected_encoding: crate::TextureEncoding,
     require_filterable: bool,
 ) -> std::result::Result<(), Error> {
-    validate_sampled_texture_owner_with_mips(
+    validate_sampled_texture_owner_with_properties(
         resident,
         texture,
         selected_device,
-        expected_encoding.rgba8_format(),
-        1,
+        MaterialTextureProperties::d2(expected_encoding.rgba8_format()),
         require_filterable,
     )
 }
 
 /// Revalidates a sampled owner against the exact immutable descriptor facts.
-fn validate_sampled_texture_owner_with_mips<B: ResourceBackend>(
+fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
     resident: &crate::residency::ForwardResidentBuffers<B>,
     texture: usize,
     selected_device: DeviceId,
-    expected_format: TextureFormat,
-    expected_mip_levels: u32,
+    expected: MaterialTextureProperties,
     require_filterable: bool,
 ) -> std::result::Result<(), Error> {
     let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
@@ -245,12 +278,16 @@ fn validate_sampled_texture_owner_with_mips<B: ResourceBackend>(
         || owner.texture.device() != selected_device
         || owner.view.device() != selected_device
         || owner.desc.dimension != TextureDimension::D2
-        || owner.desc.format != expected_format
+        || owner.desc.format != expected.format
         || owner.desc.extent[0] == 0
         || owner.desc.extent[1] == 0
         || owner.desc.extent[2] != 1
-        || owner.desc.array_layers != 1
-        || owner.desc.mip_levels != expected_mip_levels
+        || expected
+            .extent
+            .is_some_and(|[width, height]| owner.desc.extent != [width, height, 1])
+        || owner.desc.array_layers != expected.layers
+        || owner.desc.mip_levels != expected.mip_levels
+        || owner.view_dimension != expected.view_dimension
         || owner.desc.samples != 1
         || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
         || (require_filterable && !owner.filterable)
@@ -270,27 +307,22 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
     input: &crate::ForwardDrawInput,
     texture_index: usize,
     requires_filtering: bool,
+    expected_dimension: TextureViewDimension,
 ) -> std::result::Result<(), Error> {
     let source = input
         .resolved_textures()
         .get(texture_index)
         .ok_or(Error::InvalidRange)?;
-    let (expected_format, expected_mip_levels) =
-        if let Some((extent, format, mip_levels, _)) = material_texture_properties(source) {
-            let owner = resident.textures.get(texture).ok_or(Error::InvalidRange)?;
-            if owner.desc.extent != [extent[0], extent[1], 1] {
-                return Err(Error::InvalidState);
-            }
-            (format, mip_levels)
-        } else {
-            (TextureFormat::Rgba8Unorm, 1)
-        };
-    validate_sampled_texture_owner_with_mips(
+    let expected = material_texture_properties(source)
+        .unwrap_or_else(|| MaterialTextureProperties::d2(TextureFormat::Rgba8Unorm));
+    if expected.view_dimension != expected_dimension {
+        return Err(Error::InvalidState);
+    }
+    validate_sampled_texture_owner_with_properties(
         resident,
         texture,
         selected_device,
-        expected_format,
-        expected_mip_levels,
+        expected,
         requires_filtering,
     )
 }

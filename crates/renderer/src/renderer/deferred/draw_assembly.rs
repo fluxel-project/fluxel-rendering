@@ -90,6 +90,7 @@ pub(super) fn draws<B: ResourceBackend>(
                 &inputs[index],
                 texture_index,
                 crate::renderer::forward::material_requires_ordinary_sampler(&prepared[index]),
+                binding.dimension,
             )?;
             entries.push(BindGroupEntry {
                 binding: binding.binding,

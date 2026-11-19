@@ -25,6 +25,8 @@ impl SceneRefractionBinding {
 pub enum ForwardTextureSource {
     /// One exact immutable CPU color-texture generation.
     Asset(SceneAssetRef<ColorTextureAsset>),
+    /// One independently selected immutable layered CPU color-texture generation.
+    ArrayAsset(AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>),
     /// An independently authored HDR radiance chain with an exact immutable generation.
     RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     /// A renderer-owned same-frame capture product logical resource name.
@@ -35,6 +37,10 @@ impl std::fmt::Debug for ForwardTextureSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Asset(asset) => f.debug_tuple("Asset").field(asset).finish(),
+            Self::ArrayAsset(asset) => f
+                .debug_tuple("ArrayAsset")
+                .field(&SceneAssetRef::from_snapshot(asset))
+                .finish(),
             Self::RefractionRadiance(asset) => f
                 .debug_tuple("RefractionRadiance")
                 .field(&SceneAssetRef::from_snapshot(asset))
@@ -50,6 +56,12 @@ impl From<SceneAssetRef<ColorTextureAsset>> for ForwardTextureSource {
     }
 }
 
+impl From<AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>> for ForwardTextureSource {
+    fn from(value: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>) -> Self {
+        Self::ArrayAsset(value)
+    }
+}
+
 /// Resources for a receiver which samples an explicitly named capture product.
 pub type ForwardCaptureResources = ForwardResources;
 
@@ -57,6 +69,7 @@ pub type ForwardCaptureResources = ForwardResources;
 #[derive(Clone)]
 pub(crate) enum ResolvedForwardTexture {
     Asset(AssetSnapshot<ColorTextureAsset, ColorTextureData>),
+    ArrayAsset(AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>),
     RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     CaptureSlot(String),
 }
@@ -377,6 +390,14 @@ fn resolve_capture_textures(
         .zip(expected)
         .map(|(texture, expected)| match &texture.source {
             ForwardTextureSource::CaptureSlot(slot) => {
+                if expected.dimension != fluxel_rhi::api::TextureViewDimension::D2 {
+                    return Err(ForwardPreparationError::TextureResourceDimensionMismatch {
+                        source,
+                        resource: expected.name.clone(),
+                        expected: expected.dimension,
+                        actual: fluxel_rhi::api::TextureViewDimension::D2,
+                    });
+                }
                 if slot.is_empty() {
                     return Err(ForwardPreparationError::MissingCaptureSlot {
                         source,

@@ -81,7 +81,10 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         .texture_slots
                         .get(*texture)
                         .ok_or(Error::InvalidRange)?,
-                    all_color_mips(frame.resident.textures[*texture].desc.mip_levels),
+                    all_color_mips_layers(
+                        frame.resident.textures[*texture].desc.mip_levels,
+                        frame.resident.textures[*texture].desc.array_layers,
+                    ),
                     AccessKind::Read,
                     texture_read_uses(),
                 )?;
@@ -307,7 +310,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             )?;
             pass.texture(
                 slot,
-                one_color_mip(copy.mip_level),
+                one_color_mip_layer(copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -435,7 +438,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                     .texture_slots
                     .get(copy.texture)
                     .ok_or(Error::InvalidRange)?,
-                one_color_mip(copy.mip_level),
+                one_color_mip_layer(copy.mip_level, copy.array_layer),
                 AccessKind::Write,
                 texture_copy_write_uses(),
             )?;
@@ -449,7 +452,7 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                 TextureRegion {
                     texture,
                     mip: copy.mip_level,
-                    origin: [0, 0, 0],
+                    origin: [0, 0, copy.array_layer],
                     extent: copy.extent,
                     aspect: TextureAspects::COLOR,
                 },

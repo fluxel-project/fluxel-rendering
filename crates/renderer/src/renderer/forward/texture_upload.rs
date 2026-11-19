@@ -3,10 +3,10 @@
 use fluxel_rhi::api::Error;
 
 use crate::{
-    preparation::ResolvedForwardTexture,
+    preparation::{ColorTextureArrayData, ResolvedForwardTexture},
     residency::{
-        ForwardAuthoredRgba16FloatTextureInput, ForwardAuthoredTextureMipInput,
-        ForwardResidentTextureInput, ForwardTextureInput,
+        ForwardArrayTextureInput, ForwardAuthoredRgba16FloatTextureInput,
+        ForwardResidentTextureInput, ForwardTextureCopyInput, ForwardTextureInput,
     },
 };
 
@@ -28,13 +28,16 @@ pub(in crate::renderer) fn stage(
                 },
             ))
         }
+        ResolvedForwardTexture::ArrayAsset(texture) => {
+            stage_array(texture.value(), max_buffer_bytes).map(ForwardResidentTextureInput::Array)
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
             let mut mips = Vec::with_capacity(texture.value().mips().len());
             for mip in texture.value().mips() {
                 let (bytes, bytes_per_row) = stage_rows(mip.extent, 8, &mip.rgba16f_le, remaining)?;
                 remaining -= bytes.len() as u64;
-                mips.push(ForwardAuthoredTextureMipInput {
+                mips.push(ForwardTextureCopyInput {
                     bytes,
                     extent: mip.extent,
                     bytes_per_row,
@@ -46,6 +49,54 @@ pub(in crate::renderer) fn stage(
         }
         ResolvedForwardTexture::CaptureSlot(_) => Err(Error::InvalidState),
     }
+}
+
+fn stage_array(
+    data: &ColorTextureArrayData,
+    max_buffer_bytes: u64,
+) -> Result<ForwardArrayTextureInput, Error> {
+    let layers = usize::try_from(data.layers).map_err(|_| Error::InvalidRange)?;
+    let layer_size = data
+        .extent
+        .into_iter()
+        .try_fold(4usize, |size, dimension| {
+            size.checked_mul(dimension as usize)
+                .ok_or(Error::InvalidRange)
+        })?;
+    if layers == 0
+        || layer_size == 0
+        || data.mip_levels != 1
+        || layer_size.checked_mul(layers) != Some(data.rgba8.len())
+    {
+        return Err(Error::InvalidRange);
+    }
+
+    let mut staged = Vec::new();
+    staged
+        .try_reserve_exact(layers)
+        .map_err(|_| Error::OutOfMemory)?;
+    let mut remaining = max_buffer_bytes;
+    let mut sources = data.rgba8.chunks_exact(layer_size).peekable();
+    while let Some(source) = sources.next() {
+        let (bytes, bytes_per_row) = stage_rows(data.extent, 4, source, remaining)?;
+        let size = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
+        let span = if sources.peek().is_some() {
+            size.checked_add((512 - size % 512) % 512)
+                .ok_or(Error::InvalidRange)?
+        } else {
+            size
+        };
+        remaining = remaining.checked_sub(span).ok_or(Error::InvalidRange)?;
+        staged.push(ForwardTextureCopyInput {
+            bytes,
+            extent: data.extent,
+            bytes_per_row,
+        });
+    }
+    Ok(ForwardArrayTextureInput {
+        layers: staged,
+        encoding: data.encoding,
+    })
 }
 
 fn stage_rows(

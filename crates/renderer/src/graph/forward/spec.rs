@@ -2,11 +2,15 @@
 use super::*;
 use crate::graph::ResourceInstanceId;
 
+#[path = "specular_shape.rs"]
+mod specular_shape;
+use specular_shape::{SpecularIblCopyShape, SpecularIblShape, specular_copy_shape, specular_shape};
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct ForwardShape {
     pub(crate) extent: [u32; 2],
     pub(crate) vertex_uploads: Vec<(usize, std::ops::Range<u64>, std::ops::Range<u64>)>,
-    pub(crate) texture_uploads: Vec<(usize, u32, u64, u32, u32, [u32; 3])>,
+    pub(crate) texture_uploads: Vec<(usize, u32, u32, u64, u32, u32, [u32; 3])>,
     pub(crate) uniform_upload: (std::ops::Range<u64>, std::ops::Range<u64>),
     pub(crate) environment: Option<(u64, u32, u32, [u32; 3])>,
     /// All physical specular IBL copies and the separate view-uniform copy.
@@ -22,16 +26,6 @@ pub(crate) struct ForwardShape {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) struct SpecularIblShape {
-    pub(crate) upload_size: u64,
-    pub(crate) radiance: TextureShape,
-    pub(crate) brdf_lut: TextureShape,
-    pub(crate) radiance_copies: Vec<SpecularIblCopyShape>,
-    pub(crate) brdf_lut_copy: SpecularIblCopyShape,
-    pub(crate) view_uniform: (u64, std::ops::Range<u64>),
-}
-
-#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct TextureShape {
     pub(crate) dimension: fluxel_rhi::api::TextureDimension,
     pub(crate) extent: [u32; 3],
@@ -43,15 +37,6 @@ pub(crate) struct TextureShape {
     pub(crate) view_formats: Vec<TextureFormat>,
     pub(crate) incoming: TextureUses,
     pub(crate) layout: ImageLayout,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct SpecularIblCopyShape {
-    pub(crate) mip: u32,
-    pub(crate) source_offset: u64,
-    pub(crate) bytes_per_row: u32,
-    pub(crate) rows_per_image: u32,
-    pub(crate) extent: [u32; 3],
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -161,6 +146,7 @@ pub(crate) struct ForwardGraphVertexUpload {
 pub(crate) struct ForwardGraphTextureUpload {
     pub(crate) texture: usize,
     pub(crate) mip_level: u32,
+    pub(crate) array_layer: u32,
     pub(crate) source_offset: u64,
     pub(crate) bytes_per_row: u32,
     pub(crate) rows_per_image: u32,
@@ -312,6 +298,7 @@ impl ForwardGraphSpec {
                 .map(|upload| ForwardGraphTextureUpload {
                     texture: upload.texture,
                     mip_level: upload.mip_level,
+                    array_layer: upload.array_layer,
                     source_offset: upload.source_offset,
                     bytes_per_row: upload.bytes_per_row,
                     rows_per_image: upload.rows_per_image,
@@ -327,6 +314,7 @@ impl ForwardGraphSpec {
                 .map(|owner| ForwardGraphTextureUpload {
                     texture: 0,
                     mip_level: 0,
+                    array_layer: 0,
                     source_offset: 0,
                     bytes_per_row: owner.bytes_per_row,
                     rows_per_image: owner.desc.extent[1],
@@ -356,7 +344,7 @@ impl ForwardGraphSpec {
 pub(super) struct SurfaceForwardShape {
     extent: [u32; 2],
     vertex_uploads: Vec<(usize, std::ops::Range<u64>, std::ops::Range<u64>)>,
-    texture_uploads: Vec<(usize, u32, u64, u32, u32, [u32; 3])>,
+    texture_uploads: Vec<(usize, u32, u32, u64, u32, u32, [u32; 3])>,
     uniform_upload: (std::ops::Range<u64>, std::ops::Range<u64>),
     environment: Option<(u64, u32, u32, [u32; 3])>,
     specular: Option<SpecularIblShape>,
@@ -391,6 +379,7 @@ pub(super) fn forward_shape<B: ResourceBackend>(frame: &ForwardFrame<B>) -> Forw
                 (
                     upload.texture,
                     upload.mip_level,
+                    upload.array_layer,
                     upload.source_offset,
                     upload.bytes_per_row,
                     upload.rows_per_image,
@@ -475,6 +464,7 @@ pub(super) fn surface_forward_shape<B: ResourceBackend>(
                 (
                     upload.texture,
                     upload.mip_level,
+                    upload.array_layer,
                     upload.source_offset,
                     upload.bytes_per_row,
                     upload.rows_per_image,
@@ -526,44 +516,6 @@ pub(super) fn surface_forward_shape<B: ResourceBackend>(
                     .collect(),
             })
             .collect(),
-    }
-}
-
-fn specular_copy_shape(copy: &crate::residency::SpecularIblCopyFootprint) -> SpecularIblCopyShape {
-    SpecularIblCopyShape {
-        mip: copy.mip,
-        source_offset: copy.source_offset,
-        bytes_per_row: copy.bytes_per_row,
-        rows_per_image: copy.rows_per_image,
-        extent: copy.extent,
-    }
-}
-
-fn specular_shape<B: ResourceBackend>(
-    owner: &crate::residency::SpecularEnvironmentFrameOwner<B>,
-) -> SpecularIblShape {
-    SpecularIblShape {
-        upload_size: owner.upload_desc.size,
-        radiance: texture_shape(
-            &owner.radiance.desc,
-            owner.radiance.incoming,
-            owner.radiance.layout,
-        ),
-        brdf_lut: texture_shape(
-            &owner.brdf_lut.desc,
-            owner.brdf_lut.incoming,
-            owner.brdf_lut.layout,
-        ),
-        radiance_copies: owner
-            .radiance_copies
-            .iter()
-            .map(specular_copy_shape)
-            .collect(),
-        brdf_lut_copy: specular_copy_shape(&owner.brdf_lut_copy),
-        view_uniform: (
-            owner.view_uniform_desc.size,
-            owner.view_uniform_copy.clone(),
-        ),
     }
 }
 

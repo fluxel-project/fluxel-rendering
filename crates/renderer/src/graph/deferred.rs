@@ -215,8 +215,16 @@ fn one_color_mip(mip: u32) -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..1)
 }
 
+fn one_color_mip_layer(mip: u32, layer: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, layer..layer + 1)
+}
+
 fn all_color_mips(mips: u32) -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, 0..mips, 0..1)
+}
+
+fn all_color_mips_layers(mips: u32, layers: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, 0..mips, 0..layers)
 }
 
 fn whole_depth() -> TextureRange {

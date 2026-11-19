@@ -79,6 +79,7 @@ impl<B: ResourceBackend> ForwardFrameBuffers<B> {
                 Ok(ForwardTexture {
                     texture,
                     view,
+                    view_dimension: TextureViewDimension::D2,
                     desc: desc.clone(),
                     instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
                     incoming: empty_texture_uses(),

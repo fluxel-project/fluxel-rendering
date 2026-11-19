@@ -194,6 +194,7 @@ impl<B: ResourceBackend> CaptureTextureOwner<B> {
         crate::residency::ForwardTexture {
             texture: self.texture.clone(),
             view: self.view.clone(),
+            view_dimension: TextureViewDimension::D2,
             desc: self.desc.clone(),
             instance: self.instance,
             incoming: self.incoming,

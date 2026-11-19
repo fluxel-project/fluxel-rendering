@@ -197,6 +197,7 @@ fn allocate_multisample<B: ResourceBackend>(
     Ok(ForwardTexture {
         texture,
         view,
+        view_dimension: TextureViewDimension::D2,
         desc,
         instance: crate::graph::ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
         incoming: TextureUses {

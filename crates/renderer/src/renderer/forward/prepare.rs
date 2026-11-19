@@ -278,7 +278,7 @@ where
             super::assembly::ForwardAllocationStats::from_resident_descriptors(
                 &resident_plan.stream_descs,
                 resident_plan.upload_desc.size,
-                resident_plan.texture_descs.len(),
+                resident_plan.texture_allocations.len(),
             );
         let (fresh, mut resident_upload) =
             ForwardResidentBuffers::allocate_planned(&self.device, resident_plan)
@@ -420,6 +420,7 @@ where
                     input,
                     texture_index,
                     material_requires_ordinary_sampler(input.prepared()),
+                    texture.dimension,
                 )
                 .map_err(|error| self.observe_forward_error("sampled material owner", error))?;
                 material_entries.push(BindGroupEntry {

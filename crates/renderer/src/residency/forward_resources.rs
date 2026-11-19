@@ -18,8 +18,8 @@ pub(crate) struct ForwardTextureInput {
     pub(crate) mip_levels: u32,
 }
 
-/// One copy-aligned source mip for an authored radiance chain.
-pub(crate) struct ForwardAuthoredTextureMipInput {
+/// Copy-aligned bytes for one 2D image in a texture upload.
+pub(crate) struct ForwardTextureCopyInput {
     pub(crate) bytes: Vec<u8>,
     pub(crate) extent: [u32; 2],
     pub(crate) bytes_per_row: u32,
@@ -28,12 +28,25 @@ pub(crate) struct ForwardAuthoredTextureMipInput {
 /// An immutable linear `RGBA16Float` texture whose complete mip chain was
 /// authored by the asset producer.
 pub(crate) struct ForwardAuthoredRgba16FloatTextureInput {
-    pub(crate) mips: Vec<ForwardAuthoredTextureMipInput>,
+    pub(crate) mips: Vec<ForwardTextureCopyInput>,
+}
+
+/// Immutable RGBA8 images for each array layer at the base mip.
+pub(crate) struct ForwardArrayTextureInput {
+    pub(crate) layers: Vec<ForwardTextureCopyInput>,
+    pub(crate) encoding: crate::preparation::TextureEncoding,
+}
+
+/// Concrete texture and view facts consumed during residency allocation.
+pub(crate) struct ForwardTextureAllocation {
+    pub(crate) desc: TextureDesc,
+    pub(crate) view_dimension: TextureViewDimension,
 }
 
 /// One resident material texture source.
 pub(crate) enum ForwardResidentTextureInput {
     Generated(ForwardTextureInput),
+    Array(ForwardArrayTextureInput),
     AuthoredRgba16Float(ForwardAuthoredRgba16FloatTextureInput),
 }
 
@@ -55,6 +68,7 @@ pub(crate) struct ForwardVertexStream<B: ResourceBackend> {
 pub(crate) struct ForwardTexture<B: ResourceBackend> {
     pub(crate) texture: Texture<B>,
     pub(crate) view: TextureView<B>,
+    pub(crate) view_dimension: TextureViewDimension,
     pub(crate) desc: TextureDesc,
     pub(crate) instance: ResourceInstanceId,
     pub(crate) incoming: TextureUses,
@@ -98,6 +112,8 @@ pub(crate) struct ForwardTextureUpload {
     pub(crate) texture: usize,
     /// Exact destination mip level selected by this copy.
     pub(crate) mip_level: u32,
+    /// Exact destination array layer selected by this copy.
+    pub(crate) array_layer: u32,
     pub(crate) source_offset: u64,
     pub(crate) bytes_per_row: u32,
     pub(crate) rows_per_image: u32,

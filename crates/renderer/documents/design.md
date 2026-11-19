@@ -297,7 +297,8 @@ named image bindings per material.
 ### Material binding locations
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
-2D float textures, and up to one ordinary sampler in material group zero.
+2D float textures, 2D float texture arrays, and up to one ordinary sampler in
+material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -330,7 +331,14 @@ zero-sampler textureLoad definitions use the same schema path.
 draw uses material resource names. An instance draw uses logical aliases to
 select texture sources and, when supplied, the sampler descriptor. Multiple
 resources can select the same alias. Preparation rejects missing, duplicate, or
-extra names and resolves exact asset generations in schema order. Submission rejects a
+extra names and resolves exact asset generations in schema order. A layered
+material binding selects an exact `ColorTextureArrayAsset` snapshot. Its payload
+contains complete RGBA8 images in consecutive layer order. The current array
+source supports one mip level. Renderer allocates a D2 image with one array
+layer per payload image and creates a D2Array view spanning every layer, including
+when the array has one layer. The upload graph declares and copies each layer
+individually. Raster sampling declares the full view range because a material
+shader can select its layer dynamically. Submission rejects a
 capture source without its producer context. Capture resources share this model.
 The capture entry takes an explicit producer slot independently of the receiver
 resource names; multiple logical bindings may alias that one GPU product while

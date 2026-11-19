@@ -257,7 +257,7 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
                 )?;
                 outputs_textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip(upload.mip_level),
+                    one_color_mip_layer(upload.mip_level, upload.array_layer),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -370,7 +370,11 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
     for upload in &spec.texture_uploads {
         let index = upload.texture;
         let owner = spec.textures.get(index).ok_or(Error::InvalidRange)?;
-        if upload.mip_level == 0 && owner.desc.usage.contains(TextureUsage::COPY_SRC) {
+        if upload.mip_level == 0
+            && owner.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && owner.desc.array_layers == 1
+            && owner.desc.usage.contains(TextureUsage::COPY_SRC)
+        {
             let (texture, passes) = super::super::mip_generation::declare_chain(
                 &mut graph,
                 *textures.get(index).ok_or(Error::InvalidRange)?,

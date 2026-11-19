@@ -94,7 +94,7 @@ where
         )?;
         pass.texture(
             slot,
-            one_color_mip(copy.mip_level),
+            one_color_mip_layer(copy.mip_level, copy.array_layer),
             AccessKind::Write,
             texture_copy_write_uses(),
         )?;
@@ -221,7 +221,7 @@ where
                 .texture_slots
                 .get(copy.texture)
                 .ok_or(Error::InvalidRange)?,
-            one_color_mip(copy.mip_level),
+            one_color_mip_layer(copy.mip_level, copy.array_layer),
             AccessKind::Write,
             texture_copy_write_uses(),
         )?;
@@ -235,7 +235,7 @@ where
             TextureRegion {
                 texture,
                 mip: copy.mip_level,
-                origin: [0, 0, 0],
+                origin: [0, 0, copy.array_layer],
                 extent: copy.extent,
                 aspect: TextureAspects::COLOR,
             },

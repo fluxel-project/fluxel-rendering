@@ -12,8 +12,19 @@ pub(super) fn all_color_mips(mips: u32) -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, 0..mips, 0..1)
 }
 
+/// The complete sampled view of an owner. Material textures may be arrays, so
+/// shader reads cover every layer actually exposed by that owner.
+pub(super) fn all_color_mips_layers(mips: u32, layers: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, 0..mips, 0..layers)
+}
+
 pub(super) fn one_color_mip(mip: u32) -> TextureRange {
     TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..1)
+}
+
+/// The exact subresource written by one resident material upload.
+pub(super) fn one_color_mip_layer(mip: u32, layer: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, layer..layer + 1)
 }
 pub(super) fn whole_depth() -> TextureRange {
     TextureRange::new(TextureAspects::DEPTH, 0..1, 0..1)

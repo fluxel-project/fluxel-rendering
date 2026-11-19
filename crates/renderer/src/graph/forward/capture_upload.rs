@@ -19,6 +19,8 @@ pub(super) fn declare_mip_generations(
     let mut generations = Vec::new();
     for (index, cold) in handles.cold_textures.iter().copied().enumerate() {
         if !cold
+            || spec.textures[index].desc.dimension != fluxel_rhi::api::TextureDimension::D2
+            || spec.textures[index].desc.array_layers != 1
             || !spec.textures[index]
                 .desc
                 .usage
@@ -118,7 +120,7 @@ pub(super) fn declare_upload(
                 )?;
                 textures[upload.texture] = pass.write_texture_with_use(
                     texture,
-                    one_color_mip(upload.mip_level),
+                    one_color_mip_layer(upload.mip_level, upload.array_layer),
                     texture_copy_write_uses().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,

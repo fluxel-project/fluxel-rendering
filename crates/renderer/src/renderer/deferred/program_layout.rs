@@ -24,12 +24,20 @@ pub(super) fn material_uniform(
 }
 
 pub(super) fn sampled_texture(binding: u32, sample: TextureSampleType) -> BindGroupLayoutEntry {
+    sampled_texture_with_dimension(binding, sample, TextureViewDimension::D2)
+}
+
+pub(super) fn sampled_texture_with_dimension(
+    binding: u32,
+    sample: TextureSampleType,
+    dimension: TextureViewDimension,
+) -> BindGroupLayoutEntry {
     BindGroupLayoutEntry {
         binding,
         visibility: vec![ShaderStage::Fragment],
         ty: BindingType::SampledTexture {
             sample,
-            dimension: TextureViewDimension::D2,
+            dimension,
             multisampled: false,
         },
         count: BindingCount::One,

@@ -168,7 +168,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                     )?;
                     materials[copy.texture] = pass.write_texture_with_use(
                         texture,
-                        one_color_mip(copy.mip_level),
+                        one_color_mip_layer(copy.mip_level, copy.array_layer),
                         texture_copy_write().uses,
                         ImageLayout::CopyDst,
                         TextureUsage::COPY_DST,
@@ -322,7 +322,11 @@ impl<B: ResourceBackend> DeferredPlan<B> {
         let mut mip_generation = Vec::new();
         for (index, (texture, fresh)) in materials.iter_mut().zip(&fresh_mip_chains).enumerate() {
             let desc = &frame.resident.textures[index].desc;
-            if *fresh && desc.usage.contains(TextureUsage::COPY_SRC) {
+            if *fresh
+                && desc.dimension == fluxel_rhi::api::TextureDimension::D2
+                && desc.array_layers == 1
+                && desc.usage.contains(TextureUsage::COPY_SRC)
+            {
                 let (generated, passes) = super::super::mip_generation::declare_chain(
                     &mut graph,
                     *texture,

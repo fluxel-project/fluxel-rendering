@@ -28,12 +28,13 @@ mod upload;
 #[cfg(test)]
 pub(crate) use forward::plan_forward_resident;
 pub(crate) use forward::{
-    ForwardAuthoredRgba16FloatTextureInput, ForwardAuthoredTextureMipInput, ForwardBindGroup,
+    ForwardArrayTextureInput, ForwardAuthoredRgba16FloatTextureInput, ForwardBindGroup,
     ForwardDepthAttachment, ForwardDraw, ForwardFrame, ForwardFrameBuffers, ForwardResidentBuffers,
     ForwardResidentTextureInput, ForwardResidentUpload, ForwardSampler, ForwardStreamInput,
-    ForwardTexture, ForwardTextureInput, ForwardTextureUpload, ForwardUniformUpload,
-    ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers, plan_forward_frame,
-    plan_forward_hdr_frame, plan_forward_resident_with_texture_inputs, plan_surface_forward_frame,
+    ForwardTexture, ForwardTextureCopyInput, ForwardTextureInput, ForwardTextureUpload,
+    ForwardUniformUpload, ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
+    plan_forward_frame, plan_forward_hdr_frame, plan_forward_resident_with_texture_inputs,
+    plan_surface_forward_frame,
 };
 
 pub(crate) use upload::{

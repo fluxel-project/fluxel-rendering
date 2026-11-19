@@ -116,7 +116,7 @@ where
             visibility: vec![ShaderStage::Fragment],
             ty: BindingType::SampledTexture {
                 sample: TextureSampleType::Float,
-                dimension: TextureViewDimension::D2,
+                dimension: texture.dimension,
                 multisampled: false,
             },
             count: BindingCount::One,
@@ -237,19 +237,22 @@ where
             multiview: None,
             cache: None,
         };
-        let preliminary_pipeline =
-            if let Some(primitive) = surface.preliminary_primitive(primitive) {
-                Some(
-                    self.device
-                        .raster_pipeline(descriptor("Forward preliminary culling pipeline", primitive))
-                        .await
-                        .map_err(|error| {
-                            self.observe_forward_error("preliminary raster pipeline", error)
-                        })?,
-                )
-            } else {
-                None
-            };
+        let preliminary_pipeline = if let Some(primitive) = surface.preliminary_primitive(primitive)
+        {
+            Some(
+                self.device
+                    .raster_pipeline(descriptor(
+                        "Forward preliminary culling pipeline",
+                        primitive,
+                    ))
+                    .await
+                    .map_err(|error| {
+                        self.observe_forward_error("preliminary raster pipeline", error)
+                    })?,
+            )
+        } else {
+            None
+        };
         let pipeline = self
             .device
             .raster_pipeline(descriptor("Forward raster pipeline", primitive))

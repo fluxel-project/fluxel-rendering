@@ -33,9 +33,7 @@ use forward_support::{
 #[path = "forward_texture_plan.rs"]
 mod forward_texture_plan;
 pub(crate) use forward_support::{ForwardFramePlan, SurfaceForwardFramePlan};
-use forward_texture_plan::{
-    append_texture_upload, validate_authored_rgba16float_texture, validate_generated_texture,
-};
+use forward_texture_plan::plan_texture_uploads;
 #[path = "forward_resources.rs"]
 mod forward_resources;
 pub(crate) use forward_resources::*;
@@ -187,7 +185,7 @@ pub(crate) struct ForwardResidentPlan {
     pub(crate) vertices: Vec<ForwardVertexUpload>,
     pub(crate) textures: Vec<ForwardTextureUpload>,
     pub(crate) stream_descs: Vec<BufferDesc>,
-    pub(crate) texture_descs: Vec<TextureDesc>,
+    pub(crate) texture_allocations: Vec<ForwardTextureAllocation>,
     pub(crate) upload_desc: BufferDesc,
 }
 
@@ -220,15 +218,6 @@ pub(crate) fn plan_forward_resident_with_texture_inputs(
     {
         return Err(Error::InvalidRange);
     }
-    for texture in &textures {
-        match texture {
-            ForwardResidentTextureInput::Generated(texture) => validate_generated_texture(texture)?,
-            ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
-                validate_authored_rgba16float_texture(texture)?;
-            }
-        }
-    }
-
     let mut bytes = Vec::new();
     let mut vertices = Vec::with_capacity(streams.len());
     let mut stream_descs = Vec::with_capacity(streams.len());
@@ -251,63 +240,14 @@ pub(crate) fn plan_forward_resident_with_texture_inputs(
         stream_descs.push(desc);
     }
     let mut texture_uploads = Vec::with_capacity(textures.len());
-    let mut texture_descs = Vec::with_capacity(textures.len());
+    let mut texture_allocations = Vec::with_capacity(textures.len());
     for (index, texture) in textures.into_iter().enumerate() {
-        match texture {
-            ForwardResidentTextureInput::Generated(texture) => {
-                append_texture_upload(
-                    &mut bytes,
-                    &mut texture_uploads,
-                    index,
-                    0,
-                    texture.bytes,
-                    texture.bytes_per_row,
-                    texture.extent,
-                )?;
-                let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
-                if texture.mip_levels > 1 {
-                    usage |= TextureUsage::COPY_SRC;
-                }
-                texture_descs.push(TextureDesc {
-                    label: Some("fluxel forward material texture".into()),
-                    dimension: TextureDimension::D2,
-                    extent: [texture.extent[0], texture.extent[1], 1],
-                    array_layers: 1,
-                    format: texture.encoding.rgba8_format(),
-                    mip_levels: texture.mip_levels,
-                    samples: 1,
-                    usage,
-                    view_formats: Vec::new(),
-                });
-            }
-            ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
-                let base_extent = texture.mips[0].extent;
-                let mip_levels =
-                    u32::try_from(texture.mips.len()).map_err(|_| Error::InvalidRange)?;
-                for (mip_level, mip) in texture.mips.into_iter().enumerate() {
-                    append_texture_upload(
-                        &mut bytes,
-                        &mut texture_uploads,
-                        index,
-                        u32::try_from(mip_level).map_err(|_| Error::InvalidRange)?,
-                        mip.bytes,
-                        mip.bytes_per_row,
-                        mip.extent,
-                    )?;
-                }
-                texture_descs.push(TextureDesc {
-                    label: Some("fluxel forward authored radiance texture".into()),
-                    dimension: TextureDimension::D2,
-                    extent: [base_extent[0], base_extent[1], 1],
-                    array_layers: 1,
-                    format: TextureFormat::Rgba16Float,
-                    mip_levels,
-                    samples: 1,
-                    usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
-                    view_formats: Vec::new(),
-                });
-            }
-        }
+        texture_allocations.push(plan_texture_uploads(
+            &mut bytes,
+            &mut texture_uploads,
+            index,
+            texture,
+        )?);
     }
     let upload_desc = BufferDesc {
         label: Some("fluxel forward resident upload".into()),
@@ -324,7 +264,7 @@ pub(crate) fn plan_forward_resident_with_texture_inputs(
         vertices,
         textures: texture_uploads,
         stream_descs,
-        texture_descs,
+        texture_allocations,
         upload_desc,
     })
 }
@@ -347,8 +287,9 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
                 incoming: empty_buffer_uses(),
             });
         }
-        let mut resident_textures = Vec::with_capacity(plan.texture_descs.len());
-        for texture_desc in plan.texture_descs {
+        let mut resident_textures = Vec::with_capacity(plan.texture_allocations.len());
+        for allocation in plan.texture_allocations {
+            let texture_desc = allocation.desc;
             let filterable = match device.texture_support(&texture_desc) {
                 Support::Supported(support) if texture_desc.mip_levels <= support.max_mips => {
                     support.filterable
@@ -363,15 +304,16 @@ impl<B: ResourceBackend> ForwardResidentBuffers<B> {
                 &texture_handle,
                 &TextureViewDesc {
                     format: texture_desc.format,
-                    dimension: TextureViewDimension::D2,
+                    dimension: allocation.view_dimension,
                     aspects: fluxel_rhi::api::TextureAspects::COLOR,
                     mips: 0..texture_desc.mip_levels,
-                    layers: 0..1,
+                    layers: 0..texture_desc.array_layers,
                 },
             )?;
             resident_textures.push(ForwardTexture {
                 texture: texture_handle,
                 view,
+                view_dimension: allocation.view_dimension,
                 desc: texture_desc,
                 instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
                 incoming: empty_texture_uses(),

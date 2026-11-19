@@ -113,7 +113,7 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
                     .texture_slots
                     .get(*texture)
                     .ok_or(Error::InvalidRange)?,
-                all_color_mips(owner.desc.mip_levels),
+                all_color_mips_layers(owner.desc.mip_levels, owner.desc.array_layers),
                 AccessKind::Read,
                 texture_read_uses(),
             )?;

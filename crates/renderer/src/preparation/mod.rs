@@ -25,7 +25,8 @@ pub(crate) use forward::ResolvedForwardTexture;
 #[cfg(test)]
 pub(crate) use forward::prepare_feature_draws;
 pub use forward::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardCaptureResources, ForwardDrawInput,
+    ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
+    ForwardAssets, ForwardCaptureResources, ForwardDrawInput,
     ForwardDrawRequest, ForwardPreparationError, ForwardResources, ForwardSamplerBinding,
     ForwardTextureBinding, ForwardTextureSource, GeometryAsset, GeometryData,
     PreparedCaptureReceiver, TextureEncoding, prepare_forward, prepare_forward_capture_receiver,

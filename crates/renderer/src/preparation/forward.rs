@@ -76,6 +76,30 @@ pub struct ColorTextureData {
     pub rgba8: Vec<u8>,
 }
 
+/// Marker for immutable layered RGBA8 texture assets consumed by Forward.
+pub struct ColorTextureArrayAsset;
+
+impl AssetKind for ColorTextureArrayAsset {}
+
+/// CPU payload for one layered RGBA8 color texture.
+///
+/// `rgba8` is layer-major: each layer is a complete row-major RGBA8 image.
+/// The first array-texture slice admits only one mip level; later mip support
+/// must extend the Graph upload and generation footprint for every layer.
+#[derive(Clone, Debug)]
+pub struct ColorTextureArrayData {
+    /// Nonzero texture width and height shared by every layer.
+    pub extent: [u32; 2],
+    /// Nonzero number of complete RGBA8 image layers.
+    pub layers: u32,
+    /// Transfer encoding of the supplied RGBA8 payload.
+    pub encoding: TextureEncoding,
+    /// Must be one until layered mip uploads and generation are implemented.
+    pub mip_levels: u32,
+    /// Exactly four bytes per texel, ordered by complete layer then row.
+    pub rgba8: Vec<u8>,
+}
+
 /// Transfer encoding carried by an RGBA8 color-texture asset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextureEncoding {
@@ -174,6 +198,18 @@ impl ForwardTextureBinding {
         Self {
             resource: resource.into(),
             source: ForwardTextureSource::Asset(asset),
+        }
+    }
+
+    /// Binds an immutable layered color-texture asset to `resource`.
+    #[must_use]
+    pub fn array_asset(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::ArrayAsset(asset),
         }
     }
 

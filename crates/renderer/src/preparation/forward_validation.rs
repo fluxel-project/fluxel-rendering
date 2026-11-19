@@ -7,8 +7,8 @@ use fluxel_shader::ShaderCompositionRequest;
 use crate::{RenderTransform, SceneAssetRef};
 
 use super::{
-    ColorTextureData, ForwardDrawSource, ForwardPreparationError, GeometryData, GeometryLayout,
-    PreparedMaterial,
+    ColorTextureArrayData, ColorTextureData, ForwardDrawSource, ForwardPreparationError,
+    GeometryData, GeometryLayout, PreparedMaterial,
 };
 use crate::preparation::forward_templates;
 
@@ -34,22 +34,51 @@ pub(super) fn validate_texture(
     texture: &ColorTextureData,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
-    let [width, height] = texture.extent;
-    if width == 0 || height == 0 || texture.mip_levels == 0 {
+    validate_rgba8_texture(texture.extent, 1, texture.mip_levels, &texture.rgba8, false, source)
+}
+
+pub(super) fn validate_texture_array(
+    texture: &ColorTextureArrayData,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    validate_rgba8_texture(
+        texture.extent,
+        texture.layers,
+        texture.mip_levels,
+        &texture.rgba8,
+        true,
+        source,
+    )
+}
+
+fn validate_rgba8_texture(
+    extent: [u32; 2],
+    layers: u32,
+    mip_levels: u32,
+    rgba8: &[u8],
+    single_mip_only: bool,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    let [width, height] = extent;
+    if width == 0 || height == 0 || layers == 0 || mip_levels == 0 {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    if single_mip_only && mip_levels != 1 {
         return Err(ForwardPreparationError::InvalidTexture { source });
     }
     let max_mip_levels = 1 + width.max(height).ilog2();
-    if texture.mip_levels > max_mip_levels {
+    if mip_levels > max_mip_levels {
         return Err(ForwardPreparationError::InvalidTexture { source });
     }
     let Some(bytes) = u64::from(width)
         .checked_mul(u64::from(height))
+        .and_then(|texels| texels.checked_mul(u64::from(layers)))
         .and_then(|texels| texels.checked_mul(4))
         .and_then(|bytes| usize::try_from(bytes).ok())
     else {
         return Err(ForwardPreparationError::InvalidTexture { source });
     };
-    if texture.rgba8.len() != bytes {
+    if rgba8.len() != bytes {
         return Err(ForwardPreparationError::InvalidTexture { source });
     }
     Ok(())

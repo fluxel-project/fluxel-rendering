@@ -33,7 +33,8 @@ pub use pipeline::{
     PreparedFrame, SortedForwardPass, VisibilityProvider,
 };
 pub use preparation::{
-    ColorTextureAsset, ColorTextureData, EnvironmentIrradianceAsset, EnvironmentIrradianceData,
+    ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
+    EnvironmentIrradianceAsset, EnvironmentIrradianceData,
     EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, ForwardAssets,
     ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
     ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardSamplerBinding,

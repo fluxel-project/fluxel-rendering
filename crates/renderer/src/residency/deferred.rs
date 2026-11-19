@@ -408,6 +408,7 @@ fn allocate_texture<B: ResourceBackend>(
     Ok(ForwardTexture {
         texture,
         view,
+        view_dimension: TextureViewDimension::D2,
         desc,
         instance: ResourceInstanceId::fresh().map_err(|_| Error::InvalidState)?,
         incoming: fluxel_rhi::api::TextureUses {

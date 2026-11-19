@@ -171,13 +171,13 @@ where
                 return Err(Error::Unsupported(reason).into());
             }
         }
-        for desc in &plan.texture_descs {
-            if let Support::Unsupported(reason) = self.device.texture_support(desc) {
+        for allocation in &plan.texture_allocations {
+            if let Support::Unsupported(reason) = self.device.texture_support(&allocation.desc) {
                 return Err(Error::Unsupported(reason).into());
             }
         }
         let buffer_allocations = plan.stream_descs.len() as u64 + 1;
-        let texture_allocations = plan.texture_descs.len() as u64;
+        let texture_allocations = plan.texture_allocations.len() as u64;
         let (resident, mut upload) = ForwardResidentBuffers::allocate_planned(&self.device, plan)
             .map_err(|error| self.observe_rhi_error(error))?;
         let mut resident = Arc::try_unwrap(resident).map_err(|_| Error::InvalidState)?;

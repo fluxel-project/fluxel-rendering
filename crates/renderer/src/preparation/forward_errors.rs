@@ -204,6 +204,17 @@ pub enum ForwardPreparationError {
         /// Asset-declared encoding.
         actual: TextureEncoding,
     },
+    /// A supplied source kind cannot provide the material binding's exact view dimension.
+    TextureResourceDimensionMismatch {
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
+        /// Material texture resource name.
+        resource: String,
+        /// Material-reflected view dimension.
+        expected: fluxel_rhi::api::TextureViewDimension,
+        /// Dimension provided by the supplied source kind.
+        actual: fluxel_rhi::api::TextureViewDimension,
+    },
     /// A draw supplied sampler state for a material without an ordinary sampler.
     UnexpectedSamplerResource {
         /// Draw requesting the binding.

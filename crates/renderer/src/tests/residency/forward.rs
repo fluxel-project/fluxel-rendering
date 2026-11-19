@@ -68,8 +68,13 @@ fn resident_plan_preserves_the_asset_mip_chain_descriptor() {
         }],
     )
     .expect("linear two-level texture plan");
-    assert_eq!(plan.texture_descs[0].mip_levels, 2);
-    assert!(plan.texture_descs[0].usage.contains(TextureUsage::COPY_SRC));
+    assert_eq!(plan.texture_allocations[0].desc.mip_levels, 2);
+    assert!(
+        plan.texture_allocations[0]
+            .desc
+            .usage
+            .contains(TextureUsage::COPY_SRC)
+    );
 }
 
 #[test]

@@ -323,16 +323,25 @@ fn validate_texture_uploads<B: ResourceBackend>(
     let mut uploaded = resident
         .textures
         .iter()
-        .map(|texture| vec![false; texture.desc.mip_levels as usize])
+        .map(|texture| {
+            vec![vec![false; texture.desc.array_layers as usize]; texture.desc.mip_levels as usize]
+        })
         .collect::<Vec<_>>();
     for upload in uploads {
         let texture = resident
             .textures
             .get(upload.texture)
             .ok_or(Error::InvalidRange)?;
-        let mip_uploaded = uploaded
+        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+            || texture.desc.extent[2] != 1
+            || texture.desc.array_layers == 0
+        {
+            return Err(Error::InvalidRange);
+        }
+        let layer_uploaded = uploaded
             .get_mut(upload.texture)
             .and_then(|mips| mips.get_mut(upload.mip_level as usize))
+            .and_then(|layers| layers.get_mut(upload.array_layer as usize))
             .ok_or(Error::InvalidRange)?;
         let expected = [
             (texture.desc.extent[0] >> upload.mip_level).max(1),
@@ -340,7 +349,7 @@ fn validate_texture_uploads<B: ResourceBackend>(
             1,
         ];
         let bytes_per_texel = texture_bytes_per_texel(texture.desc.format)?;
-        if std::mem::replace(mip_uploaded, true)
+        if std::mem::replace(layer_uploaded, true)
             || !upload.source_offset.is_multiple_of(512)
             || upload.extent != expected
             || upload.rows_per_image != upload.extent[1]
@@ -354,10 +363,26 @@ fn validate_texture_uploads<B: ResourceBackend>(
         }
     }
     for (texture, mips) in resident.textures.iter().zip(uploaded) {
-        if !texture.desc.usage.contains(TextureUsage::COPY_SRC)
-            && mips.iter().any(|uploaded| *uploaded)
-            && mips.iter().any(|uploaded| !uploaded)
+        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+            || texture.desc.extent[2] != 1
+            || texture.desc.array_layers == 0
         {
+            return Err(Error::InvalidRange);
+        }
+        if !texture.desc.usage.contains(TextureUsage::COPY_SRC)
+            && mips.iter().flatten().any(|uploaded| *uploaded)
+            && mips.iter().flatten().any(|uploaded| !uploaded)
+        {
+            return Err(Error::InvalidRange);
+        }
+        if texture.desc.usage.contains(TextureUsage::COPY_SRC)
+            && texture.desc.array_layers != 1
+            && mips.iter().flatten().any(|uploaded| *uploaded)
+            && mips.iter().flatten().any(|uploaded| !uploaded)
+        {
+            // The shared mip producer is D2-only. A layered material owner
+            // may still use COPY_SRC for another reason, but must provide
+            // every mip/layer itself.
             return Err(Error::InvalidRange);
         }
     }

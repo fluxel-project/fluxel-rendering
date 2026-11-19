@@ -29,7 +29,9 @@ use program_fixed::{
     surface_triangles,
 };
 
-use program_layout::{material_uniform, ordinary_sampler, sampled_texture};
+use program_layout::{
+    material_uniform, ordinary_sampler, sampled_texture, sampled_texture_with_dimension,
+};
 
 pub(crate) use program_cache::DeferredProgramCache;
 
@@ -403,12 +405,13 @@ where
                 material_uniform(binding.binding, binding.size, binding.visibility.clone())
             })
             .collect();
-        entries.extend(
-            schema
-                .textures
-                .iter()
-                .map(|texture| sampled_texture(texture.binding, TextureSampleType::Float)),
-        );
+        entries.extend(schema.textures.iter().map(|texture| {
+            sampled_texture_with_dimension(
+                texture.binding,
+                TextureSampleType::Float,
+                texture.dimension,
+            )
+        }));
         if let Some(binding) = schema.sampler {
             entries.push(ordinary_sampler(binding));
         }

@@ -11,6 +11,7 @@ fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
         textures: vec![MaterialTextureBinding {
             binding: 1,
             name: "image".into(),
+            dimension: fluxel_rhi::api::TextureViewDimension::D2,
             encoding: None,
         }],
         sampler: sampler.map(|_| 2),

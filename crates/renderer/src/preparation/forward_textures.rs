@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::forward_validation::validate_texture;
+use super::forward_validation::{validate_texture, validate_texture_array};
 use super::*;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
 
@@ -73,12 +73,32 @@ pub(super) fn resolve_texture_asset(
 ) -> Result<ResolvedForwardTexture, ForwardPreparationError> {
     match binding {
         ForwardTextureSource::Asset(reference) => {
+            require_texture_dimension(
+                expected,
+                fluxel_rhi::api::TextureViewDimension::D2,
+                source,
+            )?;
             let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
             validate_texture(asset.value(), source)?;
             validate_texture_encoding(expected, asset.value().encoding, source)?;
             Ok(ResolvedForwardTexture::Asset(asset))
         }
+        ForwardTextureSource::ArrayAsset(asset) => {
+            require_texture_dimension(
+                expected,
+                fluxel_rhi::api::TextureViewDimension::D2Array,
+                source,
+            )?;
+            validate_texture_array(asset.value(), source)?;
+            validate_texture_encoding(expected, asset.value().encoding, source)?;
+            Ok(ResolvedForwardTexture::ArrayAsset(asset.clone()))
+        }
         ForwardTextureSource::RefractionRadiance(asset) => {
+            require_texture_dimension(
+                expected,
+                fluxel_rhi::api::TextureViewDimension::D2,
+                source,
+            )?;
             validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
             Ok(ResolvedForwardTexture::RefractionRadiance(asset.clone()))
         }
@@ -88,6 +108,23 @@ pub(super) fn resolve_texture_asset(
                 resource: slot.clone(),
             })
         }
+    }
+}
+
+fn require_texture_dimension(
+    expected: &MaterialTextureBinding,
+    actual: fluxel_rhi::api::TextureViewDimension,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    if expected.dimension == actual {
+        Ok(())
+    } else {
+        Err(ForwardPreparationError::TextureResourceDimensionMismatch {
+            source,
+            resource: expected.name.clone(),
+            expected: expected.dimension,
+            actual,
+        })
     }
 }
 

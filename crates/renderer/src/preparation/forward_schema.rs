@@ -1,7 +1,7 @@
 //! Consumer-owned binding facts derived from one prepared material.
 
 use fluxel_material::{MaterialResourceKind, MaterialTextureEncoding, MaterialType};
-use fluxel_rhi::api::ShaderStage as RhiShaderStage;
+use fluxel_rhi::api::{ShaderStage as RhiShaderStage, TextureViewDimension};
 use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
@@ -31,6 +31,8 @@ pub(crate) struct MaterialUniformBinding {
 pub(crate) struct MaterialTextureBinding {
     pub(crate) binding: u32,
     pub(crate) name: String,
+    /// Exact RHI view dimension reflected from the declared material resource.
+    pub(crate) dimension: TextureViewDimension,
     /// Optional material-declared asset encoding requirement.
     pub(crate) encoding: Option<MaterialTextureEncoding>,
 }
@@ -65,7 +67,9 @@ pub(crate) fn material_binding_schema(
             .iter()
             .find(|actual| actual.group == 0 && actual.binding == location);
         match binding.kind {
-            MaterialResourceKind::Texture2dF32 => original_textures += 1,
+            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32 => {
+                original_textures += 1
+            }
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
             kind if kind.uniform_material_type().is_some() => {
                 original_uniforms += 1;
@@ -78,7 +82,7 @@ pub(crate) fn material_binding_schema(
                 return Err(invalid());
             }
             match binding.kind {
-                MaterialResourceKind::Texture2dF32 => {
+                MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32 => {
                     schema.unused_textures.push(binding.name.clone())
                 }
                 MaterialResourceKind::Sampler { .. } => {
@@ -99,13 +103,23 @@ pub(crate) fn material_binding_schema(
         }
 
         match binding.kind {
-            MaterialResourceKind::Texture2dF32
-                if matches!(actual.kind, BindingKind::Texture)
-                    && actual.shape == Some(BindingShape::Texture2dF32) =>
+            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32
+                if actual.kind == BindingKind::Texture =>
             {
+                let dimension = match (binding.kind, actual.shape) {
+                    (MaterialResourceKind::Texture2dF32, Some(BindingShape::Texture2dF32)) => {
+                        TextureViewDimension::D2
+                    }
+                    (
+                        MaterialResourceKind::Texture2dArrayF32,
+                        Some(BindingShape::Texture2dArrayF32),
+                    ) => TextureViewDimension::D2Array,
+                    _ => return Err(invalid()),
+                };
                 schema.textures.push(MaterialTextureBinding {
                     binding: location,
                     name: binding.name.clone(),
+                    dimension,
                     encoding: prepared
                         .material()
                         .texture_encoding_requirements()

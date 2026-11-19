@@ -16,8 +16,9 @@ use fluxel_rhi::{
 };
 
 use crate::preparation::{
-    ColorTextureAsset, ColorTextureData, ForwardAssets, ForwardDrawInput, GeometryAsset,
-    GeometryData, RefractionRadianceAsset, RefractionRadianceData, ResolvedForwardTexture,
+    ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
+    ForwardAssets, ForwardDrawInput, GeometryAsset, GeometryData, RefractionRadianceAsset,
+    RefractionRadianceData, ResolvedForwardTexture,
 };
 
 use super::{ForwardTexture, ForwardVertexStream};
@@ -51,6 +52,11 @@ impl ForwardGeometryCacheKey {
 pub(crate) enum ForwardTextureCacheKey {
     Color {
         asset: AssetId<ColorTextureAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
+    ColorArray {
+        asset: AssetId<ColorTextureArrayAsset>,
         generation: u64,
         device: DeviceId,
     },
@@ -88,7 +94,9 @@ impl ForwardTextureCacheKey {
 
     fn device(self) -> DeviceId {
         match self {
-            Self::Color { device, .. } | Self::RefractionRadiance { device, .. } => device,
+            Self::Color { device, .. }
+            | Self::ColorArray { device, .. }
+            | Self::RefractionRadiance { device, .. } => device,
         }
     }
 }
@@ -105,6 +113,7 @@ pub(crate) struct ForwardResidentCache<B: ResourceBackend> {
     /// A completed GPU product can stay reusable only while an owner still
     /// retains the exact immutable CPU generation.
     refraction_radiance: HashMap<ForwardTextureCacheKey, Weak<RefractionRadianceData>>,
+    color_arrays: HashMap<ForwardTextureCacheKey, Weak<ColorTextureArrayData>>,
 }
 
 impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
@@ -113,6 +122,7 @@ impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
             geometry: HashMap::new(),
             textures: HashMap::new(),
             refraction_radiance: HashMap::new(),
+            color_arrays: HashMap::new(),
         }
     }
 }
@@ -137,7 +147,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .map(|texture| ForwardTextureCacheKey::from_snapshot(texture, device))
     }
 
-    /// Derives the cache key for either immutable material texture kind.
+    /// Derives the cache key for an immutable material texture.
     pub(crate) fn resolved_texture_key(
         &mut self,
         draw: &ForwardDrawInput,
@@ -147,6 +157,16 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         match draw.resolved_textures().get(texture_index)? {
             ResolvedForwardTexture::Asset(texture) => {
                 Some(ForwardTextureCacheKey::from_snapshot(texture, device))
+            }
+            ResolvedForwardTexture::ArrayAsset(texture) => {
+                let key = ForwardTextureCacheKey::ColorArray {
+                    asset: texture.id(),
+                    generation: texture.generation().get(),
+                    device,
+                };
+                self.color_arrays
+                    .insert(key, Arc::downgrade(&texture.value_arc()));
+                Some(key)
             }
             ResolvedForwardTexture::RefractionRadiance(texture) => {
                 let key =
@@ -225,6 +245,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             ForwardTexture {
                 texture: texture.texture.clone(),
                 view: texture.view.clone(),
+                view_dimension: texture.view_dimension,
                 desc: texture.desc.clone(),
                 instance: texture.instance,
                 incoming: shader_read_uses(),
@@ -256,10 +277,13 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .retain(|key, _| geometry.contains(&(key.asset, key.generation)));
         self.refraction_radiance
             .retain(|_, source| source.strong_count() != 0);
+        self.color_arrays
+            .retain(|_, source| source.strong_count() != 0);
         self.textures.retain(|key, _| match key {
             ForwardTextureCacheKey::Color {
                 asset, generation, ..
             } => textures.contains(&(*asset, *generation)),
+            ForwardTextureCacheKey::ColorArray { .. } => self.color_arrays.contains_key(key),
             ForwardTextureCacheKey::RefractionRadiance { .. } => {
                 self.refraction_radiance.contains_key(key)
             }
@@ -272,6 +296,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.textures.retain(|key, _| key.device() != device);
         self.refraction_radiance
             .retain(|key, _| key.device() != device);
+        self.color_arrays.retain(|key, _| key.device() != device);
     }
 
     /// Removes every completed reusable product.
@@ -279,6 +304,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.geometry.clear();
         self.textures.clear();
         self.refraction_radiance.clear();
+        self.color_arrays.clear();
     }
 }
 
@@ -298,6 +324,7 @@ impl<B: ResourceBackend> Clone for ForwardTexture<B> {
         Self {
             texture: self.texture.clone(),
             view: self.view.clone(),
+            view_dimension: self.view_dimension,
             desc: self.desc.clone(),
             instance: self.instance,
             incoming: self.incoming,
