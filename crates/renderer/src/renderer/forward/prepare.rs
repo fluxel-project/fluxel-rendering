@@ -42,7 +42,6 @@ where
             >,
         >,
     ) -> std::result::Result<AssembledForward<B>, RendererError> {
-        use crate::frame_data::forward::{ForwardUniformInput, pack_forward_uniforms};
         use crate::residency::{
             EnvironmentFrameOwner, ForwardBindGroup, ForwardDraw, ForwardFrame,
             ForwardResidentBuffers, ForwardSampler, ForwardStreamInput, SurfaceForwardFrame,
@@ -115,29 +114,7 @@ where
         // is bounded by this frame's concrete program/layout set.
         self.forward_programs
             .retain(|key, _| active_programs.contains(key));
-        let uniform_inputs: Vec<_> = inputs
-            .iter()
-            .map(|input| ForwardUniformInput {
-                transform: input.clip_from_local(),
-                mesh_visibility: Some(input.mesh_visibility()),
-                normal_from_local: input.normal_from_local(),
-                world_from_local: input
-                    .normal_from_local()
-                    .map(|_| input.transform().columns()),
-                clip_from_world: input
-                    .prepared()
-                    .uses_scene_refraction()
-                    .then(|| input.view().transform.columns()),
-                material_uniforms: input.uniform_values().to_vec(),
-                shading_camera: input.view().shading_camera,
-                directional_light: input.view().directional_light,
-            })
-            .collect();
-        let uniforms = pack_forward_uniforms(
-            &uniform_inputs,
-            limits.uniform_offset_alignment,
-            limits.max_buffer_bytes,
-        )?;
+        let uniforms = super::frame_uniforms::pack_inputs(&inputs, limits)?;
         let uniform_len = u64::try_from(uniforms.bytes.len()).map_err(|_| Error::InvalidRange)?;
         let row_pitch = aligned_forward_row(extent[0])?;
         self.forward_residency.retain_assets(assets);
@@ -487,6 +464,12 @@ where
                 .iter()
                 .map(|&stream| 0..resident.streams[stream].desc.size)
                 .collect();
+            let particle = input.particle().is_some();
+            let layouts = &input.prepared().geometry().streams;
+            let resident_count = mappings[index].len();
+            if layouts.len() != resident_count + usize::from(particle) {
+                return Err(Error::InvalidRange.into());
+            }
             draws.push(ForwardDraw {
                 batch: draw_batch_ids[index],
                 compatibility: draw_compatibility[index].clone(),
@@ -495,7 +478,8 @@ where
                 textures: draw_textures[index].clone(),
                 capture_textures: draw_capture_textures[index].clone(),
                 vertex_streams: mappings[index].clone(),
-                vertex_layouts: input.prepared().geometry().streams.clone(),
+                vertex_layouts: layouts[..resident_count].to_vec(),
+                particle,
                 vertex_ranges,
                 vertices: input.geometry().value().vertices.clone(),
                 instances: input.instance_range(),
@@ -551,6 +535,7 @@ where
                     specular,
                     draws,
                     indirect: Vec::new(),
+                    particles: Vec::new(),
                     draw_batches,
                     extent,
                     color_format,
@@ -568,6 +553,7 @@ where
                     specular,
                     draws,
                     indirect: Vec::new(),
+                    particles: Vec::new(),
                     draw_batches,
                     extent,
                     readback_row_pitch: row_pitch,

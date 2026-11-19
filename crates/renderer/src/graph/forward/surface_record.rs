@@ -77,6 +77,43 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
             .record_compute(device, encoder, &self.bindings(frame, image)?, product)
     }
 
+    pub(crate) fn record_particle_upload(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
+        let declared = self.particles.get(index).ok_or(Error::InvalidRange)?;
+        if frame.particles.get(index).is_none() {
+            return Err(Error::InvalidRange);
+        }
+        declared
+            .graph
+            .record_upload(encoder, &self.bindings(frame, image)?)
+    }
+
+    pub(crate) fn record_particle_update(
+        &self,
+        device: &Device<B>,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &SurfaceForwardFrame<B>,
+        image: &SurfaceImage<B>,
+    ) -> Result<()>
+    where
+        B: CommandBackend + ResourceBackend,
+    {
+        let declared = self.particles.get(index).ok_or(Error::InvalidRange)?;
+        let (_, step) = frame.particles.get(index).ok_or(Error::InvalidRange)?;
+        declared
+            .graph
+            .record_update(device, encoder, &self.bindings(frame, image)?, step)
+    }
+
     pub(crate) fn record_mip(
         &self,
         index: usize,

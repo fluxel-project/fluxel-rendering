@@ -35,6 +35,7 @@ pub(crate) use forward::{
     ForwardUniformUpload, ForwardVertexStream, LayeredTextureView, SurfaceForwardFrame,
     SurfaceForwardFrameBuffers, indirect_for_draw, plan_forward_frame, plan_forward_hdr_frame,
     plan_forward_resident_with_texture_inputs, plan_surface_forward_frame, validate_indirect_draws,
+    validate_particle_draws,
 };
 
 pub(crate) use upload::{

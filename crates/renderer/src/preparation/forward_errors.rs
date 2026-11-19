@@ -100,6 +100,16 @@ pub enum ForwardPreparationError {
         /// Draw requesting the geometry.
         source: ForwardDrawSource,
     },
+    /// A particle specialization conflicts with an existing draw product.
+    ParticleDrawUnsupported {
+        /// Draw requesting particle specialization.
+        source: ForwardDrawSource,
+    },
+    /// Particle specialization requires exactly one vertex-rate POSITION/UV quad stream.
+    ParticleQuadLayout {
+        /// Draw requesting particle specialization.
+        source: ForwardDrawSource,
+    },
     /// Additive blend requires the ordinary transparent composition phase.
     AdditiveOitUnsupported {
         /// Draw requesting the unsupported peel composition.

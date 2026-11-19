@@ -1,6 +1,6 @@
 //! Built-in Scene selection for the shared Forward execution path.
 use super::*;
-use crate::{GpuIndirectDraw, renderer::indirect_producer::plan_draws};
+use crate::{GpuIndirectDraw, GpuParticleDraw, renderer::indirect_producer::plan_draws};
 use std::time::Instant;
 
 impl<B> Renderer<B>
@@ -26,8 +26,17 @@ where
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
     ) -> std::result::Result<super::Submission, RendererError> {
-        self.submit_forward_target(pipeline, snapshot, view, visibility, assets, &[], None)
-            .await
+        self.submit_forward_target(
+            pipeline,
+            snapshot,
+            view,
+            visibility,
+            assets,
+            &[],
+            None,
+            None,
+        )
+        .await
     }
 
     /// Submits Forward work to an acquired surface image.
@@ -51,6 +60,7 @@ where
             visibility,
             assets,
             &[],
+            None,
             Some(image),
         )
         .await
@@ -67,8 +77,10 @@ where
         assets: &crate::ForwardAssets,
         requests: &[GpuIndirectDraw],
     ) -> std::result::Result<super::Submission, RendererError> {
-        self.submit_forward_target(pipeline, snapshot, view, visibility, assets, requests, None)
-            .await
+        self.submit_forward_target(
+            pipeline, snapshot, view, visibility, assets, requests, None, None,
+        )
+        .await
     }
 
     /// Produces instance counts for Forward scene draws and presents the frame.
@@ -92,13 +104,14 @@ where
             visibility,
             assets,
             requests,
+            None,
             Some(image),
         )
         .await
     }
 
     #[allow(clippy::too_many_arguments)] // Shared offscreen/surface preparation keeps their ownership paths identical.
-    async fn submit_forward_target<P: crate::FramePipeline<crate::ForwardResources>>(
+    pub(super) async fn submit_forward_target<P: crate::FramePipeline<crate::ForwardResources>>(
         &mut self,
         pipeline: &P,
         snapshot: crate::FrameSnapshot<crate::ForwardResources>,
@@ -106,6 +119,7 @@ where
         visibility: crate::RenderBounds,
         assets: &crate::ForwardAssets,
         indirect_draws: &[GpuIndirectDraw],
+        mut particle_draws: Option<&mut [GpuParticleDraw<'_, B>]>,
         surface: Option<SurfaceImage<B>>,
     ) -> std::result::Result<super::Submission, RendererError> {
         if let Some(image) = surface.as_ref() {
@@ -155,7 +169,7 @@ where
                 ));
             }
         };
-        let prepared_inputs =
+        let mut prepared_inputs =
             super::composed::order_draws(pipeline, &selected, prepared_inputs, topology)
                 .map_err(RendererError::ForwardPipeline)?;
         let environment_snapshot = self.environment_irradiance.clone().filter(|_| {
@@ -164,24 +178,42 @@ where
                 .any(|input| input.prepared().uses_environment_irradiance())
         });
         let indirect = plan_draws(&self.device, &snapshot, &prepared_inputs, indirect_draws)?;
+        let particles = if let Some(draws) = particle_draws.as_deref() {
+            self.prepare_particles(&snapshot, topology, &mut prepared_inputs, draws)?
+        } else {
+            super::particles::PreparedParticles::default()
+        };
         let color_format = surface
             .as_ref()
             .map_or(TextureFormat::Rgba8Unorm, SurfaceImage::format);
-        self.submit_prepared_forward_with_indirect(
-            snapshot.clone(),
-            prepared_inputs,
-            extent,
-            topology,
-            depth_mode,
-            self.forward_sample_count(),
-            assets,
-            surface.map(|image| (image, extent)),
-            color_format,
-            preparation_started,
-            environment_snapshot,
-            indirect,
-            |context| pipeline.contribute(&selected, context),
-        )
-        .await
+        if let Some(draws) = particle_draws.as_deref_mut() {
+            for (request, marker) in &particles.uses {
+                draws[*request].system.track_recording(marker.clone());
+            }
+        }
+        let result = self
+            .submit_prepared_forward_with_products(
+                snapshot.clone(),
+                prepared_inputs,
+                extent,
+                topology,
+                depth_mode,
+                self.forward_sample_count(),
+                assets,
+                surface.map(|image| (image, extent)),
+                color_format,
+                preparation_started,
+                environment_snapshot,
+                indirect,
+                particles.steps,
+                |context| pipeline.contribute(&selected, context),
+            )
+            .await;
+        if let Some(draws) = particle_draws {
+            for (request, _) in particles.uses {
+                draws[request].system.finish(result.as_ref().ok());
+            }
+        }
+        result
     }
 }

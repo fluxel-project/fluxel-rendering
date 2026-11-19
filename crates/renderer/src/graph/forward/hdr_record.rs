@@ -98,6 +98,11 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 .graph
                 .validate_raster_read(self.raster_pass, &bindings, product)?;
         }
+        for (declared, (_, step)) in self.particles.iter().zip(&frame.particles) {
+            declared
+                .graph
+                .validate_vertex_read(self.raster_pass, &bindings, step)?;
+        }
         shared_record::record_raster_with_loads_indirect(
             &self.record_slots(),
             self.raster_pass,
@@ -192,6 +197,41 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             composite,
             "fluxel Forward HDR output composite",
         )
+    }
+    pub(crate) fn record_hdr_particle_upload(
+        &self,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.particles.get(index).ok_or(Error::InvalidRange)?;
+        if frame.particles.get(index).is_none() {
+            return Err(Error::InvalidRange);
+        }
+        declared
+            .graph
+            .record_upload(encoder, &self.hdr_bindings(frame, image)?)
+    }
+    pub(crate) fn record_hdr_particle_update(
+        &self,
+        device: &Device<B>,
+        index: usize,
+        encoder: &mut CommandEncoder<B>,
+        frame: &ForwardFrame<B>,
+        image: Option<&SurfaceImage<B>>,
+    ) -> Result<()>
+    where
+        B: CommandBackend,
+    {
+        let declared = self.particles.get(index).ok_or(Error::InvalidRange)?;
+        let (_, step) = frame.particles.get(index).ok_or(Error::InvalidRange)?;
+        declared
+            .graph
+            .record_update(device, encoder, &self.hdr_bindings(frame, image)?, step)
     }
 
     pub(crate) fn record_hdr_readback(

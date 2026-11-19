@@ -14,6 +14,7 @@ mod forward;
 pub(crate) mod indirect_producer;
 mod lighting;
 mod output_processing;
+pub(crate) mod particle_update;
 mod pending;
 mod raster;
 mod read_set;
@@ -61,6 +62,7 @@ pub use forward::ForwardCacheStats;
 pub(crate) use forward::validate_ordinary_sampler;
 pub(crate) use forward::{SurfaceCompositeOwner, refraction_capture_desc};
 pub use output_processing::{OutputProcessing, OutputTransfer};
+pub use particle_update::{GpuParticleDraw, GpuParticleSystem};
 pub use shutdown::ShutdownReport;
 pub use submission::Submission;
 

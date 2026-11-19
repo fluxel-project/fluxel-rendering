@@ -127,6 +127,29 @@ pub(super) struct ForwardIndirectGraph {
     pub(super) graph: crate::graph::indirect::IndirectGraph,
 }
 
+/// One GPU particle update bound to the draw consuming its product buffer.
+#[derive(Clone, Copy)]
+pub(super) struct ForwardParticleGraph {
+    pub(super) draw: usize,
+    pub(super) graph: crate::graph::particle_update::ParticleUpdateGraph,
+}
+
+pub(super) fn declare_particles<B: ResourceBackend>(
+    graph: &mut GraphBuilder,
+    steps: &[(usize, crate::renderer::particle_update::ParticleStep<B>)],
+) -> std::result::Result<Vec<ForwardParticleGraph>, ForwardPlanBuildError> {
+    let mut declared = Vec::with_capacity(steps.len());
+    for (draw, step) in steps {
+        let record = crate::graph::particle_update::ParticleUpdateGraph::declare(graph, step)
+            .map_err(|_| Error::InvalidState)?;
+        declared.push(ForwardParticleGraph {
+            draw: *draw,
+            graph: record,
+        });
+    }
+    Ok(declared)
+}
+
 /// Declares all frame-local indirect producers. Their raster reads establish
 /// the producer-to-consumer dependency on the actual ordinary phase.
 pub(super) fn declare_indirect<B: ResourceBackend>(
@@ -208,6 +231,15 @@ fn same_indirect(left: &[ForwardIndirectGraph], right: &[ForwardIndirectGraph]) 
         })
 }
 
+fn same_particles(left: &[ForwardParticleGraph], right: &[ForwardParticleGraph]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.draw == right.draw
+                && left.graph.upload_pass.1 == right.graph.upload_pass.1
+                && left.graph.update_pass.1 == right.graph.update_pass.1
+        })
+}
+
 pub(crate) enum ForwardPlanBuildError {
     Rhi(Error),
     Pipeline(PipelineError),
@@ -229,6 +261,7 @@ pub(crate) struct ForwardPlan<B: ResourceBackend> {
     upload_pass: GraphPass,
     mip_passes: Vec<super::mip_generation::MipGenerationPass>,
     indirect: Vec<ForwardIndirectGraph>,
+    particles: Vec<ForwardParticleGraph>,
     raster_pass: GraphPass,
     readback_pass: GraphPass,
     resident_upload_slot: BufferSlot,
@@ -268,6 +301,7 @@ pub(crate) struct SurfaceForwardPlan<B: ResourceBackend> {
     upload_pass: GraphPass,
     mip_passes: Vec<super::mip_generation::MipGenerationPass>,
     indirect: Vec<ForwardIndirectGraph>,
+    particles: Vec<ForwardParticleGraph>,
     raster_pass: GraphPass,
     present_step: StepId,
     resident_upload_slot: BufferSlot,

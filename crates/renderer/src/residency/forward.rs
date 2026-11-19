@@ -111,6 +111,8 @@ pub(crate) struct ForwardDraw<B: ResourceBackend> {
     /// Maps pipeline vertex-buffer slots to resident stream indices.
     pub(crate) vertex_streams: Vec<usize>,
     pub(crate) vertex_layouts: Vec<VertexBufferLayout>,
+    /// The selected pipeline takes one extra particle instance stream.
+    pub(crate) particle: bool,
     pub(crate) vertex_ranges: Vec<Range<u64>>,
     pub(crate) vertices: Range<u32>,
     pub(crate) instances: Range<u32>,
@@ -136,7 +138,10 @@ impl<B: ResourceBackend> ForwardDraw<B> {
 /// Forward frame.
 pub(crate) fn validate_indirect_draws<B: ResourceBackend>(
     draws: &[ForwardDraw<B>],
-    indirect: &[(usize, crate::renderer::indirect_producer::IndirectProduct<B>)],
+    indirect: &[(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )],
 ) -> Result<()> {
     let mut selected = std::collections::BTreeSet::new();
     for (draw_index, product) in indirect {
@@ -149,9 +154,63 @@ pub(crate) fn validate_indirect_draws<B: ResourceBackend>(
     Ok(())
 }
 
+/// Validates that every particle pipeline has its own exact GPU stream.
+pub(crate) fn validate_particle_draws<B: ResourceBackend>(
+    draws: &[ForwardDraw<B>],
+    particles: &[(usize, crate::renderer::particle_update::ParticleStep<B>)],
+    indirect: &[(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )],
+) -> Result<()> {
+    if draws.iter().filter(|draw| draw.particle).count() != particles.len() {
+        return Err(Error::InvalidRange);
+    }
+    let mut selected = std::collections::BTreeSet::new();
+    for (index, step) in particles {
+        let draw = draws.get(*index).ok_or(Error::InvalidRange)?;
+        if !draw.particle
+            || !selected.insert(*index)
+            || indirect.iter().any(|(draw, _)| draw == index)
+            || draw.instances.is_empty()
+            || draw.instances.start != 0
+        {
+            return Err(Error::InvalidRange);
+        }
+        let size =
+            u64::from(draw.instances.end) * crate::feature::particles::GPU_PARTICLE_STATE_STRIDE;
+        let source = step.source();
+        let product = step.product();
+        if source.desc.size != size
+            || product.desc.size != size
+            || product.instance == source.instance
+            || !product
+                .desc
+                .usage
+                .contains(BufferUsage::STORAGE | BufferUsage::VERTEX)
+        {
+            return Err(Error::InvalidRange);
+        }
+        let device = draw.pipeline.device();
+        if source.buffer.device() != device
+            || product.buffer.device() != device
+            || step.upload.buffer.device() != device
+            || step.uniform.buffer.device() != device
+            || step.pipeline().device() != device
+            || step.group.device() != device
+        {
+            return Err(Error::WrongDevice);
+        }
+    }
+    Ok(())
+}
+
 /// Returns the unique GPU command owner for one prepared draw.
 pub(crate) fn indirect_for_draw<'a, B: ResourceBackend>(
-    indirect: &'a [(usize, crate::renderer::indirect_producer::IndirectProduct<B>)],
+    indirect: &'a [(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )],
     draw_index: usize,
 ) -> Option<&'a crate::renderer::indirect_producer::IndirectProduct<B>> {
     indirect
@@ -180,7 +239,11 @@ pub(crate) struct ForwardFrame<B: ResourceBackend> {
     ///
     /// The product stays with this submitted frame through completion. Graph
     /// declaration and recording use the same concrete owner.
-    pub(crate) indirect: Vec<(usize, crate::renderer::indirect_producer::IndirectProduct<B>)>,
+    pub(crate) indirect: Vec<(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )>,
+    pub(crate) particles: Vec<(usize, crate::renderer::particle_update::ParticleStep<B>)>,
     /// Contiguous draw ranges that share one raster program without changing
     /// the prepared candidate order.
     pub(crate) draw_batches: Vec<Range<usize>>,
@@ -202,7 +265,11 @@ pub(crate) struct SurfaceForwardFrame<B: ResourceBackend> {
     pub(crate) specular: Option<super::SpecularEnvironmentFrameOwner<B>>,
     pub(crate) draws: Vec<ForwardDraw<B>>,
     /// GPU-produced indirect argument records keyed by their prepared draw.
-    pub(crate) indirect: Vec<(usize, crate::renderer::indirect_producer::IndirectProduct<B>)>,
+    pub(crate) indirect: Vec<(
+        usize,
+        crate::renderer::indirect_producer::IndirectProduct<B>,
+    )>,
+    pub(crate) particles: Vec<(usize, crate::renderer::particle_update::ParticleStep<B>)>,
     pub(crate) draw_batches: Vec<Range<usize>>,
     pub(crate) extent: [u32; 2],
     /// The color target format used to create every pipeline in this frame.

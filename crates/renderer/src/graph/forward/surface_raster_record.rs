@@ -27,6 +27,11 @@ pub(super) fn record<B: ResourceBackend + RasterBackend>(
             .graph
             .validate_raster_read(plan.raster_pass, &bindings, product)?;
     }
+    for (declared, (_, step)) in plan.particles.iter().zip(&frame.particles) {
+        declared
+            .graph
+            .validate_vertex_read(plan.raster_pass, &bindings, step)?;
+    }
     let pass = bindings.pass(plan.raster_pass)?;
     for draw in &frame.draws {
         validate_draw(draw, plan.stream_slots.len())?;
@@ -194,13 +199,31 @@ pub(super) fn record<B: ResourceBackend + RasterBackend>(
                 return Err(Error::InvalidState);
             }
             let draw_index = range.start.checked_add(offset).ok_or(Error::InvalidRange)?;
+            let particle = frame
+                .particles
+                .iter()
+                .find(|(index, _)| *index == draw_index);
             let indirect = crate::residency::indirect_for_draw(&frame.indirect, draw_index);
             if let Some(preliminary) = draw.preliminary_pipeline.as_ref() {
                 raster.set_pipeline(preliminary)?;
-                draw_one(device, &mut raster, &frame.resident, draw, indirect)?;
+                draw_one(
+                    device,
+                    &mut raster,
+                    &frame.resident,
+                    draw,
+                    particle.map(|(_, step)| step),
+                    indirect,
+                )?;
                 raster.set_pipeline(&draw.pipeline)?;
             }
-            draw_one(device, &mut raster, &frame.resident, draw, indirect)?;
+            draw_one(
+                device,
+                &mut raster,
+                &frame.resident,
+                draw,
+                particle.map(|(_, step)| step),
+                indirect,
+            )?;
         }
     }
     raster.finish()
@@ -211,8 +234,12 @@ fn draw_one<B: ResourceBackend + RasterBackend>(
     raster: &mut fluxel_rhi::api::RasterPass<'_, B>,
     resident: &crate::residency::ForwardResidentBuffers<B>,
     draw: &crate::residency::ForwardDraw<B>,
+    particle: Option<&crate::renderer::particle_update::ParticleStep<B>>,
     indirect: Option<&crate::renderer::indirect_producer::IndirectProduct<B>>,
 ) -> Result<()> {
+    if let Some(step) = particle {
+        return super::shared_record::bind_and_draw_particle(raster, resident, draw, step);
+    }
     match indirect {
         Some(product) => super::shared_record::bind_and_draw_indirect(
             device.ok_or(Error::InvalidState)?,

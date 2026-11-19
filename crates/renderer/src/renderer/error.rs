@@ -64,6 +64,16 @@ pub enum RendererError {
     IndirectScene(crate::SceneError),
     /// More than one GPU count producer was assigned to this scene record.
     DuplicateIndirectDraw(crate::RenderId),
+    /// A GPU particle draw refers to a foreign or stale scene record.
+    ParticleScene(crate::SceneError),
+    /// More than one particle system targets the same draw.
+    DuplicateParticleDraw(crate::RenderId),
+    /// The initial particle state failed validation before allocation.
+    ParticleState(crate::GpuParticleError),
+    /// A particle update had invalid time or gravity.
+    ParticleUpdate(crate::GpuParticleUpdateError),
+    /// A GPU particle program failed logical Shader composition.
+    ParticleShader(fluxel_shader::ShaderError),
     /// A Forward device operation failed; the original RHI error is preserved.
     ForwardOperation {
         /// The device operation being performed.
@@ -148,6 +158,17 @@ impl fmt::Display for RendererError {
             Self::DuplicateIndirectDraw(draw) => {
                 write!(formatter, "multiple GPU count producers for {draw:?}")
             }
+            Self::ParticleScene(error) => error.fmt(formatter),
+            Self::DuplicateParticleDraw(draw) => {
+                write!(formatter, "multiple particle systems for {draw:?}")
+            }
+            Self::ParticleState(error) => {
+                write!(formatter, "invalid GPU particle state: {error:?}")
+            }
+            Self::ParticleUpdate(error) => {
+                write!(formatter, "invalid GPU particle update: {error:?}")
+            }
+            Self::ParticleShader(error) => error.fmt(formatter),
             Self::ForwardOperation { operation, error } => {
                 write!(formatter, "Forward {operation}: {error}")
             }

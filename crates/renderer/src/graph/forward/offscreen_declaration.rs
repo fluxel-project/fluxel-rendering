@@ -28,6 +28,7 @@ pub(crate) struct OffscreenForwardDeclaration {
     pub(super) upload_pass: GraphPass,
     pub(super) mip_passes: Vec<super::super::mip_generation::MipGenerationPass>,
     pub(super) indirect: Vec<super::ForwardIndirectGraph>,
+    pub(super) particles: Vec<super::ForwardParticleGraph>,
     pub(super) raster_pass: GraphPass,
     pub(super) readback_pass: GraphPass,
     pub(super) resident_upload_slot: BufferSlot,
@@ -95,6 +96,7 @@ where
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
     validate_resident_texture_devices(&frame.resident, device.id())?;
+    crate::residency::validate_particle_draws(&frame.draws, &frame.particles, &frame.indirect)?;
     let spec = ForwardGraphSpec::from_frame(frame)?;
     declare_offscreen_with_output(
         device,
@@ -102,6 +104,7 @@ where
         expected,
         ForwardOutput::Readback,
         &frame.indirect,
+        &frame.particles,
         contribute,
     )
 }
@@ -115,6 +118,7 @@ fn declare_offscreen_with_output<B, F>(
         usize,
         crate::renderer::indirect_producer::IndirectProduct<B>,
     )],
+    particles: &[(usize, crate::renderer::particle_update::ParticleStep<B>)],
     contribute: F,
 ) -> std::result::Result<OffscreenForwardDeclaration, ForwardPlanBuildError>
 where
@@ -145,6 +149,7 @@ where
     } = super::offscreen_prefix::declare_prefix(device, spec, expected)?;
     let raster_dependency = mip_passes.last().map_or(upload_pass, |pass| pass.pass);
     let indirect = super::declare_indirect(&mut graph, indirect_products)?;
+    let particles = super::declare_particles(&mut graph, particles)?;
     let (raster_pass, target, _) = {
         let mut driver = ForwardPhaseDriver {
             graph: Some(&mut graph),
@@ -167,6 +172,7 @@ where
             depth,
             draws: spec.draws.clone(),
             indirect: indirect.clone(),
+            particles: particles.clone(),
             declared: false,
             output: None,
         };
@@ -231,6 +237,7 @@ where
         upload_pass,
         mip_passes,
         indirect,
+        particles,
         raster_pass,
         readback_pass,
         resident_upload_slot: BufferSlot::from(resident_upload),
@@ -272,6 +279,7 @@ where
     F: FnOnce(&mut ForwardPhaseContext<'_, '_, '_, B>) -> std::result::Result<(), PipelineError>,
 {
     validate_resident_texture_devices(&frame.resident, device.id())?;
+    crate::residency::validate_particle_draws(&frame.draws, &frame.particles, &frame.indirect)?;
     let standard_msaa_surface = frame.frame.multisample_color.is_some()
         && image.is_some()
         && frame.frame.output.is_none()
@@ -315,7 +323,15 @@ where
             }
         }
     };
-    declare_offscreen_with_output(device, &spec, expected, output, &frame.indirect, contribute)
+    declare_offscreen_with_output(
+        device,
+        &spec,
+        expected,
+        output,
+        &frame.indirect,
+        &frame.particles,
+        contribute,
+    )
 }
 
 fn declare_readback(

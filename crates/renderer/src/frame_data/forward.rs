@@ -3,6 +3,8 @@ use fluxel_material::DynamicValue;
 use fluxel_rhi::api::{Error, Result};
 use std::ops::Range;
 
+use crate::preparation::particle_material::PARTICLE_TRANSFORM_BYTES;
+
 pub(crate) struct ForwardUniformInput {
     pub(crate) transform: [[f32; 4]; 4],
     /// Forward visibility. G-buffer draws carry no fade and retain their own ABI.
@@ -63,7 +65,13 @@ const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_SURFACE_CAMERA_POSITION_OFFSET + 1
 pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64;
 pub(crate) const PBR_SCENE_REFRACTION_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
 
-fn transform_bytes(input: &ForwardUniformInput) -> Result<u64> {
+fn transform_bytes(
+    input: &ForwardUniformInput,
+    particle_transform: Option<&[u8; PARTICLE_TRANSFORM_BYTES as usize]>,
+) -> Result<u64> {
+    if particle_transform.is_some() {
+        return Ok(PARTICLE_TRANSFORM_BYTES);
+    }
     match (
         input.normal_from_local.is_some(),
         input.world_from_local.is_some(),
@@ -85,6 +93,32 @@ pub(crate) fn pack_forward_uniforms(
     alignment: u64,
     max_bytes: u64,
 ) -> Result<ForwardUniformData> {
+    pack_forward_uniforms_inner(inputs, None, alignment, max_bytes)
+}
+
+/// Packs Forward uniforms with optional exact particle-transform replacements.
+///
+/// The slice stays parallel to `inputs`. A particle transform replaces only
+/// that draw's ordinary transform bytes and retains ordinary material-uniform
+/// alignment and dynamic-offset layout.
+pub(crate) fn pack_forward_uniforms_with_particle(
+    inputs: &[ForwardUniformInput],
+    particle_transforms: &[Option<&[u8; PARTICLE_TRANSFORM_BYTES as usize]>],
+    alignment: u64,
+    max_bytes: u64,
+) -> Result<ForwardUniformData> {
+    if particle_transforms.len() != inputs.len() {
+        return Err(Error::InvalidRange);
+    }
+    pack_forward_uniforms_inner(inputs, Some(particle_transforms), alignment, max_bytes)
+}
+
+fn pack_forward_uniforms_inner(
+    inputs: &[ForwardUniformInput],
+    particle_transforms: Option<&[Option<&[u8; PARTICLE_TRANSFORM_BYTES as usize]>]>,
+    alignment: u64,
+    max_bytes: u64,
+) -> Result<ForwardUniformData> {
     if alignment == 0 {
         return Err(Error::InvalidRange);
     }
@@ -103,9 +137,10 @@ pub(crate) fn pack_forward_uniforms(
         .try_reserve_exact(inputs.len())
         .map_err(|_| Error::OutOfMemory)?;
     let mut total: u64 = 0;
-    for input in inputs {
+    for (index, input) in inputs.iter().enumerate() {
+        let particle_transform = particle_transforms.and_then(|transforms| transforms[index]);
         let transform_end = total
-            .checked_add(transform_bytes(input)?)
+            .checked_add(transform_bytes(input, particle_transform)?)
             .ok_or(Error::InvalidRange)?;
         let mut ranges = Vec::new();
         ranges
@@ -128,7 +163,7 @@ pub(crate) fn pack_forward_uniforms(
     if total > max_bytes || total > u64::from(u32::MAX) {
         return Err(Error::InvalidRange);
     }
-    if inputs.iter().any(|input| {
+    if inputs.iter().enumerate().any(|(index, input)| {
         input
             .transform
             .iter()
@@ -158,6 +193,14 @@ pub(crate) fn pack_forward_uniforms(
                     .flat_map(DynamicValue::components),
             )
             .any(|value| !value.is_finite())
+            || particle_transforms
+                .and_then(|transforms| transforms[index])
+                .is_some_and(|bytes| {
+                    bytes.chunks_exact(4).any(|component| {
+                        !f32::from_le_bytes(component.try_into().expect("fixed particle ABI"))
+                            .is_finite()
+                    })
+                })
     }) {
         return Err(Error::InvalidRange);
     }
@@ -166,61 +209,74 @@ pub(crate) fn pack_forward_uniforms(
         .try_reserve_exact(usize::try_from(total).map_err(|_| Error::InvalidRange)?)
         .map_err(|_| Error::OutOfMemory)?;
     bytes.resize(usize::try_from(total).map_err(|_| Error::InvalidRange)?, 0);
-    for ((input, transform), uniforms) in inputs.iter().zip(&transforms).zip(&material_uniforms) {
+    for (index, ((input, transform), uniforms)) in inputs
+        .iter()
+        .zip(&transforms)
+        .zip(&material_uniforms)
+        .enumerate()
+    {
         let start = transform.start;
-        for (component, value) in input.transform.iter().flatten().enumerate() {
-            let offset = start as usize + component * 4;
-            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        if let Some(normal) = input.normal_from_local {
-            for (component, value) in normal.iter().flatten().enumerate() {
-                let offset = start as usize + 64 + component * 4;
+        let particle_transform = particle_transforms.and_then(|transforms| transforms[index]);
+        if let Some(particle_transform) = particle_transform {
+            bytes[transform.start as usize..transform.end as usize]
+                .copy_from_slice(particle_transform);
+        } else {
+            for (component, value) in input.transform.iter().flatten().enumerate() {
+                let offset = start as usize + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
-            let world = input.world_from_local.ok_or(Error::InvalidRange)?;
-            let offset = start as usize + PBR_WORLD_HANDEDNESS_OFFSET;
-            bytes[offset..offset + 4].copy_from_slice(&world_handedness(world)?.to_le_bytes());
-            let camera = input
-                .shading_camera
-                .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
-            for (component, value) in camera.into_iter().enumerate() {
-                let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            if let Some(normal) = input.normal_from_local {
+                for (component, value) in normal.iter().flatten().enumerate() {
+                    let offset = start as usize + 64 + component * 4;
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                let world = input.world_from_local.ok_or(Error::InvalidRange)?;
+                let offset = start as usize + PBR_WORLD_HANDEDNESS_OFFSET;
+                bytes[offset..offset + 4].copy_from_slice(&world_handedness(world)?.to_le_bytes());
+                let camera = input
+                    .shading_camera
+                    .map_or([0.0, 0.0, 1.0, 0.0], crate::ShadingCamera::uniform);
+                for (component, value) in camera.into_iter().enumerate() {
+                    let offset = start as usize + PBR_CAMERA_OFFSET + component * 4;
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                for (component, value) in input.directional_light.uniform().into_iter().enumerate()
+                {
+                    let offset = start as usize + PBR_LIGHT_OFFSET + component * 4;
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                let surface_camera_position = input
+                    .shading_camera
+                    .and_then(crate::ShadingCamera::sorting_position)
+                    .map(|[x, y, z]| [x, y, z, 1.0])
+                    .unwrap_or([0.0; 4]);
+                for (component, value) in surface_camera_position.into_iter().enumerate() {
+                    let offset =
+                        start as usize + PBR_SURFACE_CAMERA_POSITION_OFFSET + component * 4;
+                    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                if let Some(clip_from_world) = input.clip_from_world {
+                    for (component, value) in clip_from_world.iter().flatten().enumerate() {
+                        let offset = start as usize + PBR_CLIP_FROM_WORLD_OFFSET + component * 4;
+                        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                    }
+                }
             }
-            for (component, value) in input.directional_light.uniform().into_iter().enumerate() {
-                let offset = start as usize + PBR_LIGHT_OFFSET + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            let surface_camera_position = input
-                .shading_camera
-                .and_then(crate::ShadingCamera::sorting_position)
-                .map(|[x, y, z]| [x, y, z, 1.0])
-                .unwrap_or([0.0; 4]);
-            for (component, value) in surface_camera_position.into_iter().enumerate() {
-                let offset = start as usize + PBR_SURFACE_CAMERA_POSITION_OFFSET + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            if let Some(clip_from_world) = input.clip_from_world {
-                for (component, value) in clip_from_world.iter().flatten().enumerate() {
-                    let offset = start as usize + PBR_CLIP_FROM_WORLD_OFFSET + component * 4;
+            if let Some(world) = input.world_from_local {
+                for (component, value) in world.iter().flatten().enumerate() {
+                    let offset = start as usize + 128 + component * 4;
                     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
                 }
             }
-        }
-        if let Some(world) = input.world_from_local {
-            for (component, value) in world.iter().flatten().enumerate() {
-                let offset = start as usize + 128 + component * 4;
-                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            if let Some(visibility) = input.mesh_visibility {
+                let offset = start as usize
+                    + if input.normal_from_local.is_some() {
+                        PBR_MESH_VISIBILITY_OFFSET
+                    } else {
+                        64
+                    };
+                bytes[offset..offset + 4].copy_from_slice(&visibility.get().to_le_bytes());
             }
-        }
-        if let Some(visibility) = input.mesh_visibility {
-            let offset = start as usize
-                + if input.normal_from_local.is_some() {
-                    PBR_MESH_VISIBILITY_OFFSET
-                } else {
-                    64
-                };
-            bytes[offset..offset + 4].copy_from_slice(&visibility.get().to_le_bytes());
         }
         for (value, range) in input.material_uniforms.iter().zip(uniforms) {
             let slot = &mut bytes[range.start as usize..range.end as usize];

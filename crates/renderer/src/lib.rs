@@ -21,7 +21,8 @@ mod residency;
 pub use feature::{
     CpuFeature, CpuPhase, CpuPhaseContribution, CpuPhaseContributions, DeferredPositionDeformer,
     DeformationBinding, FeatureBinding, FeatureContext, FeatureError, FeatureHandle, FeatureIssuer,
-    GpuIndirectDraw, PositionDeformation, RenderFeature, TypedFeatureSnapshot, TypedFeatureStorage,
+    GpuIndirectDraw, GpuParticle, GpuParticleError, GpuParticleUpdate, GpuParticleUpdateError,
+    GpuParticleView, PositionDeformation, RenderFeature, TypedFeatureSnapshot, TypedFeatureStorage,
     validate_context,
 };
 pub use pipeline::{
@@ -55,7 +56,7 @@ pub use render_scene::{
     SceneError, ShadingCamera,
 };
 pub use renderer::{
-    CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats,
-    OutputProcessing, OutputTransfer, Renderer, RendererError, ShaderAdmissionError,
-    ShutdownReport, Submission,
+    CaptureTextureSlot, DeferredCacheStats, DeferredProbeFacts, ForwardCacheStats, GpuParticleDraw,
+    GpuParticleSystem, OutputProcessing, OutputTransfer, Renderer, RendererError,
+    ShaderAdmissionError, ShutdownReport, Submission,
 };

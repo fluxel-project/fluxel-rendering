@@ -12,6 +12,7 @@ pub use specular_environment::{
 mod forward;
 pub(crate) mod forward_fragment;
 mod forward_instances;
+pub(crate) mod particle_material;
 pub(crate) use forward_instances::{mesh_vertex_layout, with_instance_transform};
 mod forward_sampler;
 mod forward_schema;
@@ -26,6 +27,7 @@ pub use environment::{EnvironmentIrradianceAsset, EnvironmentIrradianceData};
 pub(crate) use forward::ResolvedForwardTexture;
 #[cfg(test)]
 pub(crate) use forward::prepare_feature_draws;
+pub(crate) use forward::prepare_particle_draw;
 pub use forward::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
     ColorTextureVolumeAsset, ColorTextureVolumeData, DepthTextureArrayAsset, DepthTextureArrayData,

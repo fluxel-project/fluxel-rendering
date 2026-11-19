@@ -190,6 +190,25 @@ transform locations 4 through 7. The template supplies a perspective-correct
 varying for the affine sample coordinates. Disabling emissive omits the UV1
 attribute when emissive is its only consumer.
 
+### GPU particle material draws
+
+An externally seeded particle system retains two state buffers with storage and
+vertex usage. The first selected frame uploads the seed records. Each selected
+update reads the current state and writes the other buffer using Babylon's
+non-emitting integration branch. The same Graph consumes that write as an
+instance-rate stream for a transparent color material.
+
+The selected scene record supplies the quad, material, visibility and sort
+position. The particle state supplies world-space position, lifetime, size and
+color. The vertex program rotates the quad in view space, fades its color toward
+the authored dead color, and projects through the existing RHI view transform.
+Sorted Forward orders the particle draw with other transparent records.
+
+Only an accepted update advances the front buffer. Both states remain owned
+through covering completion, and a later submission reuses them once that
+completion has retired. Each Graph imports their final prior compute and
+vertex access states.
+
 ### Diffuse irradiance input
 
 UV0 normal materials can supply scalar occlusion and linear emissive

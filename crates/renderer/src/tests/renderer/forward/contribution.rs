@@ -93,6 +93,7 @@ fn blank_frame(device: &Device<WitnessBackend>) -> ForwardFrame<WitnessBackend> 
         uniform_bytes,
         draws: Vec::new(),
         indirect: Vec::new(),
+        particles: Vec::new(),
         draw_batches: Vec::new(),
         extent: [1, 1],
         readback_row_pitch: 256,

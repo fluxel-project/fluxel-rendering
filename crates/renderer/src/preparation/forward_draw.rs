@@ -109,6 +109,7 @@ pub(super) fn prepare_draw(
         clip_from_local,
         normal_from_local,
         instance_transforms,
+        particle: None,
         scene_refraction: None,
     })
 }

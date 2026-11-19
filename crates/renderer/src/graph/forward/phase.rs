@@ -25,6 +25,7 @@ pub(crate) struct ForwardPhaseDriver<'graph, 'frame, B: ResourceBackend> {
     pub(super) depth: Option<crate::graph::definition::TextureHandle>,
     pub(super) draws: Vec<ForwardGraphDraw>,
     pub(super) indirect: Vec<super::ForwardIndirectGraph>,
+    pub(super) particles: Vec<super::ForwardParticleGraph>,
     pub(super) declared: bool,
     pub(super) output: Option<(
         GraphPass,
@@ -52,6 +53,7 @@ pub(crate) struct OpaqueForwardPass<'pass, 'builder, 'frame, B: ResourceBackend>
     pub(super) declared: u8,
     pub(super) reads: ForwardReadState,
     pub(super) indirect: Vec<super::ForwardIndirectGraph>,
+    pub(super) particles: Vec<super::ForwardParticleGraph>,
     pub(super) environment: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_radiance: Option<crate::graph::definition::TextureHandle>,
     pub(super) specular_brdf_lut: Option<crate::graph::definition::TextureHandle>,
@@ -242,6 +244,12 @@ impl<B: ResourceBackend> OpaqueForwardPass<'_, '_, '_, B> {
                 .declare_raster_read(self.pass)
                 .map_err(|_| ())?;
         }
+        for particle in &self.particles {
+            particle
+                .graph
+                .declare_vertex_read(self.pass)
+                .map_err(|_| ())?;
+        }
         self.pass.side_effect();
         Ok((self.resolve_target.unwrap_or(self.target), self.depth))
     }
@@ -403,6 +411,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
         let upload = self.upload.ok_or(PipelineError::InvalidPhaseContribution)?;
         let draws = self.draws.clone();
         let indirect = self.indirect.clone();
+        let particles = self.particles.clone();
         let (pass, (target, depth)) = self
             .graph
             .as_deref_mut()
@@ -418,6 +427,7 @@ impl<'graph, 'frame, B: ResourceBackend> ForwardPhaseDriver<'graph, 'frame, B> {
                     reads: ForwardReadState::new(streams, uniform, textures, draws)
                         .map_err(|_| crate::graph::definition::GraphError::InvalidRange)?,
                     indirect,
+                    particles,
                     environment,
                     specular_radiance,
                     specular_brdf_lut,

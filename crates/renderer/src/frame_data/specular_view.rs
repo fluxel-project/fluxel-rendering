@@ -72,7 +72,7 @@ pub(crate) fn append_basic_deferred_view(
     Ok(start..end)
 }
 
-fn inverse(columns: [[f32; 4]; 4]) -> Result<[[f32; 4]; 4]> {
+pub(super) fn inverse(columns: [[f32; 4]; 4]) -> Result<[[f32; 4]; 4]> {
     let mut rows = [[0.0_f64; 8]; 4];
     for r in 0..4 {
         for c in 0..4 {

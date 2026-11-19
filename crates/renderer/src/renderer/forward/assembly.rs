@@ -1,7 +1,10 @@
 //! Execution of an already assembled Forward frame.
 
 use super::*;
-use crate::renderer::indirect_producer::{PreparedIndirect, realize_draws};
+use crate::renderer::{
+    indirect_producer::{PreparedIndirect, realize_draws},
+    particle_update::ParticleStep,
+};
 use std::time::Instant;
 
 impl<B> Renderer<B>
@@ -40,7 +43,7 @@ where
             &mut crate::ForwardPhaseContext<'_, '_, '_, B>,
         ) -> std::result::Result<(), crate::PipelineError>,
     {
-        self.submit_prepared_forward_with_indirect(
+        self.submit_prepared_forward_with_products(
             retained_snapshot,
             prepared_inputs,
             extent,
@@ -53,13 +56,14 @@ where
             preparation_started,
             environment_snapshot,
             Vec::new(),
+            Vec::new(),
             contribute,
         )
         .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn submit_prepared_forward_with_indirect<F>(
+    pub(super) async fn submit_prepared_forward_with_products<F>(
         &mut self,
         retained_snapshot: crate::FrameSnapshot<crate::ForwardResources>,
         prepared_inputs: Vec<crate::ForwardDrawInput>,
@@ -78,6 +82,7 @@ where
             >,
         >,
         indirect: Vec<(usize, PreparedIndirect)>,
+        particles: Vec<(usize, ParticleStep<B>)>,
         contribute: F,
     ) -> std::result::Result<super::Submission, RendererError>
     where
@@ -125,10 +130,24 @@ where
                     assembled.allocations.buffer_bytes.saturating_add(desc.size);
             }
         }
+        for (_, step) in &particles {
+            for desc in [&step.upload.desc, &step.uniform.desc] {
+                assembled.allocations.buffer_count =
+                    assembled.allocations.buffer_count.saturating_add(1);
+                assembled.allocations.buffer_bytes =
+                    assembled.allocations.buffer_bytes.saturating_add(desc.size);
+            }
+        }
         match &mut assembled.target {
             AssembledForwardTarget::Offscreen { frame }
-            | AssembledForwardTarget::HdrSurface { frame, .. } => frame.indirect = indirect,
-            AssembledForwardTarget::Surface { frame, .. } => frame.indirect = indirect,
+            | AssembledForwardTarget::HdrSurface { frame, .. } => {
+                frame.indirect = indirect;
+                frame.particles = particles;
+            }
+            AssembledForwardTarget::Surface { frame, .. } => {
+                frame.indirect = indirect;
+                frame.particles = particles;
+            }
         }
         let result = match assembled.target {
             AssembledForwardTarget::Offscreen { frame } => {

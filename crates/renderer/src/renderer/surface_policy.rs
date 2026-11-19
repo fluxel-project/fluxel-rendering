@@ -149,6 +149,7 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
             FrontFaceState::CounterClockwise
         },
         culling: match (policy.back_face_culling, input.view().mirrored) {
+            _ if input.particle().is_some() => Culling::None,
             (false, _) if policy.separate_culling_pass => Culling::SeparateBack,
             (false, _) => Culling::None,
             (true, true) => Culling::Front,

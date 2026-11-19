@@ -22,6 +22,7 @@ mod mip_generation;
 pub(crate) mod oit;
 pub(crate) mod oit_record;
 mod owner_validation;
+pub(crate) mod particle_update;
 #[allow(unused_imports)]
 // Consumed by the coordinator once it lowers resident/frame planning facts.
 pub(crate) use forward::{

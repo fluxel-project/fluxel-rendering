@@ -205,6 +205,7 @@ impl PreparedCaptureReceiver {
             clip_from_local: self.clip_from_local,
             normal_from_local: self.normal_from_local,
             instance_transforms: None,
+            particle: None,
             scene_refraction: self.scene_refraction,
         }
     }

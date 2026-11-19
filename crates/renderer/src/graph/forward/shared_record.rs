@@ -5,7 +5,8 @@ use crate::frame_data::specular_view::SPECULAR_VIEW_BYTES;
 mod shared_raster;
 pub(super) use shared_raster::{
     RasterColorSelection, RasterDepthSelection, RasterSelection, bind_and_draw,
-    bind_and_draw_indirect, record_raster_selection, record_raster_selection_with_indirect,
+    bind_and_draw_indirect, bind_and_draw_particle, record_raster_selection,
+    record_raster_selection_with_indirect,
 };
 
 pub(super) struct RecordSlots<'a> {

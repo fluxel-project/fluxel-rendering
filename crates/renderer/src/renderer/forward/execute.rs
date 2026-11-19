@@ -92,11 +92,23 @@ where
             self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
         }
+        for (_, step) in &frame.particles {
+            self.write_forward_upload(&step.upload.buffer, &step.upload_bytes)
+                .await?;
+        }
         let indirect_steps = (0..frame.indirect.len())
             .map(|index| {
                 Ok((
                     plan.indirect_upload_step(index)?,
                     plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let particle_steps = (0..frame.particles.len())
+            .map(|index| {
+                Ok((
+                    plan.particle_upload_step(index)?,
+                    plan.particle_update_step(index)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -130,9 +142,27 @@ where
                 });
             }
         }
+        for (index, ((upload_step, update_step), (_, step))) in
+            particle_steps.into_iter().zip(&frame.particles).enumerate()
+        {
+            if upload.is_ok() {
+                upload = execution.commands(upload_step, |encoder| {
+                    if step.source_incoming.is_none() {
+                        step.mark_recording();
+                    }
+                    plan.record_particle_upload(index, encoder, &frame, &image)
+                });
+            }
+            if upload.is_ok() {
+                upload = execution.commands(update_step, |encoder| {
+                    step.mark_recording();
+                    plan.record_particle_update(&self.device, index, encoder, &frame, &image)
+                });
+            }
+        }
         let raster = match upload {
             Ok(()) => execution.commands(plan.raster_step(), |encoder| {
-                if frame.indirect.is_empty() {
+                if frame.indirect.is_empty() && frame.particles.is_empty() {
                     plan.record_raster(encoder, &frame, &image)
                 } else {
                     plan.record_raster_indirect(&self.device, encoder, &frame, &image)
@@ -272,11 +302,23 @@ where
             self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
         }
+        for (_, step) in &frame.particles {
+            self.write_forward_upload(&step.upload.buffer, &step.upload_bytes)
+                .await?;
+        }
         let indirect_steps = (0..frame.indirect.len())
             .map(|index| {
                 Ok((
                     plan.indirect_upload_step(index)?,
                     plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let particle_steps = (0..frame.particles.len())
+            .map(|index| {
+                Ok((
+                    plan.particle_upload_step(index)?,
+                    plan.particle_update_step(index)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -311,11 +353,31 @@ where
                 });
             }
         }
+        for (index, ((upload_step, update_step), (_, step))) in
+            particle_steps.into_iter().zip(&frame.particles).enumerate()
+        {
+            if upload.is_ok() {
+                failure_operation = "particle parameters and seed recording";
+                upload = execution.commands(upload_step, |encoder| {
+                    if step.source_incoming.is_none() {
+                        step.mark_recording();
+                    }
+                    plan.record_particle_upload(index, encoder, &frame)
+                });
+            }
+            if upload.is_ok() {
+                failure_operation = "particle compute recording";
+                upload = execution.commands(update_step, |encoder| {
+                    step.mark_recording();
+                    plan.record_particle_update(&self.device, index, encoder, &frame)
+                });
+            }
+        }
         let raster = match upload {
             Ok(()) => {
                 failure_operation = "raster recording";
                 execution.commands(plan.raster_step(), |encoder| {
-                    if frame.indirect.is_empty() {
+                    if frame.indirect.is_empty() && frame.particles.is_empty() {
                         plan.record_raster(encoder, &frame)
                     } else {
                         plan.record_raster_indirect(&self.device, encoder, &frame)

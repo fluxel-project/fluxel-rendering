@@ -321,6 +321,7 @@ pub struct ForwardDrawInput {
     clip_from_local: [[f32; 4]; 4],
     normal_from_local: Option<[[f32; 4]; 4]>,
     instance_transforms: Option<super::forward_instances::InstanceTransforms>,
+    particle: Option<ParticleDrawPayload>,
     // The selected material resources that implement projected scene-color
     // transmission. This stays with the retained draw so stage-specific OIT
     // material recompilation cannot silently fall back to environment-only
@@ -328,12 +329,40 @@ pub struct ForwardDrawInput {
     scene_refraction: Option<forward_capture::SceneRefractionBinding>,
 }
 
+/// Renderer-private state that selects a GPU-produced particle instance stream.
+///
+/// The draw retains no native buffer. Renderer assembly supplies the exact
+/// completion-owned particle product to the reflected instance stream.
+#[derive(Clone)]
+pub(crate) struct ParticleDrawPayload {
+    count: u32,
+    transform: [u8; super::particle_material::PARTICLE_TRANSFORM_BYTES as usize],
+}
+
+impl ParticleDrawPayload {
+    /// Returns the number of particle instances consumed by this draw.
+    pub(crate) const fn count(&self) -> u32 {
+        self.count
+    }
+
+    /// Returns the fully packed particle transform uniform record.
+    pub(crate) const fn transform(
+        &self,
+    ) -> &[u8; super::particle_material::PARTICLE_TRANSFORM_BYTES as usize] {
+        &self.transform
+    }
+}
+
 impl ForwardDrawInput {
     /// Returns the concrete instance indices consumed by this draw.
     pub fn instance_range(&self) -> Range<u32> {
-        0..self
-            .instance_transforms
-            .map_or(1, |instances| instances.count)
+        0..self.particle.as_ref().map_or_else(
+            || {
+                self.instance_transforms
+                    .map_or(1, |instances| instances.count)
+            },
+            ParticleDrawPayload::count,
+        )
     }
 
     pub(crate) fn has_instance_transforms(&self) -> bool {
@@ -343,6 +372,11 @@ impl ForwardDrawInput {
     pub(crate) fn instance_reverses_winding(&self) -> bool {
         self.instance_transforms
             .is_some_and(|instances| instances.reverses_winding)
+    }
+
+    /// Returns the retained particle specialization, when this is a particle draw.
+    pub(crate) fn particle(&self) -> Option<&ParticleDrawPayload> {
+        self.particle.as_ref()
     }
 
     /// Returns the source that requested this draw.
@@ -475,7 +509,9 @@ impl ForwardDrawInput {
 
     /// Returns the exact transform-uniform payload size selected for this draw.
     pub const fn transform_uniform_bytes(&self) -> u64 {
-        if self.normal_from_local.is_some() {
+        if self.particle.is_some() {
+            super::particle_material::PARTICLE_TRANSFORM_BYTES
+        } else if self.normal_from_local.is_some() {
             if self.prepared.uses_scene_refraction() {
                 crate::frame_data::forward::PBR_SCENE_REFRACTION_TRANSFORM_BYTES
             } else {
@@ -517,6 +553,10 @@ pub(crate) use lighting::{prepare_feature_draws_with_lighting, prepare_forward_w
 #[path = "forward_draw.rs"]
 mod forward_draw;
 use forward_draw::prepare_draw;
+
+#[path = "forward_particles.rs"]
+mod particles;
+pub(crate) use particles::prepare_particle_draw;
 
 #[path = "forward_textures.rs"]
 mod forward_textures;

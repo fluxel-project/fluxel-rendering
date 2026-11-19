@@ -272,7 +272,14 @@ pub(in crate::graph::forward) fn record_raster_selection_with_indirect<
         }
         if let Some(preliminary) = draw.preliminary_pipeline.as_ref() {
             raster.set_pipeline(preliminary)?;
-            if let Some(product) = crate::residency::indirect_for_draw(&frame.indirect, draw_index)
+            if let Some((_, step)) = frame
+                .particles
+                .iter()
+                .find(|(index, _)| *index == draw_index)
+            {
+                bind_and_draw_particle(&mut raster, &frame.resident, draw, step)?;
+            } else if let Some(product) =
+                crate::residency::indirect_for_draw(&frame.indirect, draw_index)
             {
                 bind_and_draw_indirect(
                     device.ok_or(Error::InvalidState)?,
@@ -289,7 +296,15 @@ pub(in crate::graph::forward) fn record_raster_selection_with_indirect<
             raster.set_pipeline(&draw.pipeline)?;
             bound_batch = Some(draw.batch);
         }
-        if let Some(product) = crate::residency::indirect_for_draw(&frame.indirect, draw_index) {
+        if let Some((_, step)) = frame
+            .particles
+            .iter()
+            .find(|(index, _)| *index == draw_index)
+        {
+            bind_and_draw_particle(&mut raster, &frame.resident, draw, step)?;
+        } else if let Some(product) =
+            crate::residency::indirect_for_draw(&frame.indirect, draw_index)
+        {
             bind_and_draw_indirect(
                 device.ok_or(Error::InvalidState)?,
                 &mut raster,
@@ -353,6 +368,35 @@ pub(in crate::graph::forward) fn bind_and_draw_indirect<B: RasterBackend + Resou
         )?;
     }
     crate::graph::indirect::draw(device, raster, product)
+}
+
+pub(in crate::graph::forward) fn bind_and_draw_particle<B: RasterBackend + ResourceBackend>(
+    raster: &mut fluxel_rhi::api::RasterPass<'_, B>,
+    resident: &crate::residency::ForwardResidentBuffers<B>,
+    draw: &crate::residency::ForwardDraw<B>,
+    step: &crate::renderer::particle_update::ParticleStep<B>,
+) -> Result<()> {
+    for group in &draw.bind_groups {
+        raster.set_bind_group(group.slot, &group.group, &group.dynamic_offsets)?;
+    }
+    for (slot, (stream, range)) in draw
+        .vertex_streams
+        .iter()
+        .zip(&draw.vertex_ranges)
+        .enumerate()
+    {
+        raster.set_vertex_buffer(
+            u32::try_from(slot).map_err(|_| Error::InvalidRange)?,
+            &resident.streams[*stream].buffer,
+            range.clone(),
+        )?;
+    }
+    raster.set_vertex_buffer(
+        u32::try_from(draw.vertex_streams.len()).map_err(|_| Error::InvalidRange)?,
+        &step.product().buffer,
+        0..step.product().desc.size,
+    )?;
+    raster.draw(draw.vertices.clone(), draw.instances.clone())
 }
 
 fn depth_read_uses() -> TextureAccessContract {

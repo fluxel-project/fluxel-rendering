@@ -4,6 +4,7 @@
 //! may share low-level transfers and RHI completion tracking.
 pub(crate) mod deferred_pool;
 pub(crate) mod forward;
+pub(crate) mod particle;
 pub(crate) mod pool;
 
 pub(crate) mod specular_view;

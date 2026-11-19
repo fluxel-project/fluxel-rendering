@@ -6,6 +6,10 @@ mod deformation;
 pub use deformation::{DeferredPositionDeformer, DeformationBinding, PositionDeformation};
 mod indirect;
 pub use indirect::GpuIndirectDraw;
+pub(crate) mod particles;
+pub use particles::{
+    GpuParticle, GpuParticleError, GpuParticleUpdate, GpuParticleUpdateError, GpuParticleView,
+};
 
 use std::sync::{Arc, atomic::AtomicU64};
 

@@ -107,11 +107,23 @@ where
             self.write_forward_upload(&producer.upload.buffer, &producer.upload_bytes)
                 .await?;
         }
+        for (_, step) in &frame.particles {
+            self.write_forward_upload(&step.upload.buffer, &step.upload_bytes)
+                .await?;
+        }
         let indirect_steps = (0..frame.indirect.len())
             .map(|index| {
                 Ok((
                     plan.indirect_upload_step(index)?,
                     plan.indirect_compute_step(index)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let particle_steps = (0..frame.particles.len())
+            .map(|index| {
+                Ok((
+                    plan.particle_upload_step(index)?,
+                    plan.particle_update_step(index)?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -176,9 +188,27 @@ where
                 });
             }
         }
+        for (index, ((upload_step, update_step), (_, step))) in
+            particle_steps.into_iter().zip(&frame.particles).enumerate()
+        {
+            if recorded.is_ok() {
+                recorded = execution.commands(upload_step, |encoder| {
+                    if step.source_incoming.is_none() {
+                        step.mark_recording();
+                    }
+                    plan.record_hdr_particle_upload(index, encoder, &frame, image)
+                });
+            }
+            if recorded.is_ok() {
+                recorded = execution.commands(update_step, |encoder| {
+                    step.mark_recording();
+                    plan.record_hdr_particle_update(&self.device, index, encoder, &frame, image)
+                });
+            }
+        }
         if recorded.is_ok() {
             recorded = execution.commands(plan.raster_step(), |encoder| {
-                if frame.indirect.is_empty() {
+                if frame.indirect.is_empty() && frame.particles.is_empty() {
                     plan.record_hdr_raster(encoder, &frame, image)
                 } else {
                     plan.record_hdr_raster_indirect(&self.device, encoder, &frame, image)

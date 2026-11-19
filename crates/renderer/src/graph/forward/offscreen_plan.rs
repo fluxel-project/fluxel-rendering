@@ -40,6 +40,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             || self.upload_pass.1 != declaration.upload_pass.1
             || !same_mip_passes(&self.mip_passes, &declaration.mip_passes)
             || !same_indirect(&self.indirect, &declaration.indirect)
+            || !same_particles(&self.particles, &declaration.particles)
             || self.raster_pass.1 != declaration.raster_pass.1
             || self.readback_pass.1 != declaration.readback_pass.1
             || self.resident_upload_slot.resource != declaration.resident_upload_slot.resource
@@ -107,6 +108,9 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         for item in &declaration.indirect {
             expected.extend([item.graph.upload_pass, item.graph.compute_pass]);
         }
+        for item in &declaration.particles {
+            expected.extend([item.graph.upload_pass, item.graph.update_pass]);
+        }
         expected.push(declaration.raster_pass);
         if let Some(product) = oit.as_ref() {
             expected.extend(product.passes());
@@ -173,6 +177,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
             upload_pass: declaration.upload_pass,
             mip_passes: declaration.mip_passes,
             indirect: declaration.indirect,
+            particles: declaration.particles,
             raster_pass: declaration.raster_pass,
             readback_pass: declaration.readback_pass,
             resident_upload_slot: declaration.resident_upload_slot,
@@ -236,6 +241,24 @@ impl<B: ResourceBackend> ForwardPlan<B> {
                 .ok_or(Error::InvalidRange)?
                 .graph
                 .compute_pass,
+        )
+    }
+    pub(crate) fn particle_upload_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.particles
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .upload_pass,
+        )
+    }
+    pub(crate) fn particle_update_step(&self, index: usize) -> Result<StepId> {
+        self.step_for(
+            self.particles
+                .get(index)
+                .ok_or(Error::InvalidRange)?
+                .graph
+                .update_pass,
         )
     }
     pub(crate) fn readback_step(&self) -> StepId {
@@ -370,6 +393,7 @@ impl<B: ResourceBackend> ForwardPlan<B> {
         }
         validate_forward_topology(self.topology, frame.draws.len(), frame.draw_batches.len())?;
         crate::residency::validate_indirect_draws(&frame.draws, &frame.indirect)?;
+        crate::residency::validate_particle_draws(&frame.draws, &frame.particles, &frame.indirect)?;
         validate_uploads(frame)?;
         validate_batches(frame)?;
         for draw in &frame.draws {
