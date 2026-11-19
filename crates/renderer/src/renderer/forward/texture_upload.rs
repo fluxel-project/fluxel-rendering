@@ -16,14 +16,19 @@ pub(in crate::renderer) fn stage(
     max_buffer_bytes: u64,
 ) -> Result<ForwardResidentTextureInput, Error> {
     match texture {
-        ResolvedForwardTexture::Asset(texture) => {
-            let data = texture.value();
-            let (bytes, bytes_per_row) = stage_rows(
-                [data.extent[0], data.extent[1], 1],
-                4,
-                &data.rgba8,
-                max_buffer_bytes,
-            )?;
+        ResolvedForwardTexture::Asset(asset) | ResolvedForwardTexture::StorageAsset(asset) => {
+            let data = asset.value();
+            let extent = [data.extent[0], data.extent[1], 1];
+            let (bytes, bytes_per_row) = stage_rows(extent, 4, &data.rgba8, max_buffer_bytes)?;
+            if matches!(texture, ResolvedForwardTexture::StorageAsset(_)) {
+                return Ok(ForwardResidentTextureInput::Storage(
+                    ForwardTextureCopyInput {
+                        bytes,
+                        extent,
+                        bytes_per_row,
+                    },
+                ));
+            }
             Ok(ForwardResidentTextureInput::Generated(
                 ForwardTextureInput {
                     bytes,

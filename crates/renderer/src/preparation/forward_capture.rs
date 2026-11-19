@@ -3,7 +3,7 @@
 use fluxel_material::{MaterialCompiler, MaterialResourceKind};
 
 use super::{
-    forward_textures::{require_texture_sample, resolve_texture_asset, validate_texture_encoding},
+    forward_textures::{require_sampled_texture, resolve_texture_asset, validate_texture_encoding},
     *,
 };
 use crate::preparation::material::prepare_compiled_material;
@@ -123,6 +123,7 @@ pub type ForwardCaptureResources = ForwardResources;
 #[derive(Clone)]
 pub(crate) enum ResolvedForwardTexture {
     Asset(AssetSnapshot<ColorTextureAsset, ColorTextureData>),
+    StorageAsset(AssetSnapshot<ColorTextureAsset, ColorTextureData>),
     DepthAsset(AssetSnapshot<DepthTextureAsset, DepthTextureData>),
     ArrayAsset(AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>),
     GeneratedArray {
@@ -514,7 +515,7 @@ fn resolve_capture_textures(
         .zip(expected)
         .map(|(texture, expected)| match &texture.source {
             ForwardTextureSource::CaptureSlot(slot) => {
-                require_texture_sample(
+                require_sampled_texture(
                     expected,
                     fluxel_rhi::api::TextureSampleType::Float,
                     source,

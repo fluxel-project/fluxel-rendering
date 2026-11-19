@@ -102,6 +102,34 @@ pub(super) fn texture_read_uses() -> TextureAccessContract {
         TextureUsage::TEXTURE_BINDING,
     )
 }
+
+/// Selects the declared fragment-read contract from an actual material owner
+/// descriptor. Storage images are deliberately limited to the first M08
+/// material shape so renderer outputs and sampled-material routes cannot
+/// silently acquire image-load semantics.
+pub(super) fn material_read_contract_for(desc: &TextureDesc) -> Option<TextureAccessContract> {
+    if desc.dimension == fluxel_rhi::api::TextureDimension::D2
+        && desc.extent[2] == 1
+        && desc.array_layers == 1
+        && desc.format == TextureFormat::Rgba8Unorm
+        && desc.mip_levels == 1
+        && desc.samples == 1
+        && desc.usage == (TextureUsage::COPY_DST | TextureUsage::STORAGE_BINDING)
+        && desc.view_formats.is_empty()
+    {
+        return Some(texture(
+            TextureUses {
+                stages: StageMask::FRAGMENT,
+                accesses: AccessMask::SHADER_READ,
+            },
+            ImageLayout::General,
+            TextureUsage::STORAGE_BINDING,
+        ));
+    }
+    (!desc.usage.contains(TextureUsage::STORAGE_BINDING)
+        && desc.usage.contains(TextureUsage::TEXTURE_BINDING))
+        .then(texture_read_uses)
+}
 pub(super) fn texture_copy_write_uses() -> TextureAccessContract {
     texture(
         TextureUses {

@@ -140,6 +140,10 @@ impl MaterialShaderContribution {
                     MaterialResourceKind::Texture2dDepth => {
                         (BindingKind::Texture, BindingShape::Texture2dDepth)
                     }
+                    MaterialResourceKind::StorageTexture2dRgba8UnormRead => (
+                        BindingKind::StorageTexture,
+                        BindingShape::StorageTexture2dRgba8UnormRead,
+                    ),
                     MaterialResourceKind::Texture2dArrayF32 => {
                         (BindingKind::Texture, BindingShape::Texture2dArrayF32)
                     }

@@ -15,7 +15,7 @@ mod forward_sampler;
 mod forward_schema;
 pub(crate) mod forward_templates;
 pub(crate) use forward_schema::{
-    MaterialBindingSchema, MaterialTextureBinding, material_binding_schema,
+    MaterialBindingSchema, MaterialTextureAccess, MaterialTextureBinding, material_binding_schema,
 };
 mod forward_sources;
 mod geometry;

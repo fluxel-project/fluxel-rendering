@@ -31,7 +31,6 @@ use program_fixed::{
 
 use program_layout::{
     material_sampler, material_uniform, ordinary_sampler, sampled_texture,
-    sampled_texture_with_dimension,
 };
 
 pub(crate) use program_cache::DeferredProgramCache;
@@ -406,8 +405,13 @@ where
                 material_uniform(binding.binding, binding.size, binding.visibility.clone())
             })
             .collect();
-        entries.extend(schema.textures.iter().map(|texture| {
-            sampled_texture_with_dimension(texture.binding, texture.sample, texture.dimension)
+        entries.extend(schema.textures.iter().map(|texture| BindGroupLayoutEntry {
+            binding: texture.binding,
+            visibility: vec![ShaderStage::Fragment],
+            ty: texture.layout_type(),
+            count: BindingCount::One,
+            partially_bound: false,
+            nonuniform_indexing: false,
         }));
         entries.extend(
             schema

@@ -11,10 +11,11 @@ use std::{
 
 use fluxel_assets::{AssetId, AssetSnapshot};
 use fluxel_rhi::{
-    api::{AccessMask, BufferUses, DeviceId, ImageLayout, StageMask, TextureUses},
+    api::{AccessMask, BufferUses, DeviceId, StageMask, TextureUsage},
     backend::ResourceBackend,
 };
 
+use crate::graph::material_read_contract;
 use crate::preparation::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
     ColorTextureVolumeAsset, ColorTextureVolumeData, DepthTextureAsset, DepthTextureData,
@@ -46,12 +47,16 @@ impl ForwardGeometryCacheKey {
     }
 }
 
-/// Cache identity for one completed sampled-texture realization on one RHI
-/// device. The asset kind remains part of the identity, so a color texture
-/// generation can never alias an authored radiance-chain generation.
+/// Cache identity for one completed texture realization on one RHI device.
+/// Asset kind and binding usage distinguish physical owners of the same generation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ForwardTextureCacheKey {
     Color {
+        asset: AssetId<ColorTextureAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
+    StorageColor {
         asset: AssetId<ColorTextureAsset>,
         generation: u64,
         device: DeviceId,
@@ -109,6 +114,7 @@ impl ForwardTextureCacheKey {
     fn device(self) -> DeviceId {
         match self {
             Self::Color { device, .. }
+            | Self::StorageColor { device, .. }
             | Self::ColorArray { device, .. }
             | Self::ColorVolume { device, .. }
             | Self::Depth { device, .. }
@@ -175,6 +181,13 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         device: DeviceId,
     ) -> Option<ForwardTextureCacheKey> {
         match draw.resolved_textures().get(texture_index)? {
+            ResolvedForwardTexture::StorageAsset(texture) => {
+                Some(ForwardTextureCacheKey::StorageColor {
+                    asset: texture.id(),
+                    generation: texture.generation().get(),
+                    device,
+                })
+            }
             ResolvedForwardTexture::Asset(texture) => {
                 Some(ForwardTextureCacheKey::from_snapshot(texture, device))
             }
@@ -297,7 +310,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         true
     }
 
-    /// Publishes one completed sampled texture under its exact immutable asset key.
+    /// Publishes one completed texture under its exact immutable asset key.
     ///
     /// `texture` must come from a frame whose upload completion has already
     /// been observed by the coordinator. The cache records the shader-read
@@ -313,6 +326,14 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         {
             return false;
         }
+        let Some(contract) = material_read_contract(&texture.desc) else {
+            return false;
+        };
+        if matches!(key, ForwardTextureCacheKey::StorageColor { .. })
+            != (contract.descriptor_usage == TextureUsage::STORAGE_BINDING)
+        {
+            return false;
+        }
         self.textures.insert(
             key,
             ForwardTexture {
@@ -321,8 +342,8 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 view_dimension: texture.view_dimension,
                 desc: texture.desc.clone(),
                 instance: texture.instance,
-                incoming: shader_read_uses(),
-                layout: ImageLayout::ShaderReadOnly,
+                incoming: contract.uses,
+                layout: contract.layout,
                 device: texture.device,
                 filterable: texture.filterable,
             },
@@ -358,6 +379,9 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .retain(|_, source| source.strong_count() != 0);
         self.textures.retain(|key, _| match key {
             ForwardTextureCacheKey::Color {
+                asset, generation, ..
+            }
+            | ForwardTextureCacheKey::StorageColor {
                 asset, generation, ..
             } => textures.contains(&(*asset, *generation)),
             ForwardTextureCacheKey::ColorArray { .. } => self.color_arrays.contains_key(key),
@@ -422,12 +446,5 @@ fn vertex_read_uses() -> BufferUses {
     BufferUses {
         stages: StageMask::VERTEX_INPUT,
         accesses: AccessMask::VERTEX_READ,
-    }
-}
-
-fn shader_read_uses() -> TextureUses {
-    TextureUses {
-        stages: StageMask::FRAGMENT,
-        accesses: AccessMask::SHADER_READ,
     }
 }

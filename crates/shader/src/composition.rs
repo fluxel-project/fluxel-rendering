@@ -352,6 +352,20 @@ fn binding_shape(module: &naga::Module, global: &naga::GlobalVariable) -> Option
             naga::AddressSpace::Handle,
             naga::TypeInner::Image {
                 dim: naga::ImageDimension::D2,
+                arrayed: false,
+                class:
+                    naga::ImageClass::Storage {
+                        format: naga::StorageFormat::Rgba8Unorm,
+                        access,
+                    },
+            },
+        ) if *access == naga::StorageAccess::LOAD => {
+            Some(BindingShape::StorageTexture2dRgba8UnormRead)
+        }
+        (
+            naga::AddressSpace::Handle,
+            naga::TypeInner::Image {
+                dim: naga::ImageDimension::D2,
                 arrayed: true,
                 class:
                     naga::ImageClass::Sampled {

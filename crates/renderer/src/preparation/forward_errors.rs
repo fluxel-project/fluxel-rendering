@@ -226,6 +226,13 @@ pub enum ForwardPreparationError {
         /// Sample type provided by the supplied source kind.
         actual: fluxel_rhi::api::TextureSampleType,
     },
+    /// A supplied source cannot provide the material binding's reflected access role.
+    TextureResourceAccessMismatch {
+        /// Draw requesting the texture.
+        source: ForwardDrawSource,
+        /// Material texture resource name.
+        resource: String,
+    },
     /// A draw supplied sampler state for a material without a matching sampler.
     UnexpectedSamplerResource {
         /// Draw requesting the binding.

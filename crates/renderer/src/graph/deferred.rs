@@ -68,8 +68,8 @@ use fluxel_rhi::{
         AccessMask, AttachmentView, BufferUsage, BufferUses, ClearColor, ColorAttachment,
         CommandEncoder, CompletionPoint, DepthStencilAttachment, Device, Error, ExecutionStatus,
         ImageLayout, LaneClass, LaneId, LoadOp, PlanId, RasterPassDesc, Rect, Result, StageMask,
-        StepId, StoreOp, SubmissionPlan, TexelCopyBufferLayout, TextureAspects, TextureFormat,
-        TextureRegion, TextureUsage, TextureUses, Viewport,
+        StepId, StoreOp, SubmissionPlan, TexelCopyBufferLayout, TextureAspects, TextureDesc,
+        TextureFormat, TextureRegion, TextureUsage, TextureUses, Viewport,
     },
     backend::{
         CommandBackend, ExecutionBackend, ExecutionMode, ExecutionOutcome, RasterBackend,
@@ -346,6 +346,10 @@ fn sampled_read() -> TextureAccessContract {
         ImageLayout::ShaderReadOnly,
         TextureUsage::TEXTURE_BINDING,
     )
+}
+
+fn material_read(desc: &TextureDesc) -> Result<TextureAccessContract> {
+    crate::graph::forward::material_read_contract(desc).ok_or(Error::InvalidState)
 }
 
 fn color_write() -> TextureAccessContract {

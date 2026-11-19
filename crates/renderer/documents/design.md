@@ -299,8 +299,8 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
-2D depth textures, and independently named ordinary and comparison samplers in
-material group zero.
+2D depth textures, read-only RGBA8 storage textures, and independently named
+ordinary and comparison samplers in material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -323,6 +323,14 @@ finite normalized depth in the RHI's existing depth range. The resident view and
 Graph copy and shader-read ranges use the depth aspect. Material WGSL reads it
 through `texture_depth_2d`, for example with `textureLoad`. A depth source has
 no color transfer encoding.
+
+A `texture_storage_2d<rgba8unorm, read>` material binding accepts a single-mip
+linear RGBA8 asset through the named texture input. It uses a storage view
+and `textureLoad`. Graph uploads through CopyDst and transitions the actual
+owner to General for fragment reads. The completed owner retains that layout
+and has a separate residency key from a sampled view of the same asset.
+The RHI checks storage support for the exact texture descriptor on the
+selected device.
 
 UV0 PBR programs can carry typed Material varyings from a shared vertex graph
 to the fragment evaluator. Preparation assigns locations after the template's

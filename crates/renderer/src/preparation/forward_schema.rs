@@ -1,7 +1,10 @@
 //! Consumer-owned binding facts derived from one prepared material.
 
 use fluxel_material::{MaterialResourceKind, MaterialTextureEncoding, MaterialType};
-use fluxel_rhi::api::{ShaderStage as RhiShaderStage, TextureSampleType, TextureViewDimension};
+use fluxel_rhi::api::{
+    BindingType, ShaderStage as RhiShaderStage, StorageAccess, TextureFormat, TextureSampleType,
+    TextureViewDimension,
+};
 use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
@@ -32,10 +35,37 @@ pub(crate) struct MaterialTextureBinding {
     pub(crate) name: String,
     /// Exact RHI view dimension reflected from the declared material resource.
     pub(crate) dimension: TextureViewDimension,
-    /// Exact RHI texture sample type reflected from the declared material resource.
-    pub(crate) sample: TextureSampleType,
+    /// Exact shader access role reflected from the declared material resource.
+    pub(crate) access: MaterialTextureAccess,
     /// Optional material-declared asset encoding requirement.
     pub(crate) encoding: Option<MaterialTextureEncoding>,
+}
+
+/// Exact shader-visible access role for one material texture binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MaterialTextureAccess {
+    /// A sampled texture with its exact RHI sample type.
+    Sampled(TextureSampleType),
+    /// A read-only RGBA8 UNorm storage texture.
+    StorageRead,
+}
+
+impl MaterialTextureBinding {
+    /// Returns the exact RHI layout type required by this reflected texture binding.
+    pub(crate) fn layout_type(&self) -> BindingType {
+        match self.access {
+            MaterialTextureAccess::Sampled(sample) => BindingType::SampledTexture {
+                sample,
+                dimension: self.dimension,
+                multisampled: false,
+            },
+            MaterialTextureAccess::StorageRead => BindingType::StorageTexture {
+                format: TextureFormat::Rgba8Unorm,
+                dimension: TextureViewDimension::D2,
+                access: StorageAccess::Read,
+            },
+        }
+    }
 }
 
 /// One material-declared sampler location, ordered by binding.
@@ -80,7 +110,8 @@ pub(crate) fn material_binding_schema(
             | MaterialResourceKind::Texture2dArrayF32
             | MaterialResourceKind::TextureCubeF32
             | MaterialResourceKind::Texture3dF32
-            | MaterialResourceKind::Texture2dDepth => original_textures += 1,
+            | MaterialResourceKind::Texture2dDepth
+            | MaterialResourceKind::StorageTexture2dRgba8UnormRead => original_textures += 1,
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
             MaterialResourceKind::Sampler { comparison: true } => {}
             kind if kind.uniform_material_type().is_some() => {
@@ -98,7 +129,8 @@ pub(crate) fn material_binding_schema(
                 | MaterialResourceKind::Texture2dArrayF32
                 | MaterialResourceKind::TextureCubeF32
                 | MaterialResourceKind::Texture3dF32
-                | MaterialResourceKind::Texture2dDepth => {
+                | MaterialResourceKind::Texture2dDepth
+                | MaterialResourceKind::StorageTexture2dRgba8UnormRead => {
                     schema.unused_textures.push(binding.name.clone())
                 }
                 MaterialResourceKind::Sampler { .. } => {
@@ -132,10 +164,10 @@ pub(crate) fn material_binding_schema(
                     .iter()
                     .find(|requirement| requirement.resource == binding.name)
                     .map(|requirement| requirement.encoding);
-                let (dimension, sample, encoding) = match (binding.kind, actual.shape) {
+                let (dimension, access, encoding) = match (binding.kind, actual.shape) {
                     (MaterialResourceKind::Texture2dF32, Some(BindingShape::Texture2dF32)) => (
                         TextureViewDimension::D2,
-                        TextureSampleType::Float,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Float),
                         declared_encoding,
                     ),
                     (
@@ -143,30 +175,44 @@ pub(crate) fn material_binding_schema(
                         Some(BindingShape::Texture2dArrayF32),
                     ) => (
                         TextureViewDimension::D2Array,
-                        TextureSampleType::Float,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Float),
                         declared_encoding,
                     ),
                     (MaterialResourceKind::TextureCubeF32, Some(BindingShape::TextureCubeF32)) => (
                         TextureViewDimension::Cube,
-                        TextureSampleType::Float,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Float),
                         declared_encoding,
                     ),
                     (MaterialResourceKind::Texture3dF32, Some(BindingShape::Texture3dF32)) => (
                         TextureViewDimension::D3,
-                        TextureSampleType::Float,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Float),
                         declared_encoding,
                     ),
-                    (MaterialResourceKind::Texture2dDepth, Some(BindingShape::Texture2dDepth)) => {
-                        (TextureViewDimension::D2, TextureSampleType::Depth, None)
-                    }
+                    (MaterialResourceKind::Texture2dDepth, Some(BindingShape::Texture2dDepth)) => (
+                        TextureViewDimension::D2,
+                        MaterialTextureAccess::Sampled(TextureSampleType::Depth),
+                        None,
+                    ),
                     _ => return Err(invalid()),
                 };
                 schema.textures.push(MaterialTextureBinding {
                     binding: location,
                     name: binding.name.clone(),
                     dimension,
-                    sample,
+                    access,
                     encoding,
+                });
+            }
+            MaterialResourceKind::StorageTexture2dRgba8UnormRead
+                if actual.kind == BindingKind::StorageTexture
+                    && actual.shape == Some(BindingShape::StorageTexture2dRgba8UnormRead) =>
+            {
+                schema.textures.push(MaterialTextureBinding {
+                    binding: location,
+                    name: binding.name.clone(),
+                    dimension: TextureViewDimension::D2,
+                    access: MaterialTextureAccess::StorageRead,
+                    encoding: None,
                 });
             }
             MaterialResourceKind::Sampler { comparison }

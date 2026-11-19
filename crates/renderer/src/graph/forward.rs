@@ -133,6 +133,14 @@ pub(crate) struct ForwardOitInput<'a, B: ResourceBackend> {
 
 type Outcome<B> = <<B as ExecutionBackend>::Mode as ExecutionMode<B>>::Outcome;
 
+/// Returns the exact Graph contract for one admitted material texture owner.
+///
+/// Renderer residency uses this same selector when normalizing a completed
+/// owner for its next Graph import.
+pub(crate) fn material_read_contract(desc: &TextureDesc) -> Option<TextureAccessContract> {
+    access_contracts::material_read_contract_for(desc)
+}
+
 fn same_buffer_slots(left: &[BufferSlot], right: &[BufferSlot]) -> bool {
     left.len() == right.len()
         && left

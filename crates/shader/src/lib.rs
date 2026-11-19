@@ -201,6 +201,8 @@ pub enum BindingShape {
     Texture2dF32,
     /// Non-arrayed, non-multisampled depth 2D texture.
     Texture2dDepth,
+    /// Non-arrayed `rgba8unorm` 2D storage texture with read-only access.
+    StorageTexture2dRgba8UnormRead,
     /// Arrayed, non-multisampled float 2D texture.
     ///
     /// This is one `texture_2d_array<f32>` resource addressed with a layer

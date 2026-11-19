@@ -114,11 +114,7 @@ where
         material_entries.extend(schema.textures.iter().map(|texture| BindGroupLayoutEntry {
             binding: texture.binding,
             visibility: vec![ShaderStage::Fragment],
-            ty: BindingType::SampledTexture {
-                sample: texture.sample,
-                dimension: texture.dimension,
-                multisampled: false,
-            },
+            ty: texture.layout_type(),
             count: BindingCount::One,
             partially_bound: false,
             nonuniform_indexing: false,

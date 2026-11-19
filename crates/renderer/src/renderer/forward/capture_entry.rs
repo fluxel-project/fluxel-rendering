@@ -281,7 +281,9 @@ pub(super) fn retain_capture_assets(
         assets.geometry.push(geometry.clone());
     }
     for source in receiver.resolved_textures() {
-        if let crate::preparation::ResolvedForwardTexture::Asset(texture) = source {
+        if let crate::preparation::ResolvedForwardTexture::Asset(texture)
+        | crate::preparation::ResolvedForwardTexture::StorageAsset(texture) = source
+        {
             if !assets.textures.iter().any(|entry| {
                 entry.id() == texture.id() && entry.generation() == texture.generation()
             }) {

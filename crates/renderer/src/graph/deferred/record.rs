@@ -209,7 +209,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         .ok_or(Error::InvalidRange)?,
                     material_mips_layers(&texture.desc),
                     AccessKind::Read,
-                    sampled_read(),
+                    material_read(&texture.desc)?,
                 )?;
             }
         }

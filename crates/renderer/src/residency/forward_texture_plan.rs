@@ -103,28 +103,22 @@ pub(super) fn plan_texture_uploads(
                 generated_mips.is_some(),
             ))
         }
-        ForwardResidentTextureInput::Depth(copy) => {
-            if copy.extent[2] != 1 {
-                return Err(Error::InvalidRange);
-            }
-            validate_four_byte_copy(&copy)?;
-            let extent = copy.extent;
-            append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
-            Ok(ForwardTextureAllocation {
-                desc: TextureDesc {
-                    label: Some("fluxel forward material depth texture".into()),
-                    dimension: TextureDimension::D2,
-                    extent,
-                    array_layers: 1,
-                    format: TextureFormat::Depth32Float,
-                    mip_levels: 1,
-                    samples: 1,
-                    usage: TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING,
-                    view_formats: Vec::new(),
-                },
-                view_dimension: TextureViewDimension::D2,
-            })
-        }
+        ForwardResidentTextureInput::Depth(copy) => plan_typed_2d_upload(
+            bytes,
+            uploads,
+            index,
+            copy,
+            TextureFormat::Depth32Float,
+            TextureUsage::TEXTURE_BINDING,
+        ),
+        ForwardResidentTextureInput::Storage(copy) => plan_typed_2d_upload(
+            bytes,
+            uploads,
+            index,
+            copy,
+            TextureFormat::Rgba8Unorm,
+            TextureUsage::STORAGE_BINDING,
+        ),
         ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
             validate_authored_rgba16float_texture(&texture)?;
             let base_extent = texture.mips[0].extent;
@@ -148,6 +142,36 @@ pub(super) fn plan_texture_uploads(
             })
         }
     }
+}
+
+fn plan_typed_2d_upload(
+    bytes: &mut Vec<u8>,
+    uploads: &mut Vec<ForwardTextureUpload>,
+    index: usize,
+    copy: ForwardTextureCopyInput,
+    format: TextureFormat,
+    binding_usage: TextureUsage,
+) -> Result<ForwardTextureAllocation> {
+    if copy.extent[2] != 1 {
+        return Err(Error::InvalidRange);
+    }
+    validate_four_byte_copy(&copy)?;
+    let extent = copy.extent;
+    append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
+    Ok(ForwardTextureAllocation {
+        desc: TextureDesc {
+            label: Some("fluxel forward material texture".into()),
+            dimension: TextureDimension::D2,
+            extent,
+            array_layers: 1,
+            format,
+            mip_levels: 1,
+            samples: 1,
+            usage: TextureUsage::COPY_DST | binding_usage,
+            view_formats: Vec::new(),
+        },
+        view_dimension: TextureViewDimension::D2,
+    })
 }
 
 fn rgba8_allocation(

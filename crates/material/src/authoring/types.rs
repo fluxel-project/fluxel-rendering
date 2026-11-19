@@ -147,6 +147,8 @@ pub enum MaterialResourceKind {
     Texture2dF32,
     /// A read-only `texture_depth_2d` binding.
     Texture2dDepth,
+    /// A read-only `texture_storage_2d<rgba8unorm, read>` binding.
+    StorageTexture2dRgba8UnormRead,
     /// A sampler binding with its WGSL comparison mode.
     Sampler {
         /// Whether the shader declares `sampler_comparison` rather than `sampler`.
@@ -207,6 +209,7 @@ impl MaterialResourceKind {
         match self {
             Self::Texture2dF32 => "texture_2d<f32>",
             Self::Texture2dDepth => "texture_depth_2d",
+            Self::StorageTexture2dRgba8UnormRead => "texture_storage_2d<rgba8unorm, read>",
             Self::Texture2dArrayF32 => "texture_2d_array<f32>",
             Self::TextureCubeF32 => "texture_cube<f32>",
             Self::Texture3dF32 => "texture_3d<f32>",
@@ -229,6 +232,7 @@ impl MaterialResourceKind {
             Self::UniformMat4x4 => Some(MaterialType::Mat4x4),
             Self::Texture2dF32
             | Self::Texture2dDepth
+            | Self::StorageTexture2dRgba8UnormRead
             | Self::Texture2dArrayF32
             | Self::TextureCubeF32
             | Self::Texture3dF32

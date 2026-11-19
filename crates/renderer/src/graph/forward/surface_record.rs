@@ -83,7 +83,8 @@ impl<B: ResourceBackend> SurfaceForwardPlan<B> {
                         .ok_or(Error::InvalidRange)?,
                     material_mips_layers(&frame.resident.textures[*texture].desc),
                     AccessKind::Read,
-                    texture_read_uses(),
+                    material_read_contract(&frame.resident.textures[*texture].desc)
+                        .ok_or(Error::InvalidState)?,
                 )?;
             }
         }

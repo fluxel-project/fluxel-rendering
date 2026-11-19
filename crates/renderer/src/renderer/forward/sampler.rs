@@ -182,6 +182,7 @@ struct MaterialTextureProperties {
     mip_levels: u32,
     generate_mips: bool,
     view_dimension: TextureViewDimension,
+    binding_usage: TextureUsage,
 }
 
 impl MaterialTextureProperties {
@@ -197,6 +198,7 @@ impl MaterialTextureProperties {
             mip_levels: generated_mips.unwrap_or(data.mip_levels),
             generate_mips: generated_mips.is_some(),
             view_dimension: view.dimension(),
+            binding_usage: TextureUsage::TEXTURE_BINDING,
         }
     }
 
@@ -208,6 +210,11 @@ impl MaterialTextureProperties {
         }
     }
 
+    fn uses_float_filtering(&self) -> bool {
+        self.binding_usage == TextureUsage::TEXTURE_BINDING
+            && self.format != TextureFormat::Depth32Float
+    }
+
     fn d2(format: TextureFormat) -> Self {
         Self {
             extent: None,
@@ -216,6 +223,7 @@ impl MaterialTextureProperties {
             mip_levels: 1,
             generate_mips: false,
             view_dimension: TextureViewDimension::D2,
+            binding_usage: TextureUsage::TEXTURE_BINDING,
         }
     }
 }
@@ -231,6 +239,14 @@ fn material_texture_properties(
                 mip_levels: data.mip_levels,
                 generate_mips: data.mip_levels > 1,
                 ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
+            }
+        }
+        ResolvedForwardTexture::StorageAsset(texture) => {
+            let [width, height] = texture.value().extent;
+            MaterialTextureProperties {
+                extent: Some([width, height, 1]),
+                binding_usage: TextureUsage::STORAGE_BINDING,
+                ..MaterialTextureProperties::d2(TextureFormat::Rgba8Unorm)
             }
         }
         ResolvedForwardTexture::ArrayAsset(texture) => {
@@ -298,7 +314,7 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
     if mip_levels > max_mip_levels {
         return Err(Error::InvalidRange);
     }
-    let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
+    let mut usage = TextureUsage::COPY_DST | properties.binding_usage;
     if properties.generate_mips {
         usage |= TextureUsage::COPY_SRC;
     }
@@ -317,11 +333,7 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
         Support::Supported(s) if mip_levels > s.max_mips => {
             Err(Error::Unsupported("material texture mip levels"))
         }
-        Support::Supported(s)
-            if properties.format == TextureFormat::Depth32Float || s.filterable =>
-        {
-            Ok(())
-        }
+        Support::Supported(s) if !properties.uses_float_filtering() || s.filterable => Ok(()),
         Support::Supported(_) => Err(Error::Unsupported("filterable material texture")),
         Support::Unsupported(reason) => Err(Error::Unsupported(reason)),
     }
@@ -334,7 +346,7 @@ pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
     expected_encoding: crate::TextureEncoding,
     require_filterable: bool,
 ) -> std::result::Result<(), Error> {
-    validate_sampled_texture_owner_with_properties(
+    validate_texture_owner_with_properties(
         resident,
         texture,
         selected_device,
@@ -343,8 +355,8 @@ pub(crate) fn validate_sampled_texture_owner<B: ResourceBackend>(
     )
 }
 
-/// Revalidates a sampled owner against the exact immutable descriptor facts.
-fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
+/// Revalidates an image owner against the exact immutable descriptor facts.
+fn validate_texture_owner_with_properties<B: ResourceBackend>(
     resident: &crate::residency::ForwardResidentBuffers<B>,
     texture: usize,
     selected_device: DeviceId,
@@ -367,11 +379,11 @@ fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
         || owner.desc.mip_levels != expected.mip_levels
         || owner.view_dimension != expected.view_dimension
         || owner.desc.samples != 1
-        || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+        || !owner.desc.usage.contains(expected.binding_usage)
+        || (expected.binding_usage == TextureUsage::STORAGE_BINDING
+            && owner.desc.usage != (TextureUsage::COPY_DST | TextureUsage::STORAGE_BINDING))
         || (expected.generate_mips && !owner.desc.usage.contains(TextureUsage::COPY_SRC))
-        || (require_filterable
-            && expected.format != TextureFormat::Depth32Float
-            && !owner.filterable)
+        || (require_filterable && expected.uses_float_filtering() && !owner.filterable)
     {
         return Err(Error::InvalidState);
     }
@@ -399,7 +411,7 @@ pub(crate) fn validate_material_texture_owner<B: ResourceBackend>(
     if expected.view_dimension != expected_dimension {
         return Err(Error::InvalidState);
     }
-    validate_sampled_texture_owner_with_properties(
+    validate_texture_owner_with_properties(
         resident,
         texture,
         selected_device,

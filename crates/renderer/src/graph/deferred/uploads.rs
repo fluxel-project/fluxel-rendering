@@ -110,12 +110,9 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
                 && uploaded.iter().skip(1).flatten().all(|uploaded| !uploaded))
                 || (!texture.desc.usage.contains(TextureUsage::COPY_SRC)
                     && uploaded.iter().flatten().all(|uploaded| *uploaded))
-                || (texture.incoming
-                    == TextureUses {
-                        stages: StageMask::FRAGMENT,
-                        accesses: AccessMask::SHADER_READ,
-                    }
-                    && texture.layout == ImageLayout::ShaderReadOnly)
+                || crate::graph::material_read_contract(&texture.desc).is_some_and(|contract| {
+                    texture.incoming == contract.uses && texture.layout == contract.layout
+                })
         });
     let streams_ready = streams
         .iter()

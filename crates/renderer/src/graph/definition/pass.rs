@@ -2,6 +2,23 @@
 use super::*;
 
 impl PassBuilder<'_> {
+    /// Returns the exact descriptor of this current texture version.
+    ///
+    /// Callers still declare a range separately; this only selects the RHI
+    /// access contract from the owner-derived Graph descriptor.
+    pub(crate) fn texture_desc(&self, texture: TextureHandle) -> Result<&TextureDesc, GraphError> {
+        self.graph.texture_version(texture)?;
+        let node = self
+            .graph
+            .textures
+            .get(texture.resource)
+            .ok_or(GraphError::UnknownResource)?;
+        if node.current != texture.version {
+            return Err(GraphError::StaleVersion);
+        }
+        Ok(&node.desc)
+    }
+
     /// Returns the complete declared footprint of this current texture version.
     /// Actual allocation facts remain independently checked when binding it.
     pub(crate) fn full_texture_range(

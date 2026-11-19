@@ -74,6 +74,7 @@ pub(crate) enum ForwardResidentTextureInput {
         generated_mips: Option<u32>,
     },
     Depth(ForwardTextureCopyInput),
+    Storage(ForwardTextureCopyInput),
     AuthoredRgba16Float(ForwardAuthoredRgba16FloatTextureInput),
 }
 

@@ -115,7 +115,7 @@ pub(in crate::graph::forward) fn record_raster_selection<B: RasterBackend + Reso
                     .ok_or(Error::InvalidRange)?,
                 material_mips_layers(&owner.desc),
                 AccessKind::Read,
-                texture_read_uses(),
+                material_read_contract(&owner.desc).ok_or(Error::InvalidState)?,
             )?;
         }
     }
