@@ -57,6 +57,16 @@ pub(super) fn validate(
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
+    if matches!(
+        output,
+        SurfaceOutput::MetallicRoughnessUv0Graph {
+            normal: Some(_),
+            world_normal: Some(_),
+            ..
+        }
+    ) {
+        return Err(MaterialError::PbrGraphNormalConflict);
+    }
     if (extensions.occlusion.is_some()
         || extensions.emissive.is_some()
         || emissive_configuration.is_some())
@@ -95,25 +105,21 @@ pub(super) fn validate(
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
             (Some(properties.as_str()), true, Some(normal.as_str()))
         }
-        SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => {
-            (None, true, normal.as_deref())
-        }
+        SurfaceOutput::MetallicRoughnessUv0Graph { normal, .. } => (None, true, normal.as_deref()),
     };
     let reserved = reserved_names(output);
-    for name in std::iter::once(root_name)
-        .chain(properties)
-        .chain(normal)
-    {
+    for name in std::iter::once(root_name).chain(properties).chain(normal) {
         if reserved.contains(name) {
             return Err(MaterialError::TopLevelNameConflict { name: name.into() });
         }
     }
     if let Some(properties) = properties {
-        let properties_signature = functions.get(properties).ok_or_else(|| {
-            MaterialError::MissingSurfaceProperties {
-                properties: properties.into(),
-            }
-        })?;
+        let properties_signature =
+            functions
+                .get(properties)
+                .ok_or_else(|| MaterialError::MissingSurfaceProperties {
+                    properties: properties.into(),
+                })?;
         if properties_signature.output != MaterialType::Vec2 {
             return Err(MaterialError::SurfacePropertiesTypeMismatch {
                 properties: properties.into(),
@@ -305,7 +311,13 @@ pub(super) fn supplies_pbr_context(output: &SurfaceOutput) -> bool {
 
 pub(super) fn supports_surface_effects(output: &SurfaceOutput) -> bool {
     matches!(output, SurfaceOutput::MetallicRoughnessUv0Normal { .. })
-        || matches!(output, SurfaceOutput::MetallicRoughnessUv0Graph { normal: Some(_), .. })
+        || matches!(
+            output,
+            SurfaceOutput::MetallicRoughnessUv0Graph {
+                normal: Some(_),
+                ..
+            }
+        )
 }
 
 fn has_evaluator_inputs(signature: &FunctionSignature, expects_uv0: bool) -> bool {

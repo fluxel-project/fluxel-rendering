@@ -46,6 +46,12 @@ pub enum SurfaceOutput {
         roughness: MaterialNodeInputSource,
         /// Optional UV0 tangent-space normal callable.
         normal: Option<String>,
+        /// Optional graph source yielding a world-space pre-orientation normal.
+        ///
+        /// This must resolve to `Vec3` and cannot be combined with `normal`.
+        /// Renderer applies its established orientation and sidedness rules
+        /// after consuming this graph result.
+        world_normal: Option<MaterialNodeInputSource>,
     },
 }
 

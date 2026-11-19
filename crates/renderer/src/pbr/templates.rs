@@ -175,7 +175,7 @@ fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4
     let surface = evaluate_pbr_surface_uv0(input.uv0, input.world_position, pbr_normal(input.world_normal), input.camera_position, input.vertex_uv0);
     let material = surface.base;
     let properties = surface.properties;
-    let normal = pbr_surface_normal(input.world_normal, front_facing);
+    let normal = pbr_surface_normal(select(input.world_normal, surface.world_normal, surface.has_world_normal), front_facing);
     if material_alpha_rejected(material.a) { discard; }
     return vec4<f32>(pbr_direct_light_view(material.rgb, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04)), material_output_alpha(material.a));
 }
@@ -212,7 +212,7 @@ fn deferred_gbuffer_fs(input: PbrUv0VertexOutput, @builtin(front_facing) front_f
     let material = surface.base;
     let base = max(material.rgb, vec3<f32>(0.0));
     let properties = surface.properties;
-    let normal = pbr_surface_normal(input.world_normal, front_facing);
+    let normal = pbr_surface_normal(select(input.world_normal, surface.world_normal, surface.has_world_normal), front_facing);
     if material_alpha_rejected(material.a) { discard; }
     var output: PbrGbufferUv0Output;
     output.base_metal = vec4<f32>(base, clamp(properties.x, 0.0, 1.0));
@@ -398,7 +398,7 @@ fn renderer_forward_shade(input: PbrUv0VertexOutput, front_facing: bool) -> vec4
     let material = surface.base;
     let base = material.rgb;
     let properties = surface.properties;
-    let normal = pbr_surface_normal(input.world_normal, front_facing);
+    let normal = pbr_surface_normal(select(input.world_normal, surface.world_normal, surface.has_world_normal), front_facing);
     let direct = pbr_direct_light_view(base, properties, normal, pbr_shading_view_direction(input.world_position, pbr_transforms.shading_camera), vec3<f32>(0.04));
     let indirect = pbr_diffuse_irradiance(base, properties.x, normal, pbr_environment_irradiance, pbr_environment_sampler, vec3<f32>(1.0 - 0.04));
     if material_alpha_rejected(material.a) { discard; }

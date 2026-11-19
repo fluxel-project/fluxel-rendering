@@ -232,12 +232,16 @@ pub enum MaterialError {
     },
     /// A graph metallic-roughness surface requires a selected node graph.
     PbrGraphRequired,
+    /// A graph PBR surface selected both a tangent-space normal callable and
+    /// a world-space graph normal source.
+    PbrGraphNormalConflict,
     /// A graph metallic-roughness property must select a node or node output.
     PbrGraphPropertySource {
         /// Property being selected.
         property: &'static str,
     },
-    /// A graph metallic-roughness property did not resolve to a scalar.
+    /// A graph PBR property did not resolve to its required type: `F32` for
+    /// metallic/roughness or `Vec3` for `world_normal`.
     PbrGraphPropertyType {
         /// Property being selected.
         property: &'static str,

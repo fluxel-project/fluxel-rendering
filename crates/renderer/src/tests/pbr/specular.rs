@@ -125,7 +125,7 @@ fn actual_material_evaluators(request: &ShaderCompositionRequest) -> SourceUnit 
             ""
         };
         format!(
-            "struct FluxelPbrSurface {{ base: vec4<f32>, properties: vec2<f32>, }}; fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> {{ return uv; }} fn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface {{ return FluxelPbrSurface(vec4<f32>(0.8 + uv.x * 0.0 + world_position.x * 0.0 + world_normal.x * 0.0 + camera_position.x * 0.0 + vertex_uv0.x * 0.0, 0.6, 0.4, 1.0), vec2<f32>(0.2 + uv.x * 0.0, 0.7)); }} {normal} {effects}"
+            "struct FluxelPbrSurface {{ base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, }}; fn evaluate_pbr_vertex_uv0(uv: vec2<f32>) -> vec2<f32> {{ return uv; }} fn evaluate_pbr_surface_uv0(uv: vec2<f32>, world_position: vec3<f32>, world_normal: vec3<f32>, camera_position: vec3<f32>, vertex_uv0: vec2<f32>) -> FluxelPbrSurface {{ return FluxelPbrSurface(vec4<f32>(0.8 + uv.x * 0.0 + world_position.x * 0.0 + world_normal.x * 0.0 + camera_position.x * 0.0 + vertex_uv0.x * 0.0, 0.6, 0.4, 1.0), vec2<f32>(0.2 + uv.x * 0.0, 0.7), vec3<f32>(0.0), false); }} {normal} {effects}"
         )
     } else {
         "fn evaluate_material() -> vec4<f32> { return vec4<f32>(0.8, 0.6, 0.4, 1.0); } fn evaluate_metallic_roughness() -> vec2<f32> { return vec2<f32>(0.2, 0.7); }".into()

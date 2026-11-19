@@ -64,6 +64,12 @@ impl NodeGraphStage {
 
 type PropertyRoot = (MaterialNodeId, Option<MaterialNodeOutput>);
 
+struct PbrGraphRoots<T> {
+    metallic: T,
+    roughness: T,
+    world_normal: Option<T>,
+}
+
 pub(super) fn normalize_surface(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
@@ -81,8 +87,13 @@ pub(super) fn normalize_surface(
         SurfaceOutput::MetallicRoughnessUv0Graph {
             metallic,
             roughness,
+            world_normal,
             ..
-        } => Some([("metallic", *metallic), ("roughness", *roughness)]),
+        } => Some(PbrGraphRoots {
+            metallic: *metallic,
+            roughness: *roughness,
+            world_normal: *world_normal,
+        }),
         _ => None,
     };
     normalize(
@@ -108,7 +119,7 @@ fn normalize(
     stage: NodeGraphStage,
     accepts_uv0: bool,
     available_context: &[(MaterialNodeInputSource, &str, MaterialType)],
-    properties: Option<[(&'static str, MaterialNodeInputSource); 2]>,
+    properties: Option<PbrGraphRoots<MaterialNodeInputSource>>,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut context_types = Vec::new();
     if accepts_uv0 {
@@ -139,17 +150,23 @@ fn normalize(
         )?;
     }
     let properties = properties
-        .map(
-            |[(metallic, metallic_source), (roughness, roughness_source)]| -> Result<_, MaterialError> {
-                Ok([
-                    property_root(metallic, metallic_source, &nodes, functions)?,
-                    property_root(roughness, roughness_source, &nodes, functions)?,
-                ])
-            },
-        )
+        .map(|roots| -> Result<_, MaterialError> {
+            let property = |name, source, ty| property_root(name, source, ty, &nodes, functions);
+            Ok(PbrGraphRoots {
+                metallic: property("metallic", roots.metallic, MaterialType::F32)?,
+                roughness: property("roughness", roots.roughness, MaterialType::F32)?,
+                world_normal: roots
+                    .world_normal
+                    .map(|normal| property("world_normal", normal, MaterialType::Vec3))
+                    .transpose()?,
+            })
+        })
         .transpose()?;
-    let output_roots =
-        std::iter::once(graph.output).chain(properties.iter().flatten().map(|(node, _)| *node));
+    let mut output_roots = vec![graph.output];
+    if let Some(roots) = &properties {
+        output_roots.extend([roots.metallic.0, roots.roughness.0]);
+        output_roots.extend(roots.world_normal.map(|(node, _)| node));
+    }
     let order = evaluation_order(output_roots, &nodes)?;
 
     let uv = context_name("uv", functions);
@@ -192,8 +209,7 @@ fn normalize(
         .collect::<BTreeMap<_, _>>();
     let mut source = String::from("// Generated material node graph.\n");
     let result_type = if properties.is_some() {
-        source
-            .push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32> };\n");
+        source.push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool };\n");
         "FluxelPbrGraphValues"
     } else {
         output.wgsl()
@@ -240,11 +256,16 @@ fn normalize(
     }
     let base = &locals[&graph.output];
     let mut callables = Vec::new();
-    if let Some([metallic, roughness]) = properties {
-        let metallic = property_expression(metallic, &locals);
-        let roughness = property_expression(roughness, &locals);
+    if let Some(roots) = properties {
+        let metallic = property_expression(roots.metallic, &locals);
+        let roughness = property_expression(roots.roughness, &locals);
+        let has_world_normal = roots.world_normal.is_some();
+        let normal = roots.world_normal.map_or_else(
+            || "vec3<f32>(0.0)".into(),
+            |normal| property_expression(normal, &locals),
+        );
         source.push_str(&format!(
-            "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}));\n}}\n"
+            "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}), {normal}, {has_world_normal});\n}}\n"
         ));
     } else {
         source.push_str(&format!("    return {base};\n}}\n"));
@@ -268,6 +289,7 @@ fn normalize(
 fn property_root(
     property: &'static str,
     source: MaterialNodeInputSource,
+    expected: MaterialType,
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
     functions: &BTreeMap<String, FunctionSignature>,
 ) -> Result<PropertyRoot, MaterialError> {
@@ -287,7 +309,7 @@ fn property_root(
             })?,
         None => upstream,
     };
-    if actual != MaterialType::F32 {
+    if actual != expected {
         return Err(MaterialError::PbrGraphPropertyType { property, actual });
     }
     Ok((node, port))

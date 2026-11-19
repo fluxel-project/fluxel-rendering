@@ -69,7 +69,7 @@ struct PbrSpecularVertexOutput {
     let normal = if normal_map {
         "pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0))"
     } else {
-        "input.world_normal"
+        "select(input.world_normal, surface.world_normal, surface.has_world_normal)"
     };
     let geometric_normal = if normal_map {
         "pbr_normal(input.geometric_world_normal)"

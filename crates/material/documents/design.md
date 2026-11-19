@@ -201,6 +201,7 @@ SurfaceOutput::ColorUv0
 SurfaceOutput::MetallicRoughness { properties }
 SurfaceOutput::MetallicRoughnessUv0 { properties }
 SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal }
+SurfaceOutput::MetallicRoughnessUv0Graph { metallic, roughness, normal, world_normal }
 ```
 
 Every surface also has a static `SurfacePolicy`. Its alpha mode is `Opaque`,
@@ -278,7 +279,12 @@ The graph's selected output supplies the `vec4<f32>` base color. The
 compiler evaluates the union of their dependencies once, so multiple ports
 of a texture sample share its result. Each root can consume the same UV0,
 vertex-derived UV0, world-space position, geometric normal, and camera
-eye inputs. An optional normal callable supplies a tangent-space normal. Renderer owns the mesh ABI and
+eye inputs. An optional normal callable supplies a tangent-space normal. A
+`MetallicRoughnessUv0Graph::world_normal` source instead selects one `vec3<f32>`
+node or node-output value in the same graph. It is a world-space,
+pre-orientation direction: Renderer applies its established orientation and
+sidedness rules after evaluating it. `world_normal` and the legacy tangent-space
+normal callable are mutually exclusive. Renderer owns the mesh ABI and
 must provide UV0 at its documented vertex location; Material does not invent
 normal, view, tangent, or filtering facts.
 
