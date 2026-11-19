@@ -87,13 +87,14 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
             {
                 return false;
             }
-            // Mip generation has a D2-only producer contract. Layered
-            // textures therefore require explicit copies for every mip/layer.
+            // Mip generation uses the D2 descriptor family: layered textures
+            // seed every base layer and let the Graph fill the rest.
             (texture.desc.usage.contains(TextureUsage::COPY_SRC)
-                && texture.desc.array_layers == 1
-                && uploaded.first().is_some_and(|layers| layers.iter().all(|layer| *layer)))
-                || ((!texture.desc.usage.contains(TextureUsage::COPY_SRC)
-                    || texture.desc.array_layers != 1)
+                && uploaded
+                    .first()
+                    .is_some_and(|layers| layers.iter().all(|layer| *layer))
+                && uploaded.iter().skip(1).flatten().all(|uploaded| !uploaded))
+                || (!texture.desc.usage.contains(TextureUsage::COPY_SRC)
                     && uploaded.iter().flatten().all(|uploaded| *uploaded))
                 || (texture.incoming
                     == TextureUses {

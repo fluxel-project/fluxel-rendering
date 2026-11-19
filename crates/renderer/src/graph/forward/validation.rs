@@ -369,20 +369,20 @@ fn validate_texture_uploads<B: ResourceBackend>(
         {
             return Err(Error::InvalidRange);
         }
-        if !texture.desc.usage.contains(TextureUsage::COPY_SRC)
-            && mips.iter().flatten().any(|uploaded| *uploaded)
-            && mips.iter().flatten().any(|uploaded| !uploaded)
-        {
-            return Err(Error::InvalidRange);
-        }
-        if texture.desc.usage.contains(TextureUsage::COPY_SRC)
-            && texture.desc.array_layers != 1
-            && mips.iter().flatten().any(|uploaded| *uploaded)
-            && mips.iter().flatten().any(|uploaded| !uploaded)
-        {
-            // The shared mip producer is D2-only. A layered material owner
-            // may still use COPY_SRC for another reason, but must provide
-            // every mip/layer itself.
+        let any_uploaded = mips.iter().flatten().any(|uploaded| *uploaded);
+        if texture.desc.usage.contains(TextureUsage::COPY_SRC) {
+            // COPY_SRC selects Graph mip production: every array layer seeds
+            // mip zero, and no authored higher-mip copy may race that chain.
+            if any_uploaded
+                && (!mips
+                    .first()
+                    .is_some_and(|layers| layers.iter().all(|layer| *layer))
+                    || mips.iter().skip(1).flatten().any(|uploaded| *uploaded))
+            {
+                return Err(Error::InvalidRange);
+            }
+        } else if any_uploaded && mips.iter().flatten().any(|uploaded| !uploaded) {
+            // Without COPY_SRC every physical subresource is authored.
             return Err(Error::InvalidRange);
         }
     }

@@ -324,7 +324,6 @@ impl<B: ResourceBackend> DeferredPlan<B> {
             let desc = &frame.resident.textures[index].desc;
             if *fresh
                 && desc.dimension == fluxel_rhi::api::TextureDimension::D2
-                && desc.array_layers == 1
                 && desc.usage.contains(TextureUsage::COPY_SRC)
             {
                 let (generated, passes) = super::super::mip_generation::declare_chain(

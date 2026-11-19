@@ -60,6 +60,20 @@ pub(super) fn validate_texture_array(
         .ok_or(ForwardPreparationError::InvalidTexture { source })
 }
 
+/// Validates a base-only array payload and a complete generated mip target.
+pub(super) fn validate_generated_texture_array(
+    texture: &ColorTextureArrayData,
+    mip_levels: u32,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    validate_texture_array(texture, source)?;
+    let maximum_mips = 1 + texture.extent[0].max(texture.extent[1]).ilog2();
+    if texture.mip_levels != 1 || !(2..=maximum_mips).contains(&mip_levels) {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    Ok(())
+}
+
 pub(super) fn validate_cpu_geometry(
     geometry: &GeometryData,
     prepared: &crate::PreparedGeometry,

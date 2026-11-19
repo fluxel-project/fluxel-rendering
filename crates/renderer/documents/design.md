@@ -339,8 +339,12 @@ within each mip. Each level uses the base width and height shifted by the
 level index and clamped to one. Renderer allocates a D2 image and creates a
 D2Array view spanning every supplied mip and layer, including when the array
 has one layer. The upload graph declares and copies each supplied mip and
-layer. Raster sampling declares the full view range because a material shader
-can select its layer and LOD dynamically. Submission rejects a
+layer. A base-only array can instead request generated mip levels through
+`ForwardTextureBinding::array_asset_with_generated_mips`. Graph passes sample
+the previous mip of each layer independently with linear filtering, preserving
+the sampled format and its transfer encoding. The generated mip count is part
+of the resident cache key. Raster sampling declares the full view range
+because a material shader can select its layer and LOD dynamically. Submission rejects a
 capture source without its producer context. Capture resources share this model.
 The capture entry takes an explicit producer slot independently of the receiver
 resource names; multiple logical bindings may alias that one GPU product while

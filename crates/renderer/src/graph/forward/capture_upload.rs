@@ -20,7 +20,6 @@ pub(super) fn declare_mip_generations(
     for (index, cold) in handles.cold_textures.iter().copied().enumerate() {
         if !cold
             || spec.textures[index].desc.dimension != fluxel_rhi::api::TextureDimension::D2
-            || spec.textures[index].desc.array_layers != 1
             || !spec.textures[index]
                 .desc
                 .usage

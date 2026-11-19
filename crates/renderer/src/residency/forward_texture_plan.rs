@@ -35,11 +35,13 @@ pub(super) fn plan_texture_uploads(
             let extent = texture.copies.first().ok_or(Error::InvalidRange)?.extent;
             let layers = usize::try_from(texture.layers).map_err(|_| Error::InvalidRange)?;
             let mips = usize::try_from(texture.mip_levels).map_err(|_| Error::InvalidRange)?;
+            let uploaded_mips = if texture.generate_mips { 1 } else { mips };
             if extent.contains(&0)
                 || layers == 0
                 || mips == 0
+                || (texture.generate_mips && mips == 1)
                 || texture.mip_levels > 1 + extent[0].max(extent[1]).ilog2()
-                || mips.checked_mul(layers) != Some(texture.copies.len())
+                || uploaded_mips.checked_mul(layers) != Some(texture.copies.len())
             {
                 return Err(Error::InvalidRange);
             }
@@ -63,7 +65,7 @@ pub(super) fn plan_texture_uploads(
                 texture.mip_levels,
                 texture.layers,
                 TextureViewDimension::D2Array,
-                false,
+                texture.generate_mips,
             ))
         }
         ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {

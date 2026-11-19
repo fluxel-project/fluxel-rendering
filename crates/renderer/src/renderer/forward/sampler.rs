@@ -1,6 +1,6 @@
 //! Forward material sampler admission and owner checks.
 use super::*;
-use crate::preparation::ResolvedForwardTexture;
+use crate::preparation::{ColorTextureArrayData, ResolvedForwardTexture};
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
     prepared
         .binding_schema()
@@ -160,6 +160,17 @@ struct MaterialTextureProperties {
 }
 
 impl MaterialTextureProperties {
+    fn array(data: &ColorTextureArrayData, generated_mips: Option<u32>) -> Self {
+        Self {
+            extent: Some(data.extent),
+            format: data.encoding.rgba8_format(),
+            layers: data.layers,
+            mip_levels: generated_mips.unwrap_or(data.mip_levels),
+            generate_mips: generated_mips.is_some(),
+            view_dimension: TextureViewDimension::D2Array,
+        }
+    }
+
     fn d2(format: TextureFormat) -> Self {
         Self {
             extent: None,
@@ -186,15 +197,10 @@ fn material_texture_properties(
             }
         }
         ResolvedForwardTexture::ArrayAsset(texture) => {
-            let data = texture.value();
-            MaterialTextureProperties {
-                extent: Some(data.extent),
-                format: data.encoding.rgba8_format(),
-                layers: data.layers,
-                mip_levels: data.mip_levels,
-                generate_mips: false,
-                view_dimension: TextureViewDimension::D2Array,
-            }
+            MaterialTextureProperties::array(texture.value(), None)
+        }
+        ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
+            MaterialTextureProperties::array(asset.value(), Some(*mip_levels))
         }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
@@ -290,6 +296,7 @@ fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
         || owner.view_dimension != expected.view_dimension
         || owner.desc.samples != 1
         || !owner.desc.usage.contains(TextureUsage::TEXTURE_BINDING)
+        || (expected.generate_mips && !owner.desc.usage.contains(TextureUsage::COPY_SRC))
         || (require_filterable && !owner.filterable)
     {
         return Err(Error::InvalidState);

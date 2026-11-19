@@ -32,10 +32,12 @@ pub(crate) struct ForwardAuthoredRgba16FloatTextureInput {
 }
 
 /// Immutable RGBA8 images ordered by mip, then by layer.
+/// A generated chain carries the base image for every layer.
 pub(crate) struct ForwardArrayTextureInput {
     pub(crate) layers: u32,
     pub(crate) mip_levels: u32,
     pub(crate) copies: Vec<ForwardTextureCopyInput>,
+    pub(crate) generate_mips: bool,
     pub(crate) encoding: crate::preparation::TextureEncoding,
 }
 

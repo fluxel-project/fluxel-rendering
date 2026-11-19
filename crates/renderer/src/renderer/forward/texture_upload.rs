@@ -29,7 +29,12 @@ pub(in crate::renderer) fn stage(
             ))
         }
         ResolvedForwardTexture::ArrayAsset(texture) => {
-            stage_array(texture.value(), max_buffer_bytes).map(ForwardResidentTextureInput::Array)
+            stage_array(texture.value(), None, max_buffer_bytes)
+                .map(ForwardResidentTextureInput::Array)
+        }
+        ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
+            stage_array(asset.value(), Some(*mip_levels), max_buffer_bytes)
+                .map(ForwardResidentTextureInput::Array)
         }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
@@ -53,8 +58,12 @@ pub(in crate::renderer) fn stage(
 
 fn stage_array(
     data: &ColorTextureArrayData,
+    generated_mips: Option<u32>,
     max_buffer_bytes: u64,
 ) -> Result<ForwardArrayTextureInput, Error> {
+    if generated_mips.is_some() && data.mip_levels != 1 {
+        return Err(Error::InvalidRange);
+    }
     let mip_payloads = data.mip_payloads().ok_or(Error::InvalidRange)?;
     let layers = usize::try_from(data.layers).map_err(|_| Error::InvalidRange)?;
     let mips = usize::try_from(data.mip_levels).map_err(|_| Error::InvalidRange)?;
@@ -85,7 +94,8 @@ fn stage_array(
     Ok(ForwardArrayTextureInput {
         copies,
         layers: data.layers,
-        mip_levels: data.mip_levels,
+        mip_levels: generated_mips.unwrap_or(data.mip_levels),
+        generate_mips: generated_mips.is_some(),
         encoding: data.encoding,
     })
 }

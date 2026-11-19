@@ -1,4 +1,4 @@
-//! Graph-declared GPU mip generation for one ordinary Forward texture.
+//! Graph-declared GPU mip generation for resident D2 material textures.
 //!
 //! Each blit receives its own pass because a middle mip is a CopyDst in one
 //! blit and a CopySrc in the next.  That makes its state transition explicit
@@ -67,7 +67,11 @@ pub(crate) fn declare_chain(
     if levels == 0
         || levels != desc.mip_levels
         || desc.dimension != TextureDimension::D2
-        || !desc.usage.contains(TextureUsage::COPY_SRC | TextureUsage::COPY_DST)
+        || desc.extent[2] != 1
+        || desc.array_layers == 0
+        || !desc
+            .usage
+            .contains(TextureUsage::COPY_SRC | TextureUsage::COPY_DST)
     {
         return Err(GraphError::InvalidRange);
     }
@@ -80,14 +84,14 @@ pub(crate) fn declare_chain(
             graph.add_pass(format!("mip-generation-{destination_mip}"), |pass| {
                 pass.read_texture_with_use(
                     current,
-                    one_color_mip(source_mip),
+                    all_color_mip_layers(source_mip, desc.array_layers),
                     copy_read().uses,
                     ImageLayout::CopySrc,
                     TextureUsage::COPY_SRC,
                 )?;
                 pass.write_texture_with_use(
                     current,
-                    one_color_mip(destination_mip),
+                    all_color_mip_layers(destination_mip, desc.array_layers),
                     copy_write().uses,
                     ImageLayout::CopyDst,
                     TextureUsage::COPY_DST,
@@ -120,7 +124,7 @@ pub(super) fn declare_capture_seed(
         .ok_or(GraphError::UnknownResource)?
         .desc
         .clone();
-    if source.resource == destination.resource || desc.mip_levels < 2 {
+    if source.resource == destination.resource || desc.mip_levels < 2 || desc.array_layers != 1 {
         return Err(GraphError::InvalidRange);
     }
     let (pass, output) = graph.add_pass("capture-refraction-copy-base", |pass| {
@@ -168,38 +172,46 @@ pub(crate) fn record<B: ResourceBackend + CommandBackend>(
     let source_extent = mip_extent(&generation.desc, generation.source_mip)?;
     let destination_extent = mip_extent(&generation.desc, generation.destination_mip)?;
     let pass = bindings.pass(generation.pass)?;
+    let layers = if generation.seed_source.is_some() {
+        1
+    } else {
+        generation.desc.array_layers
+    };
     let source = pass.texture(
         generation.seed_source.unwrap_or(slot),
-        one_color_mip(generation.source_mip),
+        all_color_mip_layers(generation.source_mip, layers),
         AccessKind::Read,
         copy_read(),
     )?;
     let destination = pass.texture(
         slot,
-        one_color_mip(generation.destination_mip),
+        all_color_mip_layers(generation.destination_mip, layers),
         AccessKind::Write,
         copy_write(),
     )?;
     pass.transition(encoder)?;
-    let source = TextureRegion {
-        texture: source,
-        mip: generation.source_mip,
-        origin: [0, 0, 0],
-        extent: source_extent,
-        aspect: TextureAspects::COLOR,
-    };
-    let destination = TextureRegion {
-        texture: destination,
-        mip: generation.destination_mip,
-        origin: [0, 0, 0],
-        extent: destination_extent,
-        aspect: TextureAspects::COLOR,
-    };
-    if generation.seed_source.is_some() {
-        encoder.copy_texture(source, destination)
-    } else {
-        encoder.blit(source, destination, FilterMode::Linear)
+    for layer in 0..layers {
+        let source = TextureRegion {
+            texture: source,
+            mip: generation.source_mip,
+            origin: [0, 0, layer],
+            extent: source_extent,
+            aspect: TextureAspects::COLOR,
+        };
+        let destination = TextureRegion {
+            texture: destination,
+            mip: generation.destination_mip,
+            origin: [0, 0, layer],
+            extent: destination_extent,
+            aspect: TextureAspects::COLOR,
+        };
+        if generation.seed_source.is_some() {
+            encoder.copy_texture(source, destination)?;
+        } else {
+            encoder.blit(source, destination, FilterMode::Linear)?;
+        }
     }
+    Ok(())
 }
 
 fn validate_actual<B: ResourceBackend>(
@@ -211,8 +223,9 @@ fn validate_actual<B: ResourceBackend>(
         || !same_texture_desc(&actual.desc, desc)
         || desc.dimension != TextureDimension::D2
         || desc.extent[2] != 1
-        || desc.array_layers != 1
+        || desc.array_layers == 0
         || desc.samples != 1
+        || (generation.seed_source.is_some() && desc.array_layers != 1)
         || (generation.seed_source.is_none() && generation.source_mip >= generation.destination_mip)
         || generation.destination_mip >= desc.mip_levels
     {
@@ -244,7 +257,11 @@ fn mip_extent(desc: &TextureDesc, mip: u32) -> Result<[u32; 3]> {
 }
 
 fn one_color_mip(mip: u32) -> TextureRange {
-    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..1)
+    all_color_mip_layers(mip, 1)
+}
+
+fn all_color_mip_layers(mip: u32, layers: u32) -> TextureRange {
+    TextureRange::new(TextureAspects::COLOR, mip..mip + 1, 0..layers)
 }
 
 fn copy_read() -> TextureAccessContract {

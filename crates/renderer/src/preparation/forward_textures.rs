@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use super::forward_validation::{validate_texture, validate_texture_array};
+use super::forward_validation::{
+    validate_generated_texture_array, validate_texture, validate_texture_array,
+};
 use super::*;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
 
@@ -73,11 +75,7 @@ pub(super) fn resolve_texture_asset(
 ) -> Result<ResolvedForwardTexture, ForwardPreparationError> {
     match binding {
         ForwardTextureSource::Asset(reference) => {
-            require_texture_dimension(
-                expected,
-                fluxel_rhi::api::TextureViewDimension::D2,
-                source,
-            )?;
+            require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
             let asset = resolve_asset(&assets.textures, *reference, "texture", source)?;
             validate_texture(asset.value(), source)?;
             validate_texture_encoding(expected, asset.value().encoding, source)?;
@@ -93,12 +91,21 @@ pub(super) fn resolve_texture_asset(
             validate_texture_encoding(expected, asset.value().encoding, source)?;
             Ok(ResolvedForwardTexture::ArrayAsset(asset.clone()))
         }
-        ForwardTextureSource::RefractionRadiance(asset) => {
+        ForwardTextureSource::ArrayAssetWithGeneratedMips { asset, mip_levels } => {
             require_texture_dimension(
                 expected,
-                fluxel_rhi::api::TextureViewDimension::D2,
+                fluxel_rhi::api::TextureViewDimension::D2Array,
                 source,
             )?;
+            validate_generated_texture_array(asset.value(), *mip_levels, source)?;
+            validate_texture_encoding(expected, asset.value().encoding, source)?;
+            Ok(ResolvedForwardTexture::GeneratedArray {
+                asset: asset.clone(),
+                mip_levels: *mip_levels,
+            })
+        }
+        ForwardTextureSource::RefractionRadiance(asset) => {
+            require_texture_dimension(expected, fluxel_rhi::api::TextureViewDimension::D2, source)?;
             validate_texture_encoding(expected, TextureEncoding::Linear, source)?;
             Ok(ResolvedForwardTexture::RefractionRadiance(asset.clone()))
         }

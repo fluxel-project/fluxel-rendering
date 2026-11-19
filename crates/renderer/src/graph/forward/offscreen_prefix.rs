@@ -367,12 +367,12 @@ pub(super) fn declare_prefix<B: ResourceBackend>(
         })
         .map_err(|_| Error::InvalidState)?;
     let mut mip_passes = Vec::new();
-    for upload in &spec.texture_uploads {
-        let index = upload.texture;
-        let owner = spec.textures.get(index).ok_or(Error::InvalidRange)?;
-        if upload.mip_level == 0
+    for (index, owner) in spec.textures.iter().enumerate() {
+        if spec
+            .texture_uploads
+            .iter()
+            .any(|upload| upload.texture == index)
             && owner.desc.dimension == fluxel_rhi::api::TextureDimension::D2
-            && owner.desc.array_layers == 1
             && owner.desc.usage.contains(TextureUsage::COPY_SRC)
         {
             let (texture, passes) = super::super::mip_generation::declare_chain(

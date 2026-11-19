@@ -59,6 +59,7 @@ pub(crate) enum ForwardTextureCacheKey {
         asset: AssetId<ColorTextureArrayAsset>,
         generation: u64,
         device: DeviceId,
+        generated_mips: Option<u32>,
     },
     RefractionRadiance {
         asset: AssetId<RefractionRadianceAsset>,
@@ -159,14 +160,10 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 Some(ForwardTextureCacheKey::from_snapshot(texture, device))
             }
             ResolvedForwardTexture::ArrayAsset(texture) => {
-                let key = ForwardTextureCacheKey::ColorArray {
-                    asset: texture.id(),
-                    generation: texture.generation().get(),
-                    device,
-                };
-                self.color_arrays
-                    .insert(key, Arc::downgrade(&texture.value_arc()));
-                Some(key)
+                Some(self.array_texture_key(texture, device, None))
+            }
+            ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
+                Some(self.array_texture_key(asset, device, Some(*mip_levels)))
             }
             ResolvedForwardTexture::RefractionRadiance(texture) => {
                 let key =
@@ -177,6 +174,23 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             }
             ResolvedForwardTexture::CaptureSlot(_) => None,
         }
+    }
+
+    fn array_texture_key(
+        &mut self,
+        texture: &AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+        device: DeviceId,
+        generated_mips: Option<u32>,
+    ) -> ForwardTextureCacheKey {
+        let key = ForwardTextureCacheKey::ColorArray {
+            asset: texture.id(),
+            generation: texture.generation().get(),
+            device,
+            generated_mips,
+        };
+        self.color_arrays
+            .insert(key, Arc::downgrade(&texture.value_arc()));
+        key
     }
 
     /// Returns reusable vertex streams for a completed exact geometry generation.
