@@ -7,6 +7,7 @@ mod contribution;
 mod diffuse_roughness;
 mod names;
 mod node_graph;
+mod opacity;
 mod pbr_factors;
 mod surface;
 mod texture_encoding;

@@ -47,6 +47,12 @@ pub(super) fn validate_definition(
         functions,
         resources,
     )?;
+    super::opacity::validate(
+        definition.pbr_opacity_configuration(),
+        definition.output(),
+        parameters,
+        resources,
+    )?;
     super::transmission::validate_energy_mode(
         definition.refraction_energy_mode(),
         definition.transmission_extensions(),

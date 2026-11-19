@@ -159,10 +159,19 @@ pub(super) fn append_uv0_evaluators(
     root_pbr_inputs: &[(MaterialNodeInputSource, MaterialType)],
     properties: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
+    opacity: Option<&crate::PbrOpacityConfiguration>,
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
-    let forbidden = factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
+    let mut forbidden =
+        factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
+    if let Some(opacity) = opacity {
+        forbidden.extend(opacity.alpha_parameter.as_deref());
+        if let Some(map) = &opacity.texture {
+            forbidden.extend([map.texture.as_str(), map.sampler.as_str()]);
+            forbidden.extend(map.level_parameter.as_deref());
+        }
+    }
     let uv = if factors.is_some() {
         unique_local("pbr_uv", forbidden.iter().copied())
     } else {
@@ -246,6 +255,23 @@ pub(super) fn append_uv0_evaluators(
             format!("{values}.has_world_normal"),
             format!("{values}.occlusion"),
         )
+    };
+    let base = if let Some(opacity) = opacity {
+        let base_local = unique_local("pbr_opacity_base", forbidden.iter().copied());
+        let alpha_local = unique_local("pbr_opacity_alpha", forbidden.iter().copied());
+        super::opacity::append(
+            generated,
+            opacity,
+            &base,
+            &base_local,
+            &alpha_local,
+            &uv,
+            texture_uv,
+            uv1.as_deref(),
+        );
+        format!("vec4<f32>({base_local}.rgb, {alpha_local})")
+    } else {
+        base
     };
     generated.push_str(&format!(
         "    return FluxelPbrSurface({base}, {properties}, {world_normal}, {has_world_normal}, {occlusion});\n}}\n"

@@ -18,6 +18,7 @@ pub(in crate::compiler) fn append_evaluators(
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
     normal_map_settings: Option<NormalMapSettings>,
+    opacity: Option<&crate::PbrOpacityConfiguration>,
     policy: SurfacePolicy,
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
@@ -40,7 +41,7 @@ pub(in crate::compiler) fn append_evaluators(
         }
         SurfaceOutput::MetallicRoughnessUv0 { properties } => {
             pbr_factors::append_uv0_evaluators(
-                generated, root_fragment, root_pbr_inputs, Some(properties), pbr_surface_factors,
+                generated, root_fragment, root_pbr_inputs, Some(properties), pbr_surface_factors, opacity,
                 vertex_varyings, texture_uv,
             );
             if ambient_occlusion_color {
@@ -54,6 +55,7 @@ pub(in crate::compiler) fn append_evaluators(
                 root_pbr_inputs,
                 Some(properties),
                 pbr_surface_factors,
+                opacity,
                 vertex_varyings,
                 texture_uv,
             );
@@ -74,6 +76,7 @@ pub(in crate::compiler) fn append_evaluators(
                 root_pbr_inputs,
                 None,
                 pbr_surface_factors,
+                opacity,
                 vertex_varyings,
                 texture_uv,
             );

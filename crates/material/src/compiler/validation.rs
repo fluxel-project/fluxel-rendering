@@ -27,6 +27,7 @@ pub(super) struct NormalizedMaterialIr {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    opacity: Option<crate::PbrOpacityConfiguration>,
     pub(super) ambient_occlusion_configuration: Option<AmbientOcclusionConfiguration>,
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
     pub(super) normal_map_settings: Option<NormalMapSettings>,
@@ -131,6 +132,7 @@ impl NormalizedMaterialIr {
             definition.diffuse_roughness_configuration(),
             definition.ambient_occlusion_configuration(),
             definition.transmission_texture_configuration(),
+            definition.pbr_opacity_configuration(),
         )?;
         validate_top_level_names(
             &fragments,
@@ -157,6 +159,7 @@ impl NormalizedMaterialIr {
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
+            opacity: definition.pbr_opacity_configuration().cloned(),
             ambient_occlusion_configuration: definition.ambient_occlusion_configuration().cloned(),
             diffuse_roughness_configuration: definition.diffuse_roughness_configuration().cloned(),
             normal_map_settings: definition.normal_map_settings(),
@@ -193,6 +196,7 @@ impl NormalizedMaterialIr {
             &mut canonical,
         );
         super::surface::canonical_normal_map_settings(self.normal_map_settings, &mut canonical);
+        super::opacity::canonical(self.opacity.as_ref(), &mut canonical);
         super::surface::canonical_policy(self.surface_policy, &mut canonical);
         if self.cull_face == crate::SurfaceCullFace::Front {
             canonical_piece(&mut canonical, "surface-cull-face", "front");
@@ -283,6 +287,7 @@ impl NormalizedMaterialIr {
             self.diffuse_roughness_configuration.as_ref(),
             self.ambient_occlusion_configuration.as_ref(),
             self.transmission_texture_configuration.as_ref(),
+            self.opacity.as_ref(),
         );
         super::surface::append_evaluators(
             &mut generated,
@@ -295,6 +300,7 @@ impl NormalizedMaterialIr {
             self.emissive_configuration.as_ref(),
             self.pbr_surface_factors.as_ref(),
             self.normal_map_settings,
+            self.opacity.as_ref(),
             self.surface_policy,
             vertex_varyings,
             &self.texture_uv,

@@ -16,6 +16,7 @@ pub(super) fn validate(
     diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
     ambient_occlusion: Option<&AmbientOcclusionConfiguration>,
     transmission: Option<&crate::TransmissionTextureConfiguration>,
+    opacity: Option<&crate::PbrOpacityConfiguration>,
 ) -> Result<BTreeMap<String, MaterialTextureUv>, MaterialError> {
     let mut generated_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -47,6 +48,9 @@ pub(super) fn validate(
         {
             generated_texture_names.insert(texture.texture.as_str());
         }
+    }
+    if let Some(map) = opacity.and_then(|configuration| configuration.texture.as_ref()) {
+        generated_texture_names.insert(map.texture.as_str());
     }
     for resource in texture_uv.keys() {
         if !generated_texture_names.contains(resource.as_str()) {
@@ -93,6 +97,7 @@ pub(super) fn requirements(
     diffuse_roughness: Option<&DiffuseRoughnessConfiguration>,
     ambient_occlusion: Option<&AmbientOcclusionConfiguration>,
     transmission: Option<&crate::TransmissionTextureConfiguration>,
+    opacity: Option<&crate::PbrOpacityConfiguration>,
 ) -> Requirements {
     let mut surface_texture_names = BTreeSet::new();
     if let Some(factors) = factors {
@@ -121,6 +126,9 @@ pub(super) fn requirements(
         {
             surface_texture_names.insert(texture.texture.as_str());
         }
+    }
+    if let Some(map) = opacity.and_then(|configuration| configuration.texture.as_ref()) {
+        surface_texture_names.insert(map.texture.as_str());
     }
     let surface = texture_uv.iter().any(|(resource, coordinates)| {
         coordinates.set() == TextureUvSet::Uv1 && surface_texture_names.contains(resource.as_str())

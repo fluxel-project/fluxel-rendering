@@ -98,6 +98,8 @@ pub(super) fn effective_requirements(
         definition.ambient_occlusion_configuration(),
         requirements,
     )?;
+    let requirements =
+        super::opacity::effective_encoding(definition.pbr_opacity_configuration(), requirements)?;
     super::transmission::effective_texture_encodings(
         definition.refraction_environment(),
         definition.transmission_texture_configuration(),

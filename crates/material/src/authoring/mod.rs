@@ -9,6 +9,8 @@ mod diffuse_roughness;
 mod diffuse_roughness_definition;
 mod nodes;
 mod normal_map;
+mod opacity;
+mod opacity_definition;
 mod refraction_energy_definition;
 mod surface_policy;
 mod transmission;
@@ -29,6 +31,7 @@ pub use definition::{
 pub use diffuse_roughness::{DiffuseRoughnessConfiguration, DiffuseRoughnessTexture};
 pub use nodes::*;
 pub use normal_map::NormalMapSettings;
+pub use opacity::{PbrOpacityChannels, PbrOpacityConfiguration, PbrOpacityTexture};
 pub use surface_policy::{
     SurfaceAlphaMode, SurfaceBlendMode, SurfaceCullFace, SurfacePolicy, SurfaceSideOrientation,
 };

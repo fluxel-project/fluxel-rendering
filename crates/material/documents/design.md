@@ -238,6 +238,13 @@ apply when the renderer reconstructs the basis from derivatives.
 draws when ordinary back-face culling is disabled. It is a static variant
 fact. The consumer retains ownership of both raster states and their order.
 
+A `PbrOpacityConfiguration` supplies a scalar material alpha and an optional
+opacity map. The scalar multiplies the authored base alpha. The alpha-channel
+map mode multiplies that result by the sampled alpha. The luminance mode
+replaces it with saturated linear-RGB luminance. Both map modes apply the
+texture level after sampling. The resulting alpha feeds the material's
+selected cutoff and output policy.
+
 `MaterialDefinition::with_cull_face` selects which triangles are discarded
 when culling is active. It defaults to back faces. Mirror views invert the
 ordinary cull face. A separate culling pass uses the selected face for both
