@@ -92,6 +92,13 @@ pub enum MaterialError {
         /// Selected callable.
         callable: String,
     },
+    /// A vertex UV0 graph output does not produce a UV vector.
+    VertexUv0GraphOutput {
+        /// Node selected as the vertex output.
+        node: MaterialNodeId,
+        /// Declared result type of that node.
+        actual: MaterialType,
+    },
     /// A reachable node graph cycle cannot lower to WGSL wrappers.
     NodeCycle {
         /// Node encountered a second time on the active DFS path.

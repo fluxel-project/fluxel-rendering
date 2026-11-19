@@ -209,14 +209,14 @@ fn is_identifier_start(character: char) -> bool {
     character == '_' || unicode_ident::is_xid_start(character)
 }
 
-pub(super) fn validate_top_level_names(
+pub(super) fn validate_top_level_names<'a>(
     fragments: &[MaterialFragment],
     nodes: &[MaterialCodeNode],
     resources: &[MaterialResource],
     parameters: &[MaterialParameter],
     static_options: &BTreeMap<String, StaticValue>,
     output: &SurfaceOutput,
-    graph: Option<&super::node_graph::NormalizedNodeGraph>,
+    graphs: impl IntoIterator<Item = &'a super::node_graph::NormalizedNodeGraph>,
 ) -> Result<(), MaterialError> {
     let mut names = super::surface::reserved_names(output);
     let mut insert = |name: &str| {
@@ -244,7 +244,7 @@ pub(super) fn validate_top_level_names(
             insert(&name)?;
         }
     }
-    if let Some(graph) = graph {
+    for graph in graphs {
         for name in &graph.generated_names {
             insert(name)?;
         }

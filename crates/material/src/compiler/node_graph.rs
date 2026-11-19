@@ -46,27 +46,67 @@ pub(super) const PBR_CONTEXT_INPUTS: [(MaterialNodeInputSource, &str, MaterialTy
     ),
 ];
 
-pub(super) fn normalize(
+/// Distinguishes graph wrappers and locals in a material that declares both stages.
+#[derive(Clone, Copy)]
+enum NodeGraphStage {
+    Surface,
+    VertexUv0,
+}
+
+impl NodeGraphStage {
+    fn node_name(self, node: MaterialNodeId) -> String {
+        match self {
+            Self::Surface => format!("fluxel_material_node_{}", node.0),
+            Self::VertexUv0 => format!("fluxel_material_vertex_node_{}", node.0),
+        }
+    }
+}
+
+pub(super) fn normalize_surface(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
     surface_output: &SurfaceOutput,
     has_vertex_uv0: bool,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
-    let accepts_uv0 = super::surface::uses_uv0(surface_output);
+    let context = PBR_CONTEXT_INPUTS
+        .into_iter()
+        .filter(|(source, _, _)| {
+            super::surface::supplies_pbr_context(surface_output)
+                && (*source != MaterialNodeInputSource::VertexUv0 || has_vertex_uv0)
+        })
+        .collect::<Vec<_>>();
+    normalize(
+        graph,
+        functions,
+        NodeGraphStage::Surface,
+        super::surface::uses_uv0(surface_output),
+        &context,
+    )
+}
+
+pub(super) fn normalize_vertex_uv0(
+    graph: &MaterialNodeGraph,
+    functions: &BTreeMap<String, FunctionSignature>,
+) -> Result<NormalizedNodeGraph, MaterialError> {
+    normalize(graph, functions, NodeGraphStage::VertexUv0, true, &[])
+}
+
+fn normalize(
+    graph: &MaterialNodeGraph,
+    functions: &BTreeMap<String, FunctionSignature>,
+    stage: NodeGraphStage,
+    accepts_uv0: bool,
+    available_context: &[(MaterialNodeInputSource, &str, MaterialType)],
+) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut context_types = Vec::new();
     if accepts_uv0 {
         context_types.push((MaterialNodeInputSource::Uv0, MaterialType::Vec2));
     }
-    if super::surface::supplies_pbr_context(surface_output) {
-        context_types.extend(
-            PBR_CONTEXT_INPUTS
-                .into_iter()
-                .filter_map(|(source, _, ty)| {
-                    (source != MaterialNodeInputSource::VertexUv0 || has_vertex_uv0)
-                        .then_some((source, ty))
-                }),
-        );
-    }
+    context_types.extend(
+        available_context
+            .iter()
+            .map(|&(source, _, ty)| (source, ty)),
+    );
     let mut nodes = BTreeMap::new();
     for node in &graph.nodes {
         if nodes.insert(node.id, node).is_some() {
@@ -89,8 +129,9 @@ pub(super) fn normalize(
     let order = evaluation_order(graph.output, &nodes)?;
 
     let uv = context_name("uv", functions);
-    let context = PBR_CONTEXT_INPUTS
-        .into_iter()
+    let context = available_context
+        .iter()
+        .copied()
         .filter(|(source, _, _)| {
             nodes
                 .values()
@@ -114,14 +155,14 @@ pub(super) fn normalize(
         .map(|input| format!("{}: {}", input.name, input.ty.wgsl()))
         .collect::<Vec<_>>()
         .join(", ");
-    let root = node_name(output.id);
+    let root = stage.node_name(output.id);
     let output = functions[&output.callable].output;
     let locals = order
         .iter()
         .map(|id| {
             (
                 *id,
-                context_name(&format!("{}_value", node_name(*id)), functions),
+                context_name(&format!("{}_value", stage.node_name(*id)), functions),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -178,7 +219,7 @@ pub(super) fn normalize(
         root,
         output,
         source,
-        generated_names: nodes.keys().map(|id| node_name(*id)).collect(),
+        generated_names: nodes.keys().map(|id| stage.node_name(*id)).collect(),
         callables: vec![callable],
         inputs,
         pbr_inputs: context.into_iter().map(|(source, _, _)| source).collect(),
@@ -349,11 +390,6 @@ impl MaterialNodeOutput {
         };
         (width >= minimum_width).then_some(result)
     }
-}
-
-pub(super) fn node_name(node: MaterialNodeId) -> String {
-    // WGSL reserves identifiers beginning with a double underscore.
-    format!("fluxel_material_node_{}", node.0)
 }
 
 fn context_name(seed: &str, functions: &BTreeMap<String, FunctionSignature>) -> String {

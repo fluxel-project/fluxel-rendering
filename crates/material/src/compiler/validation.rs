@@ -28,7 +28,7 @@ pub(super) struct NormalizedMaterialIr {
     pub(super) transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<super::node_graph::NormalizedNodeGraph>,
-    vertex_uv0: Option<String>,
+    vertex_uv0: Option<super::vertex_uv0::NormalizedVertexUv0>,
 }
 #[derive(Clone, Debug)]
 pub(super) struct FunctionSignature {
@@ -52,7 +52,7 @@ impl NormalizedMaterialIr {
         let node_graph = definition
             .node_graph()
             .map(|graph| {
-                super::node_graph::normalize(
+                super::node_graph::normalize_surface(
                     graph,
                     &functions,
                     definition.output(),
@@ -60,7 +60,10 @@ impl NormalizedMaterialIr {
                 )
             })
             .transpose()?;
-        if let Some(graph) = &node_graph {
+        let graphs = node_graph
+            .iter()
+            .chain(vertex_uv0.iter().filter_map(|uv| uv.graph()));
+        for graph in graphs.clone() {
             validate_generated_node_references(&fragments, &code_nodes, graph)?;
         }
         let root_fragment = node_graph.as_ref().map_or_else(
@@ -109,7 +112,7 @@ impl NormalizedMaterialIr {
             definition.parameters(),
             definition.static_options(),
             definition.output(),
-            node_graph.as_ref(),
+            graphs,
         )?;
         validate_calls(&functions)?;
         Ok(Self {
@@ -136,7 +139,7 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
-        super::vertex_uv0::canonical(&self.output, self.vertex_uv0.as_deref(), &mut canonical);
+        super::vertex_uv0::canonical(&self.output, self.vertex_uv0.as_ref(), &mut canonical);
         super::surface::canonical_extensions(
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),
@@ -229,11 +232,7 @@ impl NormalizedMaterialIr {
             self.pbr_surface_factors.as_ref(),
             self.surface_policy,
         );
-        super::vertex_uv0::append_evaluator(
-            &self.output,
-            self.vertex_uv0.as_deref(),
-            &mut generated,
-        );
+        super::vertex_uv0::append_evaluator(&self.output, self.vertex_uv0.as_ref(), &mut generated);
         super::transmission::append_evaluators(
             &mut generated,
             self.transmission_extensions.as_ref(),
@@ -270,7 +269,13 @@ impl NormalizedMaterialIr {
                     }
                 })
                 .collect(),
-            callable_declarations(&self.fragments, &self.code_nodes, self.node_graph.as_ref()),
+            callable_declarations(
+                &self.fragments,
+                &self.code_nodes,
+                self.node_graph
+                    .iter()
+                    .chain(self.vertex_uv0.iter().filter_map(|uv| uv.graph())),
+            ),
             self.static_options.clone(),
         )
     }
@@ -534,10 +539,10 @@ fn validate_calls(functions: &BTreeMap<String, FunctionSignature>) -> Result<(),
     Ok(())
 }
 
-fn callable_declarations(
+fn callable_declarations<'a>(
     fragments: &[MaterialFragment],
     nodes: &[MaterialCodeNode],
-    graph: Option<&super::node_graph::NormalizedNodeGraph>,
+    graphs: impl IntoIterator<Item = &'a super::node_graph::NormalizedNodeGraph>,
 ) -> Vec<CallableDeclaration> {
     let mut callables = Vec::with_capacity(fragments.len() + nodes.len());
     for (name, inputs, output) in fragments
@@ -555,7 +560,7 @@ fn callable_declarations(
             result: Some(output.shader_type()),
         });
     }
-    if let Some(graph) = graph {
+    for graph in graphs {
         callables.extend(graph.callables.iter().cloned());
     }
     callables

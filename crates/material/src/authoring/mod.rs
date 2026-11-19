@@ -10,6 +10,7 @@ mod types;
 
 pub use assets::{MaterialAsset, MaterialAssetId, MaterialAssetRef};
 pub use code_node::MaterialCodeNode;
+pub(crate) use definition::VertexUv0;
 pub use definition::{
     EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition, PbrBaseTexture,
     PbrPackedChannel, PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions,

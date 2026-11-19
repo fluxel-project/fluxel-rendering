@@ -56,7 +56,7 @@ pub enum MaterialNodeInputSource {
     WorldNormal,
     /// Actual camera eye position in Fluxel world space, supplied by the UV0 PBR evaluator.
     CameraPosition,
-    /// Interpolated UV0 computed by the material's vertex-stage callable.
+    /// Interpolated UV0 computed by the material's vertex-stage evaluator.
     VertexUv0,
 }
 
@@ -89,6 +89,6 @@ pub struct MaterialNode {
 pub struct MaterialNodeGraph {
     /// Callable-invocation nodes.
     pub nodes: Vec<MaterialNode>,
-    /// Node whose result supplies the selected surface output.
+    /// Node whose result supplies this graph's evaluation output.
     pub output: MaterialNodeId,
 }

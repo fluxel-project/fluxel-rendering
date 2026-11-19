@@ -138,9 +138,12 @@ in Fluxel world space. The geometric normal precedes normal mapping and
 sidedness. A graph that asks for the eye requires a view with an explicit
 position, including for a parallel lighting camera. Other surface contexts
 reject these connections. A UV0 metallic-roughness definition can select a
-vertex-stage UV callable with `with_vertex_uv0`. The callable transforms
-mesh UV0 before interpolation. A fragment graph connects the interpolated
-result through `VertexUv0` and can still connect raw UV0 independently.
+vertex-stage UV callable with `with_vertex_uv0` or a typed node graph
+with `with_vertex_uv0_graph`. The vertex evaluator transforms mesh UV0
+before interpolation. The vertex graph has its own node identities, can
+consume mesh UV0, and returns a `vec2<f32>`. A fragment graph connects
+the interpolated result through `VertexUv0` and can still connect raw UV0
+independently.
 A vertex UV callable may also read material uniforms. To apply a texture
 matrix with the Babylon.js UV convention, read a `mat4x4<f32>` parameter and
 return `(texture_transform * vec4<f32>(uv, 1.0, 0.0)).xy`. Keep texture

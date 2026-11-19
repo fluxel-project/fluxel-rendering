@@ -213,7 +213,13 @@ pub struct MaterialDefinition {
     transmission_extensions: Option<TransmissionExtensions>,
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<MaterialNodeGraph>,
-    vertex_uv0: Option<String>,
+    vertex_uv0: Option<VertexUv0>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum VertexUv0 {
+    Callable(String),
+    Graph(MaterialNodeGraph),
 }
 
 impl MaterialDefinition {
@@ -260,7 +266,18 @@ impl MaterialDefinition {
     /// the interpolated result through `MaterialNodeInputSource::VertexUv0`.
     #[must_use]
     pub fn with_vertex_uv0(mut self, callable: impl Into<String>) -> Self {
-        self.vertex_uv0 = Some(callable.into());
+        self.vertex_uv0 = Some(VertexUv0::Callable(callable.into()));
+        self
+    }
+
+    /// Selects a typed vertex graph that produces the interpolated UV0 result.
+    ///
+    /// The selected output node returns a `vec2<f32>`. The graph can connect
+    /// mesh UV0 and other nodes from this vertex graph. This replaces any
+    /// previously selected vertex UV0 callable or graph.
+    #[must_use]
+    pub fn with_vertex_uv0_graph(mut self, graph: MaterialNodeGraph) -> Self {
+        self.vertex_uv0 = Some(VertexUv0::Graph(graph));
         self
     }
 
@@ -421,8 +438,8 @@ impl MaterialDefinition {
         })
     }
 
-    pub(crate) fn vertex_uv0(&self) -> Option<&str> {
-        self.vertex_uv0.as_deref()
+    pub(crate) fn vertex_uv0(&self) -> Option<&VertexUv0> {
+        self.vertex_uv0.as_ref()
     }
 
     pub(crate) fn node_graph(&self) -> Option<&MaterialNodeGraph> {
