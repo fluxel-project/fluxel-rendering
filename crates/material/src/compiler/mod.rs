@@ -15,6 +15,7 @@ mod texture_uv;
 mod transmission;
 mod validation;
 mod validation_code_nodes;
+mod validation_resources;
 mod vertex_uv0;
 
 use crate::{
@@ -23,8 +24,8 @@ use crate::{
     MaterialAsset, MaterialAssetRef, MaterialCodeNode, MaterialDefinition, MaterialError,
     MaterialFragment, MaterialParameter, MaterialResource, MaterialResourceKind,
     MaterialTextureEncodingRequirement, MaterialTextureUv, MaterialType, MaterialVariantKey,
-    NormalMapSettings, PbrSurfaceFactors, RefractionEnvironment, StaticValue, SurfaceAlphaMode,
-    SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
+    NormalMapSettings, PbrAutomaticAlpha, PbrSurfaceFactors, RefractionEnvironment, StaticValue,
+    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy, TransmissionExtensions,
     TransmissionTextureConfiguration,
 };
 use fluxel_assets::AssetSnapshot;

@@ -8,6 +8,7 @@ use std::{fmt, sync::Arc};
 use fluxel_assets::AssetSnapshot;
 use fluxel_material::{
     CompiledMaterialVariant, MaterialAsset, MaterialCompiler, MaterialDefinition, MaterialError,
+    SurfaceAlphaMode,
 };
 use fluxel_shader::{
     BindingKind, BindingShape, ShaderArtifact, ShaderComposer, ShaderCompositionRequest,
@@ -24,6 +25,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct PreparedMaterial {
     material: CompiledMaterialVariant,
+    automatic_alpha_mode: Option<SurfaceAlphaMode>,
     shader: Arc<ShaderArtifact>,
     geometry: PreparedGeometry,
     environment_irradiance: bool,
@@ -52,6 +54,10 @@ impl PreparedMaterial {
     #[must_use]
     pub fn geometry(&self) -> &PreparedGeometry {
         &self.geometry
+    }
+
+    pub(crate) const fn automatic_alpha_mode(&self) -> Option<SurfaceAlphaMode> {
+        self.automatic_alpha_mode
     }
 
     pub(crate) fn uses_specular_ibl(&self) -> bool {
@@ -191,9 +197,19 @@ pub fn prepare_material(
     composer: &mut ShaderComposer,
     request: ShaderCompositionRequest,
 ) -> Result<PreparedMaterial, MaterialPreparationError> {
+    prepare_material_for_alpha(snapshot, geometry, composer, request, None)
+}
+
+pub(crate) fn prepare_material_for_alpha(
+    snapshot: &AssetSnapshot<MaterialAsset, MaterialDefinition>,
+    geometry: &GeometryLayout,
+    composer: &mut ShaderComposer,
+    request: ShaderCompositionRequest,
+    automatic_alpha_mode: Option<SurfaceAlphaMode>,
+) -> Result<PreparedMaterial, MaterialPreparationError> {
     let material =
         MaterialCompiler::compile_for(snapshot).map_err(MaterialPreparationError::Material)?;
-    prepare_compiled_material(material, geometry, composer, request)
+    prepare_compiled_material(material, geometry, composer, request, automatic_alpha_mode)
 }
 
 pub(super) fn prepare_compiled_material(
@@ -201,6 +217,7 @@ pub(super) fn prepare_compiled_material(
     geometry: &GeometryLayout,
     composer: &mut ShaderComposer,
     mut request: ShaderCompositionRequest,
+    automatic_alpha_mode: Option<SurfaceAlphaMode>,
 ) -> Result<PreparedMaterial, MaterialPreparationError> {
     let emissive_disabled = request
         .static_options
@@ -247,7 +264,9 @@ pub(super) fn prepare_compiled_material(
             request.static_options.insert(name, value);
         }
     }
-    request.source_units.extend(contribution.source_units());
+    request
+        .source_units
+        .extend(contribution.source_units_with_alpha_mode(automatic_alpha_mode));
     request.bindings.extend(
         contribution
             .binding_declarations()
@@ -352,6 +371,7 @@ pub(super) fn prepare_compiled_material(
     let oit_fragment = oit_fragment_route(&request, shader.interface().bindings())?;
     Ok(PreparedMaterial {
         material,
+        automatic_alpha_mode,
         shader,
         geometry,
         environment_irradiance,

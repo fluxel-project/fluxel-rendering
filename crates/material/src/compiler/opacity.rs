@@ -6,6 +6,26 @@ use crate::{
     PbrOpacityChannels, PbrOpacityConfiguration, SurfaceOutput,
 };
 use std::collections::BTreeMap;
+pub(super) fn validate_automatic_alpha(
+    definition: &crate::MaterialDefinition,
+    alpha: crate::PbrAutomaticAlpha,
+) -> Result<(), MaterialError> {
+    if !super::surface::supplies_pbr_context(definition.output()) {
+        return Err(MaterialError::PbrSurfaceFactorsUnsupported {
+            output: definition.output().clone(),
+        });
+    }
+    if (alpha.base_texture_has_alpha || alpha.use_alpha_from_base_texture)
+        && definition
+            .pbr_surface_factors()
+            .and_then(|factors| factors.base_texture.as_ref())
+            .is_none()
+    {
+        return Err(MaterialError::PbrAutomaticAlphaRequiresBaseTexture);
+    }
+    Ok(())
+}
+
 pub(super) fn validate(
     configuration: Option<&PbrOpacityConfiguration>,
     output: &SurfaceOutput,

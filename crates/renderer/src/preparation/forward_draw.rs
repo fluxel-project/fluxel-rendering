@@ -8,8 +8,8 @@ use crate::{MeshVisibility, RenderTransform, RenderView};
 use super::{
     ForwardAssets, ForwardDrawInput, ForwardDrawSource, ForwardPreparationError, ForwardResources,
     effective_alpha_mode, finite_transform, material_request, multiply_columns, normal_from_local,
-    prepare_material, resolve_asset, resolve_asset_textures, resolve_resource_aliases,
-    resolve_uniform_values, validate_cpu_geometry, validate_material_schema,
+    resolve_asset, resolve_asset_textures, resolve_resource_aliases, resolve_uniform_values,
+    validate_cpu_geometry, validate_material_schema,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -38,6 +38,10 @@ pub(super) fn prepare_draw(
     }
     let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
     let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
+    let automatic_alpha_mode = super::alpha::with_visibility(
+        super::alpha::resolve(material.value(), instance, source)?,
+        mesh_visibility,
+    );
     let instance_transforms =
         super::super::forward_instances::instance_transforms(geometry.value(), source)?;
     let mesh_layout = super::super::mesh_vertex_layout(&geometry.value().layout);
@@ -52,10 +56,10 @@ pub(super) fn prepare_draw(
     )?;
     if instance_transforms.is_some() {
         if matches!(
-            effective_alpha_mode(
+            automatic_alpha_mode.unwrap_or_else(|| effective_alpha_mode(
                 material.value().surface_policy().alpha_mode,
-                mesh_visibility
-            ),
+                mesh_visibility,
+            )),
             SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend,
         ) || material.value().transmission_extensions().is_some()
         {
@@ -63,8 +67,14 @@ pub(super) fn prepare_draw(
         }
         request = super::super::with_instance_transform(request, source)?;
     }
-    let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
-        .map_err(ForwardPreparationError::Material)?;
+    let prepared = crate::preparation::prepare_material_for_alpha(
+        &material,
+        &geometry.value().layout,
+        composer,
+        request,
+        automatic_alpha_mode,
+    )
+    .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
     let resources =

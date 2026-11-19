@@ -25,7 +25,7 @@ pub use code_node::MaterialCodeNode;
 pub(crate) use definition::VertexUv0;
 pub use definition::{
     EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition,
-    MaterialTextureUv, MaterialVertexVarying, PbrBaseTexture, PbrPackedChannel,
+    MaterialTextureUv, MaterialVertexVarying, PbrAutomaticAlpha, PbrBaseTexture, PbrPackedChannel,
     PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions, SurfaceOutput, TextureUvSet,
 };
 pub use diffuse_roughness::{DiffuseRoughnessConfiguration, DiffuseRoughnessTexture};

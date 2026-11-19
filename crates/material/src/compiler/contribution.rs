@@ -6,7 +6,7 @@ use fluxel_shader::{
     BindingDeclaration, BindingKind, BindingShape, CallableDeclaration, SourceUnit,
 };
 
-use crate::{BindingLocation, MaterialResourceKind, MaterialType, StaticValue};
+use crate::{BindingLocation, MaterialResourceKind, MaterialType, StaticValue, SurfaceAlphaMode};
 
 /// A generic shader binding declaration emitted by Material.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +47,7 @@ pub struct MaterialShaderContribution {
     vertex_varyings: Vec<(u32, MaterialType)>,
     requires_texture_uv1: bool,
     requires_surface_texture_uv1: bool,
+    automatic_base_alpha: Option<(crate::PbrAutomaticAlpha, u32)>,
 }
 
 impl MaterialShaderContribution {
@@ -71,6 +72,7 @@ impl MaterialShaderContribution {
             vertex_varyings: Vec::new(),
             requires_texture_uv1: false,
             requires_surface_texture_uv1: false,
+            automatic_base_alpha: None,
         }
     }
 
@@ -81,7 +83,30 @@ impl MaterialShaderContribution {
     /// representation for diagnostics and composition.
     #[must_use]
     pub fn source_units(&self) -> Vec<SourceUnit> {
-        self.source_units.clone()
+        self.source_units_with_alpha_mode(None)
+    }
+
+    /// Returns source units with the selected draw-local automatic alpha policy.
+    #[must_use]
+    pub fn source_units_with_alpha_mode(&self, mode: Option<SurfaceAlphaMode>) -> Vec<SourceUnit> {
+        let mut units = self.source_units.clone();
+        if let Some((alpha, cutoff)) = self.automatic_base_alpha {
+            let mode = mode.unwrap_or(SurfaceAlphaMode::Opaque);
+            let use_texture = (alpha.base_texture_has_alpha && alpha.use_alpha_from_base_texture)
+                || matches!(mode, SurfaceAlphaMode::Mask | SurfaceAlphaMode::MaskBlend);
+            let mut source = format!(
+                "fn material_use_base_texture_alpha() -> bool {{ return {use_texture}; }}\n"
+            );
+            source.push_str(
+                "fn material_base_texture_color(color: vec4<f32>) -> vec4<f32> { return vec4<f32>(color.rgb, select(1.0, color.a, material_use_base_texture_alpha())); }\n",
+            );
+            super::surface::append_alpha_helpers(&mut source, mode, f32::from_bits(cutoff));
+            units.push(SourceUnit::new(
+                format!("{}-automatic-alpha", self.source_id()),
+                source,
+            ));
+        }
+        units
     }
 
     /// Returns the stable identity of the generated Material glue unit.
@@ -97,7 +122,7 @@ impl MaterialShaderContribution {
     /// the stored source units.
     #[must_use]
     pub fn source(&self) -> String {
-        self.source_units
+        self.source_units()
             .iter()
             .map(|unit| unit.source.as_str())
             .collect::<Vec<_>>()
@@ -138,6 +163,14 @@ impl MaterialShaderContribution {
     ) -> Self {
         self.requires_texture_uv1 = requires_texture_uv1;
         self.requires_surface_texture_uv1 = requires_surface_texture_uv1;
+        self
+    }
+
+    pub(super) fn with_automatic_base_alpha(
+        mut self,
+        automatic_base_alpha: Option<(crate::PbrAutomaticAlpha, u32)>,
+    ) -> Self {
+        self.automatic_base_alpha = automatic_base_alpha;
         self
     }
 

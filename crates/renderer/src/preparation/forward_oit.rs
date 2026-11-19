@@ -101,11 +101,12 @@ pub(crate) fn prepare_oit_material(
     .ok_or(ForwardPreparationError::MaterialBindingSchema {
         source: input.source(),
     })?;
-    let prepared = prepare_material(
+    let prepared = crate::preparation::prepare_material_for_alpha(
         input.material(),
         &input.geometry().value().layout,
         composer,
         request,
+        input.prepared().automatic_alpha_mode(),
     )
     .map_err(ForwardPreparationError::Material)?;
     let schema = super::super::material_binding_schema(&prepared, input.source())?;

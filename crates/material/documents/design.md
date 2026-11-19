@@ -245,6 +245,13 @@ replaces it with saturated linear-RGB luminance. Both map modes apply the
 texture level after sampling. The resulting alpha feeds the material's
 selected cutoff and output policy.
 
+`PbrAutomaticAlpha` opts a UV PBR material into draw-time alpha selection.
+Partial mesh visibility, a material alpha below one, an opacity map, or an
+enabled base texture alpha selects blending. A base texture with alpha
+selects masking when blending is absent. The selected mode controls both
+queue admission and the shader's cutoff and alpha output, while instances
+retain the authored material key.
+
 `MaterialDefinition::with_cull_face` selects which triangles are discarded
 when culling is active. It defaults to back faces. Mirror views invert the
 ordinary cull face. A separate culling pass uses the selected face for both

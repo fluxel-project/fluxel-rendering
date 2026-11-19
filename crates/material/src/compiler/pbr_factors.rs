@@ -160,6 +160,7 @@ pub(super) fn append_uv0_evaluators(
     properties: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
     opacity: Option<&crate::PbrOpacityConfiguration>,
+    automatic_alpha: bool,
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
 ) {
@@ -212,6 +213,7 @@ pub(super) fn append_uv0_evaluators(
             factors,
             texture_uv,
             uv1.as_deref(),
+            automatic_alpha,
         );
     }
     generated.push_str("struct FluxelPbrSurface { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, occlusion: f32 };\n");
@@ -238,6 +240,7 @@ pub(super) fn append_uv0_evaluators(
             factors,
             texture_uv,
             uv1.as_deref(),
+            automatic_alpha,
         );
         let properties = apply_property_factors(
             generated,
@@ -288,6 +291,7 @@ fn append_legacy_uv0(
     factors: Option<&PbrSurfaceFactors>,
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
     base_uv1: Option<&str>,
+    automatic_alpha: bool,
 ) {
     let property_symbols = factors.map_or_else(
         || vec![properties],
@@ -310,7 +314,7 @@ fn append_legacy_uv0(
     );
     generated.push_str(&format!("    return {properties};\n}}\n"));
 
-    let base = apply_base_factors(raw, uv, factors, texture_uv, base_uv1);
+    let base = apply_base_factors(raw, uv, factors, texture_uv, base_uv1, automatic_alpha);
     let base_prefix = uv1_parameter(base_uv1);
     if is_uv_only {
         generated.push_str(&format!(
@@ -333,6 +337,7 @@ fn apply_base_factors(
     factors: Option<&PbrSurfaceFactors>,
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
     uv1: Option<&str>,
+    automatic_alpha: bool,
 ) -> String {
     let Some(factors) = factors else {
         return value.into();
@@ -345,10 +350,15 @@ fn apply_base_factors(
         || String::from("vec4<f32>(1.0)"),
         |texture| {
             let uv = sample_uv(texture_uv, &texture.texture, uv, uv1);
-            format!(
+            let texel = format!(
                 "textureSample({}, {}, {uv})",
                 texture.texture, texture.sampler
-            )
+            );
+            if automatic_alpha {
+                format!("material_base_texture_color({texel})")
+            } else {
+                texel
+            }
         },
     );
     format!("{value} * {factor} * {sample}")

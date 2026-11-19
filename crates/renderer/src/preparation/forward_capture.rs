@@ -228,11 +228,15 @@ impl PreparedCaptureReceiver {
                 .as_ref()
                 .map(SceneRefractionBinding::names),
         )?;
-        let prepared = prepare_material(
+        let prepared = crate::preparation::prepare_material_for_alpha(
             &self.material,
             &self.geometry.value().layout,
             composer,
             request,
+            super::alpha::with_visibility(
+                self.prepared.automatic_alpha_mode(),
+                self.mesh_visibility,
+            ),
         )
         .map_err(ForwardPreparationError::Material)?;
         let schema = validate_material_schema(&prepared, self.source)?;
@@ -427,8 +431,15 @@ fn prepare_capture_receiver(
         material.value().transmission_extensions().is_some(),
         scene_refraction.as_ref().map(SceneRefractionBinding::names),
     )?;
-    let prepared = prepare_compiled_material(compiled, &geometry.value().layout, composer, request)
-        .map_err(ForwardPreparationError::Material)?;
+    let automatic_alpha_mode = super::alpha::resolve(material.value(), instance, source)?;
+    let prepared = prepare_compiled_material(
+        compiled,
+        &geometry.value().layout,
+        composer,
+        request,
+        automatic_alpha_mode,
+    )
+    .map_err(ForwardPreparationError::Material)?;
     super::forward_transmission::validate_transform(material.value(), transform, source)?;
     let schema = validate_material_schema(&prepared, source)?;
     let resources =

@@ -477,10 +477,12 @@ impl ForwardDrawInput {
     }
 
     pub(crate) fn effective_alpha_mode(&self) -> SurfaceAlphaMode {
-        effective_alpha_mode(
-            self.prepared.material().surface_policy().alpha_mode,
-            self.mesh_visibility,
-        )
+        self.prepared.automatic_alpha_mode().unwrap_or_else(|| {
+            effective_alpha_mode(
+                self.prepared.material().surface_policy().alpha_mode,
+                self.mesh_visibility,
+            )
+        })
     }
 
     /// Returns the validated scene view retained from the same snapshot.
@@ -549,6 +551,9 @@ mod lighting;
 pub(crate) use lighting::prepare_feature_draws;
 pub use lighting::prepare_forward;
 pub(crate) use lighting::{prepare_feature_draws_with_lighting, prepare_forward_with_lighting};
+
+#[path = "forward_alpha.rs"]
+mod alpha;
 
 #[path = "forward_draw.rs"]
 mod forward_draw;

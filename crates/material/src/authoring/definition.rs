@@ -139,6 +139,15 @@ pub struct PbrBaseTexture {
     pub sampler: String,
 }
 
+/// Opts into Babylon PBR draw-time alpha classification.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PbrAutomaticAlpha {
+    /// Whether the bound base texture asset has an alpha channel.
+    pub base_texture_has_alpha: bool,
+    /// Whether generated PBR base evaluation consumes that alpha channel.
+    pub use_alpha_from_base_texture: bool,
+}
+
 /// Mesh texture-coordinate set selected by one generated texture evaluator.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum TextureUvSet {
@@ -283,6 +292,7 @@ pub struct MaterialDefinition {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pbr_automatic_alpha: Option<PbrAutomaticAlpha>,
     pub(super) pbr_opacity_configuration: Option<PbrOpacityConfiguration>,
     pub(super) ambient_occlusion_configuration: Option<AmbientOcclusionConfiguration>,
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
@@ -337,6 +347,7 @@ impl MaterialDefinition {
             surface_extensions: SurfaceExtensions::default(),
             emissive_configuration: None,
             pbr_surface_factors: None,
+            pbr_automatic_alpha: None,
             pbr_opacity_configuration: None,
             ambient_occlusion_configuration: None,
             diffuse_roughness_configuration: None,
@@ -422,6 +433,13 @@ impl MaterialDefinition {
         self
     }
 
+    /// Selects automatic alpha extraction for the standard PBR base texture.
+    #[must_use]
+    pub fn with_pbr_automatic_alpha(mut self, config: PbrAutomaticAlpha) -> Self {
+        self.pbr_automatic_alpha = Some(config);
+        self
+    }
+
     /// Selects static strength and channel-convention controls for the
     /// tangent-space normal callable of this PBR surface.
     #[must_use]
@@ -497,6 +515,12 @@ impl MaterialDefinition {
     #[must_use]
     pub fn pbr_surface_factors(&self) -> Option<&PbrSurfaceFactors> {
         self.pbr_surface_factors.as_ref()
+    }
+
+    /// Returns automatic PBR base-texture alpha controls, when selected.
+    #[must_use]
+    pub const fn pbr_automatic_alpha(&self) -> Option<PbrAutomaticAlpha> {
+        self.pbr_automatic_alpha
     }
 
     /// Returns tangent-space normal-map settings when explicitly selected.

@@ -51,6 +51,7 @@ pub use geometry::{
     GeometryAttribute, GeometryBufferOwner, GeometryDraw, GeometryError, GeometryLayout,
     GeometryStream, GeometryStreamBinding, PreparedGeometry, PreparedGeometryBindings,
 };
+pub(crate) use material::prepare_material_for_alpha;
 pub use material::{MaterialPreparationError, PreparedMaterial, prepare_material};
 
 #[cfg(test)]

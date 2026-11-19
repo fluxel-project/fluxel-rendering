@@ -13,7 +13,7 @@ use super::{
 
 #[path = "surface_emission.rs"]
 mod surface_emission;
-pub(super) use surface_emission::append_evaluators;
+pub(super) use surface_emission::{append_alpha_helpers, append_evaluators};
 
 /// Validates all surface-owned extensions after the root callable is resolved.
 pub(super) fn validate_definition(

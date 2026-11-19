@@ -23,6 +23,7 @@ pub(in crate::compiler) fn append_evaluators(
     vertex_varyings: &[(u32, MaterialType)],
     texture_uv: &BTreeMap<String, MaterialTextureUv>,
     ambient_occlusion_color: bool,
+    automatic_alpha: bool,
 ) {
     match output {
         SurfaceOutput::Color => generated.push_str(&format!(
@@ -41,7 +42,7 @@ pub(in crate::compiler) fn append_evaluators(
         }
         SurfaceOutput::MetallicRoughnessUv0 { properties } => {
             pbr_factors::append_uv0_evaluators(
-                generated, root_fragment, root_pbr_inputs, Some(properties), pbr_surface_factors, opacity,
+                generated, root_fragment, root_pbr_inputs, Some(properties), pbr_surface_factors, opacity, automatic_alpha,
                 vertex_varyings, texture_uv,
             );
             if ambient_occlusion_color {
@@ -56,6 +57,7 @@ pub(in crate::compiler) fn append_evaluators(
                 Some(properties),
                 pbr_surface_factors,
                 opacity,
+                automatic_alpha,
                 vertex_varyings,
                 texture_uv,
             );
@@ -77,6 +79,7 @@ pub(in crate::compiler) fn append_evaluators(
                 None,
                 pbr_surface_factors,
                 opacity,
+                automatic_alpha,
                 vertex_varyings,
                 texture_uv,
             );
@@ -95,7 +98,13 @@ pub(in crate::compiler) fn append_evaluators(
             }
         }
     }
-    append_policy_helpers(generated, policy);
+    if !automatic_alpha {
+        append_alpha_helpers(generated, policy.alpha_mode, policy.alpha_cutoff);
+    }
+    let two_sided_lighting = !policy.back_face_culling && policy.two_sided_lighting;
+    generated.push_str(&format!(
+        "fn material_two_sided_lighting() -> bool {{ return {two_sided_lighting}; }}\n",
+    ));
 }
 
 fn append_neutral_effects(
@@ -213,25 +222,18 @@ fn unique_emissive_local(seed: &str, bindings: &[&str]) -> String {
     name
 }
 
-fn append_policy_helpers(generated: &mut String, policy: SurfacePolicy) {
-    let rejects_alpha = matches!(
-        policy.alpha_mode,
-        SurfaceAlphaMode::Mask | SurfaceAlphaMode::MaskBlend
-    );
-    let preserves_alpha = matches!(
-        policy.alpha_mode,
-        SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend
-    );
+pub(in crate::compiler) fn append_alpha_helpers(
+    generated: &mut String,
+    mode: SurfaceAlphaMode,
+    cutoff: f32,
+) {
+    let rejects_alpha = matches!(mode, SurfaceAlphaMode::Mask | SurfaceAlphaMode::MaskBlend);
+    let preserves_alpha = matches!(mode, SurfaceAlphaMode::Blend | SurfaceAlphaMode::MaskBlend);
     generated.push_str(&format!(
         "fn material_alpha_rejected(alpha: f32) -> bool {{ return {rejects_alpha} && alpha < {}; }}\n",
-        policy.alpha_cutoff,
+        cutoff,
     ));
     generated.push_str(&format!(
         "fn material_output_alpha(alpha: f32) -> f32 {{ if ({preserves_alpha}) {{ return alpha; }} return 1.0; }}\n"
-    ));
-    let two_sided_lighting = !policy.back_face_culling && policy.two_sided_lighting;
-    generated.push_str(&format!(
-        "fn material_two_sided_lighting() -> bool {{ return {}; }}\n",
-        two_sided_lighting,
     ));
 }

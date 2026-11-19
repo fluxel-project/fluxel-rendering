@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::frame_data::forward::{ForwardUniformData, ForwardUniformInput, pack_forward_uniforms};
-use crate::{ForwardDrawInput, PreparedMaterial, prepare_material};
+use crate::{ForwardDrawInput, PreparedMaterial};
 
 pub(super) fn materials(
     inputs: &[ForwardDrawInput],
@@ -120,11 +120,12 @@ pub(super) fn materials(
         } else {
             request
         };
-        let material = prepare_material(
+        let material = crate::preparation::prepare_material_for_alpha(
             input.material(),
             layout,
             &mut fluxel_shader::ShaderComposer::new(),
             request,
+            input.prepared().automatic_alpha_mode(),
         )
         .map_err(RendererError::DeferredMaterial)?;
         let schema = crate::preparation::material_binding_schema(&material, input.source())

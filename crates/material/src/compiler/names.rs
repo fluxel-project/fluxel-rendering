@@ -218,6 +218,7 @@ pub(super) fn validate_top_level_names<'a>(
     output: &SurfaceOutput,
     uses_diffuse_roughness: bool,
     uses_ambient_occlusion_color: bool,
+    automatic_alpha: bool,
     graphs: impl IntoIterator<Item = &'a super::node_graph::NormalizedNodeGraph>,
 ) -> Result<(), MaterialError> {
     let mut names = super::surface::reserved_names(
@@ -225,6 +226,12 @@ pub(super) fn validate_top_level_names<'a>(
         uses_diffuse_roughness,
         uses_ambient_occlusion_color,
     );
+    if automatic_alpha {
+        names.extend([
+            "material_use_base_texture_alpha".into(),
+            "material_base_texture_color".into(),
+        ]);
+    }
     let mut insert = |name: &str| {
         if names.insert(name.to_owned()) {
             Ok(())

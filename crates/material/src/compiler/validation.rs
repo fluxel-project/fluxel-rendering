@@ -11,6 +11,9 @@ use super::names::{
 };
 pub(super) use super::validation_code_nodes::FunctionSignature;
 use super::validation_code_nodes::{validate_code_node_sources, visit};
+use super::validation_resources::{
+    merge_resources, validate_parameter_resources, validate_parameters,
+};
 use super::*;
 use fluxel_shader::CallableDeclaration;
 #[derive(Clone, Debug)]
@@ -27,6 +30,7 @@ pub(super) struct NormalizedMaterialIr {
     surface_extensions: SurfaceExtensions,
     emissive_configuration: Option<EmissiveConfiguration>,
     pbr_surface_factors: Option<PbrSurfaceFactors>,
+    pbr_automatic_alpha: Option<PbrAutomaticAlpha>,
     opacity: Option<crate::PbrOpacityConfiguration>,
     pub(super) ambient_occlusion_configuration: Option<AmbientOcclusionConfiguration>,
     pub(super) diffuse_roughness_configuration: Option<DiffuseRoughnessConfiguration>,
@@ -122,6 +126,9 @@ impl NormalizedMaterialIr {
             definition.parameters(),
             &resources,
         )?;
+        if let Some(alpha) = definition.pbr_automatic_alpha() {
+            super::opacity::validate_automatic_alpha(definition, alpha)?;
+        }
         let texture_encoding_requirements =
             super::texture_encoding::effective_requirements(definition)?;
         super::texture_encoding::validate(&texture_encoding_requirements, &resources)?;
@@ -143,6 +150,7 @@ impl NormalizedMaterialIr {
             definition.output(),
             definition.diffuse_roughness_configuration().is_some(),
             definition.ambient_occlusion_configuration().is_some(),
+            definition.pbr_automatic_alpha().is_some(),
             graphs,
         )?;
         validate_calls(&functions)?;
@@ -159,6 +167,7 @@ impl NormalizedMaterialIr {
             surface_extensions: definition.surface_extensions().clone(),
             emissive_configuration: definition.emissive_configuration().cloned(),
             pbr_surface_factors: definition.pbr_surface_factors().cloned(),
+            pbr_automatic_alpha: definition.pbr_automatic_alpha(),
             opacity: definition.pbr_opacity_configuration().cloned(),
             ambient_occlusion_configuration: definition.ambient_occlusion_configuration().cloned(),
             diffuse_roughness_configuration: definition.diffuse_roughness_configuration().cloned(),
@@ -187,6 +196,18 @@ impl NormalizedMaterialIr {
             self.pbr_surface_factors.as_ref(),
             &mut canonical,
         );
+        if let Some(alpha) = self.pbr_automatic_alpha {
+            canonical_piece(
+                &mut canonical,
+                "pbr-automatic-alpha-has",
+                &alpha.base_texture_has_alpha.to_string(),
+            );
+            canonical_piece(
+                &mut canonical,
+                "pbr-automatic-alpha-use",
+                &alpha.use_alpha_from_base_texture.to_string(),
+            );
+        }
         super::diffuse_roughness::canonical(
             self.diffuse_roughness_configuration.as_ref(),
             &mut canonical,
@@ -305,6 +326,7 @@ impl NormalizedMaterialIr {
             vertex_varyings,
             &self.texture_uv,
             self.ambient_occlusion_configuration.is_some(),
+            self.pbr_automatic_alpha.is_some(),
         );
         super::diffuse_roughness::append_evaluator(
             &mut generated,
@@ -369,6 +391,10 @@ impl NormalizedMaterialIr {
         )
         .with_vertex_varyings(vertex_varyings.to_vec())
         .with_texture_uv_requirements(texture_uv_requirements.any, texture_uv_requirements.surface)
+        .with_automatic_base_alpha(
+            self.pbr_automatic_alpha
+                .map(|alpha| (alpha, self.surface_policy.alpha_cutoff.to_bits())),
+        )
     }
 }
 
@@ -426,124 +452,6 @@ fn insert_signature(
         .is_some()
     {
         return Err(MaterialError::DuplicateFragment { name: name.into() });
-    }
-    Ok(())
-}
-
-fn validate_parameters(
-    parameters: &[MaterialParameter],
-    functions: &BTreeMap<String, FunctionSignature>,
-    static_options: &BTreeMap<String, StaticValue>,
-) -> Result<(), MaterialError> {
-    let mut names = BTreeSet::new();
-    for parameter in parameters {
-        if !names.insert(parameter.name.as_str()) {
-            return Err(MaterialError::DuplicateParameter {
-                name: parameter.name.clone(),
-            });
-        }
-        if functions.contains_key(&parameter.name)
-            || static_options.contains_key(&parameter.name)
-            || parameter.name == "evaluate_material"
-        {
-            return Err(MaterialError::ParameterNameConflict {
-                parameter: parameter.name.clone(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn merge_resources(
-    definition_resources: &[MaterialResource],
-    nodes: &[MaterialCodeNode],
-) -> Result<Vec<MaterialResource>, MaterialError> {
-    let mut resources = BTreeMap::<String, MaterialResource>::new();
-    let mut locations = BTreeMap::<BindingLocation, String>::new();
-    for resource in definition_resources {
-        if resources.contains_key(&resource.name) {
-            return Err(MaterialError::DuplicateResource {
-                name: resource.name.clone(),
-            });
-        }
-        insert_resource(&mut resources, &mut locations, resource, true)?;
-    }
-    for node in nodes {
-        for resource in &node.resources {
-            insert_resource(&mut resources, &mut locations, resource, false)?;
-        }
-    }
-    Ok(resources.into_values().collect())
-}
-
-fn insert_resource(
-    resources: &mut BTreeMap<String, MaterialResource>,
-    locations: &mut BTreeMap<BindingLocation, String>,
-    candidate: &MaterialResource,
-    definition_resource: bool,
-) -> Result<(), MaterialError> {
-    if let Some(existing) = resources.get(&candidate.name) {
-        if existing == candidate && !definition_resource {
-            return Ok(());
-        }
-        return Err(if definition_resource {
-            MaterialError::DuplicateResource {
-                name: candidate.name.clone(),
-            }
-        } else {
-            MaterialError::ConflictingResourceDeclaration {
-                name: candidate.name.clone(),
-            }
-        });
-    }
-    if locations
-        .insert(candidate.location, candidate.name.clone())
-        .is_some()
-    {
-        return Err(MaterialError::BindingConflict {
-            location: candidate.location,
-        });
-    }
-    resources.insert(candidate.name.clone(), candidate.clone());
-    Ok(())
-}
-
-fn validate_parameter_resources(
-    parameters: &[MaterialParameter],
-    resources: &[MaterialResource],
-) -> Result<(), MaterialError> {
-    let resources = resources
-        .iter()
-        .map(|resource| (resource.name.as_str(), resource))
-        .collect::<BTreeMap<_, _>>();
-    let mut parameter_resources = BTreeSet::new();
-    for parameter in parameters {
-        let conflicts_with_resource = resources
-            .get(parameter.name.as_str())
-            .is_some_and(|resource| resource.name != parameter.resource);
-        if conflicts_with_resource {
-            return Err(MaterialError::ParameterNameConflict {
-                parameter: parameter.name.clone(),
-            });
-        }
-        let resource = resources.get(parameter.resource.as_str()).ok_or_else(|| {
-            MaterialError::ParameterResourceMissing {
-                parameter: parameter.name.clone(),
-                resource: parameter.resource.clone(),
-            }
-        })?;
-        if !parameter_resources.insert(resource.name.as_str()) {
-            return Err(MaterialError::ParameterResourceConflict {
-                resource: resource.name.clone(),
-            });
-        }
-        if resource.kind.uniform_material_type() != Some(parameter.ty) {
-            return Err(MaterialError::ParameterResourceTypeMismatch {
-                parameter: parameter.name.clone(),
-                parameter_type: parameter.ty,
-                resource_kind: resource.kind,
-            });
-        }
     }
     Ok(())
 }

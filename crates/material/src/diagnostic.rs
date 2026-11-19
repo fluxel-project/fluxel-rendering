@@ -482,6 +482,8 @@ pub enum MaterialError {
     TransmissionTextureConfigurationExtensionsRequired,
     /// Base Fresnel refraction energy requires selected transmission extensions.
     RefractionEnergyModeTransmissionRequired,
+    /// Automatic base alpha was requested without a generated base texture.
+    PbrAutomaticAlphaRequiresBaseTexture,
     /// An authored thickness callable and thickness texture cannot both select the source.
     TransmissionThicknessTextureConflict,
     /// A requested transmission callable was not declared.
