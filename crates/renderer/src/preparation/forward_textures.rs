@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::forward_validation::{
+    validate_cube_texture_array, validate_generated_cube_texture_array,
     validate_generated_texture_array, validate_texture, validate_texture_array,
 };
 use super::*;
@@ -102,6 +103,27 @@ pub(super) fn resolve_texture_asset(
             Ok(ResolvedForwardTexture::GeneratedArray {
                 asset: asset.clone(),
                 mip_levels: *mip_levels,
+            })
+        }
+        ForwardTextureSource::CubeAsset {
+            asset,
+            generated_mips,
+        } => {
+            require_texture_dimension(
+                expected,
+                fluxel_rhi::api::TextureViewDimension::Cube,
+                source,
+            )?;
+            match generated_mips {
+                Some(mip_levels) => {
+                    validate_generated_cube_texture_array(asset.value(), *mip_levels, source)?;
+                }
+                None => validate_cube_texture_array(asset.value(), source)?,
+            }
+            validate_texture_encoding(expected, asset.value().encoding, source)?;
+            Ok(ResolvedForwardTexture::CubeAsset {
+                asset: asset.clone(),
+                generated_mips: *generated_mips,
             })
         }
         ForwardTextureSource::RefractionRadiance(asset) => {

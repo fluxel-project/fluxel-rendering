@@ -67,9 +67,9 @@ pub(crate) fn material_binding_schema(
             .iter()
             .find(|actual| actual.group == 0 && actual.binding == location);
         match binding.kind {
-            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32 => {
-                original_textures += 1
-            }
+            MaterialResourceKind::Texture2dF32
+            | MaterialResourceKind::Texture2dArrayF32
+            | MaterialResourceKind::TextureCubeF32 => original_textures += 1,
             MaterialResourceKind::Sampler { comparison: false } => original_samplers += 1,
             kind if kind.uniform_material_type().is_some() => {
                 original_uniforms += 1;
@@ -82,7 +82,9 @@ pub(crate) fn material_binding_schema(
                 return Err(invalid());
             }
             match binding.kind {
-                MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32 => {
+                MaterialResourceKind::Texture2dF32
+                | MaterialResourceKind::Texture2dArrayF32
+                | MaterialResourceKind::TextureCubeF32 => {
                     schema.unused_textures.push(binding.name.clone())
                 }
                 MaterialResourceKind::Sampler { .. } => {
@@ -103,7 +105,9 @@ pub(crate) fn material_binding_schema(
         }
 
         match binding.kind {
-            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32
+            MaterialResourceKind::Texture2dF32
+            | MaterialResourceKind::Texture2dArrayF32
+            | MaterialResourceKind::TextureCubeF32
                 if actual.kind == BindingKind::Texture =>
             {
                 let dimension = match (binding.kind, actual.shape) {
@@ -114,6 +118,9 @@ pub(crate) fn material_binding_schema(
                         MaterialResourceKind::Texture2dArrayF32,
                         Some(BindingShape::Texture2dArrayF32),
                     ) => TextureViewDimension::D2Array,
+                    (MaterialResourceKind::TextureCubeF32, Some(BindingShape::TextureCubeF32)) => {
+                        TextureViewDimension::Cube
+                    }
                     _ => return Err(invalid()),
                 };
                 schema.textures.push(MaterialTextureBinding {

@@ -352,6 +352,18 @@ fn binding_shape(module: &naga::Module, global: &naga::GlobalVariable) -> Option
                     },
             },
         ) => Some(BindingShape::Texture2dArrayF32),
+        (
+            naga::AddressSpace::Handle,
+            naga::TypeInner::Image {
+                dim: naga::ImageDimension::Cube,
+                arrayed: false,
+                class:
+                    naga::ImageClass::Sampled {
+                        kind: naga::ScalarKind::Float,
+                        multi: false,
+                    },
+            },
+        ) => Some(BindingShape::TextureCubeF32),
         (naga::AddressSpace::Handle, naga::TypeInner::Sampler { comparison }) => {
             Some(BindingShape::Sampler {
                 comparison: *comparison,

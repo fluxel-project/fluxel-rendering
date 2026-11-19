@@ -13,7 +13,8 @@ impl AssetKind for ColorTextureArrayAsset {}
 ///
 /// `rgba8` is mip-major: every mip contains all complete row-major RGBA8
 /// layers consecutively before the next mip. Mip extents halve each dimension
-/// with a minimum of one texel.
+/// with a minimum of one texel. A cube consumer requires a square, six-layer
+/// payload and interprets those physical layers as `+X, -X, +Y, -Y, +Z, -Z`.
 #[derive(Clone, Debug)]
 pub struct ColorTextureArrayData {
     /// Nonzero texture width and height shared by every layer.

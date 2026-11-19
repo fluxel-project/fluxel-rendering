@@ -39,6 +39,8 @@ pub(super) fn plan_texture_uploads(
             if extent.contains(&0)
                 || layers == 0
                 || mips == 0
+                || (texture.view == LayeredTextureView::Cube
+                    && (layers != 6 || extent[0] != extent[1]))
                 || (texture.generate_mips && mips == 1)
                 || texture.mip_levels > 1 + extent[0].max(extent[1]).ilog2()
                 || uploaded_mips.checked_mul(layers) != Some(texture.copies.len())
@@ -64,7 +66,7 @@ pub(super) fn plan_texture_uploads(
                 texture.encoding,
                 texture.mip_levels,
                 texture.layers,
-                TextureViewDimension::D2Array,
+                texture.view.dimension(),
                 texture.generate_mips,
             ))
         }

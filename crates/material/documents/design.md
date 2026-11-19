@@ -391,10 +391,12 @@ occlusion.
 
 Material resources describe generic shader-visible requirements. The current
 public subset has f32, i32, u32, float vector and column-major
-`mat4x4<f32>` uniforms, read-only `Texture2dF32` and `Texture2dArrayF32`,
+`mat4x4<f32>` uniforms, read-only `Texture2dF32`, `Texture2dArrayF32`, and
+`TextureCubeF32`,
 and `Sampler { comparison }`, each with a stable name and bind-group location.
 A `Texture2dArrayF32` resource uses a discrete layer argument in WGSL.
-A material can specify the RGB transfer encoding for either float texture shape. `comparison` is
+A `TextureCubeF32` resource uses a direction coordinate. A material can specify
+the RGB transfer encoding for any of these float texture shapes. `comparison` is
 a WGSL fact; filtering is not, so Renderer validates it from the actual sampler
 and texture descriptors before recording. Future kinds must carry equally
 explicit logical semantics and must be proven by a consumer before their public

@@ -177,9 +177,11 @@ Sampled float textures distinguish `texture_2d<f32>`
 (`BindingShape::Texture2dF32`) from `texture_2d_array<f32>`
 (`BindingShape::Texture2dArrayF32`) exactly. The latter is one layered image
 addressed by a shader layer coordinate; it is not a descriptor array and does
-not introduce descriptor-array or non-uniform-indexing requirements. Cube, 3D,
-depth, storage, multisampled, and integer sampled textures remain outside this
-logical contract until an executing consumer requires each exact shape.
+not introduce descriptor-array or non-uniform-indexing requirements.
+`texture_cube<f32>` is separately reflected as `BindingShape::TextureCubeF32`:
+one non-arrayed, non-multisampled sampled-float cube image, not a cube array.
+3D, depth, storage, multisampled, and integer sampled textures remain outside
+this logical contract until an executing consumer requires each exact shape.
 
 The [Material direction](../../material/documents/design.md#babylon-aligned-material-direction-planned)
 requires one node-authored definition to feed Forward and Deferred, including

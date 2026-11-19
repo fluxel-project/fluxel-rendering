@@ -32,9 +32,9 @@ pub(crate) use forward::{
     ForwardDepthAttachment, ForwardDraw, ForwardFrame, ForwardFrameBuffers, ForwardResidentBuffers,
     ForwardResidentTextureInput, ForwardResidentUpload, ForwardSampler, ForwardStreamInput,
     ForwardTexture, ForwardTextureCopyInput, ForwardTextureInput, ForwardTextureUpload,
-    ForwardUniformUpload, ForwardVertexStream, SurfaceForwardFrame, SurfaceForwardFrameBuffers,
-    plan_forward_frame, plan_forward_hdr_frame, plan_forward_resident_with_texture_inputs,
-    plan_surface_forward_frame,
+    ForwardUniformUpload, ForwardVertexStream, LayeredTextureView, SurfaceForwardFrame,
+    SurfaceForwardFrameBuffers, plan_forward_frame, plan_forward_hdr_frame,
+    plan_forward_resident_with_texture_inputs, plan_surface_forward_frame,
 };
 
 pub(crate) use upload::{

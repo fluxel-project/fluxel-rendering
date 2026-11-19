@@ -74,6 +74,32 @@ pub(super) fn validate_generated_texture_array(
     Ok(())
 }
 
+/// Validates the packed six-face cube convention used by Forward.
+pub(super) fn validate_cube_texture_array(
+    texture: &ColorTextureArrayData,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    validate_texture_array(texture, source)?;
+    if texture.extent[0] != texture.extent[1] || texture.layers != 6 {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    Ok(())
+}
+
+/// Validates a base-only packed cube and the requested generated mip count.
+pub(super) fn validate_generated_cube_texture_array(
+    texture: &ColorTextureArrayData,
+    mip_levels: u32,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    validate_cube_texture_array(texture, source)?;
+    let maximum_mips = 1 + texture.extent[0].ilog2();
+    if texture.mip_levels != 1 || !(2..=maximum_mips).contains(&mip_levels) {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    Ok(())
+}
+
 pub(super) fn validate_cpu_geometry(
     geometry: &GeometryData,
     prepared: &crate::PreparedGeometry,

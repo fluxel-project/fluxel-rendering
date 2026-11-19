@@ -298,8 +298,8 @@ named image bindings per material.
 ### Material binding locations
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
-2D float textures, 2D float texture arrays, and up to one ordinary sampler in
-material group zero.
+2D float textures, 2D float texture arrays, float cubemaps, and up to one ordinary
+sampler in material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -344,7 +344,16 @@ layer. A base-only array can instead request generated mip levels through
 the previous mip of each layer independently with linear filtering, preserving
 the sampled format and its transfer encoding. The generated mip count is part
 of the resident cache key. Raster sampling declares the full view range
-because a material shader can select its layer and LOD dynamically. Submission rejects a
+because a material shader can select its layer and LOD dynamically.
+
+`ForwardTextureBinding::cube_asset` selects a Cube view of a square,
+six-layer snapshot. Each mip supplies complete faces in the RHI layer order
+`+X, -X, +Y, -Y, +Z, -Z`. The cube shader samples a direction. An asset
+with authored mips uploads all six faces at each level. A base-only asset
+can use `cube_asset_with_generated_mips`, which filters each face
+independently as in the Babylon.js WebGPU cube mip generator. The resident
+cache includes the view dimension, so selecting a Cube view and a D2Array
+view of the same snapshot yields independently validated bindings. Submission rejects a
 capture source without its producer context. Capture resources share this model.
 The capture entry takes an explicit producer slot independently of the receiver
 resource names; multiple logical bindings may alias that one GPU product while

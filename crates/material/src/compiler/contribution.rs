@@ -123,6 +123,9 @@ impl MaterialShaderContribution {
                     MaterialResourceKind::Texture2dArrayF32 => {
                         (BindingKind::Texture, BindingShape::Texture2dArrayF32)
                     }
+                    MaterialResourceKind::TextureCubeF32 => {
+                        (BindingKind::Texture, BindingShape::TextureCubeF32)
+                    }
                     MaterialResourceKind::Sampler { comparison } => {
                         (BindingKind::Sampler, BindingShape::Sampler { comparison })
                     }

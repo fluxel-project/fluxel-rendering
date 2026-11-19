@@ -21,7 +21,7 @@ use crate::preparation::{
     RefractionRadianceData, ResolvedForwardTexture,
 };
 
-use super::{ForwardTexture, ForwardVertexStream};
+use super::{ForwardTexture, ForwardVertexStream, LayeredTextureView};
 
 /// Cache identity for one completed geometry realization on one RHI device.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -60,6 +60,7 @@ pub(crate) enum ForwardTextureCacheKey {
         generation: u64,
         device: DeviceId,
         generated_mips: Option<u32>,
+        view: LayeredTextureView,
     },
     RefractionRadiance {
         asset: AssetId<RefractionRadianceAsset>,
@@ -160,11 +161,25 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 Some(ForwardTextureCacheKey::from_snapshot(texture, device))
             }
             ResolvedForwardTexture::ArrayAsset(texture) => {
-                Some(self.array_texture_key(texture, device, None))
+                Some(self.layered_texture_key(texture, device, None, LayeredTextureView::Array))
             }
             ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
-                Some(self.array_texture_key(asset, device, Some(*mip_levels)))
+                Some(self.layered_texture_key(
+                    asset,
+                    device,
+                    Some(*mip_levels),
+                    LayeredTextureView::Array,
+                ))
             }
+            ResolvedForwardTexture::CubeAsset {
+                asset,
+                generated_mips,
+            } => Some(self.layered_texture_key(
+                asset,
+                device,
+                *generated_mips,
+                LayeredTextureView::Cube,
+            )),
             ResolvedForwardTexture::RefractionRadiance(texture) => {
                 let key =
                     ForwardTextureCacheKey::from_refraction_radiance_snapshot(texture, device);
@@ -176,17 +191,19 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         }
     }
 
-    fn array_texture_key(
+    fn layered_texture_key(
         &mut self,
         texture: &AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
         device: DeviceId,
         generated_mips: Option<u32>,
+        view: LayeredTextureView,
     ) -> ForwardTextureCacheKey {
         let key = ForwardTextureCacheKey::ColorArray {
             asset: texture.id(),
             generation: texture.generation().get(),
             device,
             generated_mips,
+            view,
         };
         self.color_arrays
             .insert(key, Arc::downgrade(&texture.value_arc()));

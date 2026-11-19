@@ -158,6 +158,8 @@ pub enum MaterialResourceKind {
     UniformMat4x4,
     /// A read-only `texture_2d_array<f32>` binding with a layer coordinate.
     Texture2dArrayF32,
+    /// A read-only `texture_cube<f32>` binding with a direction coordinate.
+    TextureCubeF32,
 }
 
 /// Transfer encoding required by an explicitly typed material texture binding.
@@ -185,7 +187,7 @@ pub enum MaterialTextureEncoding {
 /// One optional transfer-encoding requirement for a declared texture resource.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterialTextureEncodingRequirement {
-    /// Declared float 2D or 2D array texture resource name.
+    /// Declared supported float texture resource name.
     pub resource: String,
     /// Required transfer encoding for an asset bound to this resource.
     pub encoding: MaterialTextureEncoding,
@@ -201,6 +203,7 @@ impl MaterialResourceKind {
         match self {
             Self::Texture2dF32 => "texture_2d<f32>",
             Self::Texture2dArrayF32 => "texture_2d_array<f32>",
+            Self::TextureCubeF32 => "texture_cube<f32>",
             Self::Sampler { comparison: false } => "sampler",
             Self::Sampler { comparison: true } => "sampler_comparison",
             _ => unreachable!(),
@@ -218,7 +221,10 @@ impl MaterialResourceKind {
             Self::UniformI32 => Some(MaterialType::I32),
             Self::UniformU32 => Some(MaterialType::U32),
             Self::UniformMat4x4 => Some(MaterialType::Mat4x4),
-            Self::Texture2dF32 | Self::Texture2dArrayF32 | Self::Sampler { .. } => None,
+            Self::Texture2dF32
+            | Self::Texture2dArrayF32
+            | Self::TextureCubeF32
+            | Self::Sampler { .. } => None,
         }
     }
 

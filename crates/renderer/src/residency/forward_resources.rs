@@ -31,6 +31,22 @@ pub(crate) struct ForwardAuthoredRgba16FloatTextureInput {
     pub(crate) mips: Vec<ForwardTextureCopyInput>,
 }
 
+/// View of a layered material image.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum LayeredTextureView {
+    Array,
+    Cube,
+}
+
+impl LayeredTextureView {
+    pub(crate) const fn dimension(self) -> TextureViewDimension {
+        match self {
+            Self::Array => TextureViewDimension::D2Array,
+            Self::Cube => TextureViewDimension::Cube,
+        }
+    }
+}
+
 /// Immutable RGBA8 images ordered by mip, then by layer.
 /// A generated chain carries the base image for every layer.
 pub(crate) struct ForwardArrayTextureInput {
@@ -38,6 +54,7 @@ pub(crate) struct ForwardArrayTextureInput {
     pub(crate) mip_levels: u32,
     pub(crate) copies: Vec<ForwardTextureCopyInput>,
     pub(crate) generate_mips: bool,
+    pub(crate) view: LayeredTextureView,
     pub(crate) encoding: crate::preparation::TextureEncoding,
 }
 

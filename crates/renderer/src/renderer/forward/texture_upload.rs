@@ -7,6 +7,7 @@ use crate::{
     residency::{
         ForwardArrayTextureInput, ForwardAuthoredRgba16FloatTextureInput,
         ForwardResidentTextureInput, ForwardTextureCopyInput, ForwardTextureInput,
+        LayeredTextureView,
     },
 };
 
@@ -28,14 +29,30 @@ pub(in crate::renderer) fn stage(
                 },
             ))
         }
-        ResolvedForwardTexture::ArrayAsset(texture) => {
-            stage_array(texture.value(), None, max_buffer_bytes)
-                .map(ForwardResidentTextureInput::Array)
-        }
-        ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
-            stage_array(asset.value(), Some(*mip_levels), max_buffer_bytes)
-                .map(ForwardResidentTextureInput::Array)
-        }
+        ResolvedForwardTexture::ArrayAsset(texture) => stage_array(
+            texture.value(),
+            None,
+            LayeredTextureView::Array,
+            max_buffer_bytes,
+        )
+        .map(ForwardResidentTextureInput::Array),
+        ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => stage_array(
+            asset.value(),
+            Some(*mip_levels),
+            LayeredTextureView::Array,
+            max_buffer_bytes,
+        )
+        .map(ForwardResidentTextureInput::Array),
+        ResolvedForwardTexture::CubeAsset {
+            asset,
+            generated_mips,
+        } => stage_array(
+            asset.value(),
+            *generated_mips,
+            LayeredTextureView::Cube,
+            max_buffer_bytes,
+        )
+        .map(ForwardResidentTextureInput::Array),
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
             let mut mips = Vec::with_capacity(texture.value().mips().len());
@@ -59,6 +76,7 @@ pub(in crate::renderer) fn stage(
 fn stage_array(
     data: &ColorTextureArrayData,
     generated_mips: Option<u32>,
+    view: LayeredTextureView,
     max_buffer_bytes: u64,
 ) -> Result<ForwardArrayTextureInput, Error> {
     if generated_mips.is_some() && data.mip_levels != 1 {
@@ -96,6 +114,7 @@ fn stage_array(
         layers: data.layers,
         mip_levels: generated_mips.unwrap_or(data.mip_levels),
         generate_mips: generated_mips.is_some(),
+        view,
         encoding: data.encoding,
     })
 }

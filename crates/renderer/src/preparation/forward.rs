@@ -206,6 +206,41 @@ impl ForwardTextureBinding {
         }
     }
 
+    /// Binds a packed cube asset to `resource`.
+    ///
+    /// The asset layers are physical faces in `+X, -X, +Y, -Y, +Z, -Z`
+    /// order and its authored mip payloads remain exact.
+    #[must_use]
+    pub fn cube_asset(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::CubeAsset {
+                asset,
+                generated_mips: None,
+            },
+        }
+    }
+
+    /// Binds a base-only packed cube asset whose remaining mips are generated
+    /// by the selected renderer path.
+    #[must_use]
+    pub fn cube_asset_with_generated_mips(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+        generated_mips: u32,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::CubeAsset {
+                asset,
+                generated_mips: Some(generated_mips),
+            },
+        }
+    }
+
     /// Binds one immutable prefiltered HDR radiance generation to a linear material texture.
     #[must_use]
     pub fn refraction_radiance(

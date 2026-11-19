@@ -31,7 +31,9 @@ pub(super) fn validate(
             })?;
         if !matches!(
             resource.kind,
-            MaterialResourceKind::Texture2dF32 | MaterialResourceKind::Texture2dArrayF32
+            MaterialResourceKind::Texture2dF32
+                | MaterialResourceKind::Texture2dArrayF32
+                | MaterialResourceKind::TextureCubeF32
         ) {
             return Err(MaterialError::TextureEncodingResourceTypeMismatch {
                 resource: requirement.resource.clone(),

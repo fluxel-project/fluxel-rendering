@@ -35,6 +35,15 @@ pub enum ForwardTextureSource {
         /// Total mip count including the authored base level.
         mip_levels: u32,
     },
+    /// One cube image encoded in the six physical array layers
+    /// `+X, -X, +Y, -Y, +Z, -Z`.
+    CubeAsset {
+        /// Exact immutable packed six-face image generation.
+        asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+        /// Total requested mip count when the source owns only mip zero.
+        /// `None` preserves every authored mip payload exactly.
+        generated_mips: Option<u32>,
+    },
     /// An independently authored HDR radiance chain with an exact immutable generation.
     RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     /// A renderer-owned same-frame capture product logical resource name.
@@ -53,6 +62,14 @@ impl std::fmt::Debug for ForwardTextureSource {
                 .debug_struct("ArrayAssetWithGeneratedMips")
                 .field("asset", &SceneAssetRef::from_snapshot(asset))
                 .field("mip_levels", mip_levels)
+                .finish(),
+            Self::CubeAsset {
+                asset,
+                generated_mips,
+            } => f
+                .debug_struct("CubeAsset")
+                .field("asset", &SceneAssetRef::from_snapshot(asset))
+                .field("generated_mips", generated_mips)
                 .finish(),
             Self::RefractionRadiance(asset) => f
                 .debug_tuple("RefractionRadiance")
@@ -86,6 +103,10 @@ pub(crate) enum ResolvedForwardTexture {
     GeneratedArray {
         asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
         mip_levels: u32,
+    },
+    CubeAsset {
+        asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
+        generated_mips: Option<u32>,
     },
     RefractionRadiance(AssetSnapshot<RefractionRadianceAsset, RefractionRadianceData>),
     CaptureSlot(String),

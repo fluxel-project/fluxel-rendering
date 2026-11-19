@@ -1,6 +1,9 @@
 //! Forward material sampler admission and owner checks.
 use super::*;
-use crate::preparation::{ColorTextureArrayData, ResolvedForwardTexture};
+use crate::{
+    preparation::{ColorTextureArrayData, ResolvedForwardTexture},
+    residency::LayeredTextureView,
+};
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
     prepared
         .binding_schema()
@@ -160,14 +163,18 @@ struct MaterialTextureProperties {
 }
 
 impl MaterialTextureProperties {
-    fn array(data: &ColorTextureArrayData, generated_mips: Option<u32>) -> Self {
+    fn layered(
+        data: &ColorTextureArrayData,
+        generated_mips: Option<u32>,
+        view: LayeredTextureView,
+    ) -> Self {
         Self {
             extent: Some(data.extent),
             format: data.encoding.rgba8_format(),
             layers: data.layers,
             mip_levels: generated_mips.unwrap_or(data.mip_levels),
             generate_mips: generated_mips.is_some(),
-            view_dimension: TextureViewDimension::D2Array,
+            view_dimension: view.dimension(),
         }
     }
 
@@ -197,11 +204,23 @@ fn material_texture_properties(
             }
         }
         ResolvedForwardTexture::ArrayAsset(texture) => {
-            MaterialTextureProperties::array(texture.value(), None)
+            MaterialTextureProperties::layered(texture.value(), None, LayeredTextureView::Array)
         }
         ResolvedForwardTexture::GeneratedArray { asset, mip_levels } => {
-            MaterialTextureProperties::array(asset.value(), Some(*mip_levels))
+            MaterialTextureProperties::layered(
+                asset.value(),
+                Some(*mip_levels),
+                LayeredTextureView::Array,
+            )
         }
+        ResolvedForwardTexture::CubeAsset {
+            asset,
+            generated_mips,
+        } => MaterialTextureProperties::layered(
+            asset.value(),
+            *generated_mips,
+            LayeredTextureView::Cube,
+        ),
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
             MaterialTextureProperties {
