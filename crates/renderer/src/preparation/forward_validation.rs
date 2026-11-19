@@ -34,54 +34,30 @@ pub(super) fn validate_texture(
     texture: &ColorTextureData,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
-    validate_rgba8_texture(texture.extent, 1, texture.mip_levels, &texture.rgba8, false, source)
+    let [width, height] = texture.extent;
+    let mip_levels = texture.mip_levels;
+    if width == 0 || height == 0 || mip_levels == 0 || mip_levels > 1 + width.max(height).ilog2() {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    let bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|texels| texels.checked_mul(4))
+        .and_then(|bytes| usize::try_from(bytes).ok());
+    if bytes != Some(texture.rgba8.len()) {
+        return Err(ForwardPreparationError::InvalidTexture { source });
+    }
+    Ok(())
 }
 
 pub(super) fn validate_texture_array(
     texture: &ColorTextureArrayData,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
-    validate_rgba8_texture(
-        texture.extent,
-        texture.layers,
-        texture.mip_levels,
-        &texture.rgba8,
-        true,
-        source,
-    )
-}
-
-fn validate_rgba8_texture(
-    extent: [u32; 2],
-    layers: u32,
-    mip_levels: u32,
-    rgba8: &[u8],
-    single_mip_only: bool,
-    source: ForwardDrawSource,
-) -> Result<(), ForwardPreparationError> {
-    let [width, height] = extent;
-    if width == 0 || height == 0 || layers == 0 || mip_levels == 0 {
-        return Err(ForwardPreparationError::InvalidTexture { source });
-    }
-    if single_mip_only && mip_levels != 1 {
-        return Err(ForwardPreparationError::InvalidTexture { source });
-    }
-    let max_mip_levels = 1 + width.max(height).ilog2();
-    if mip_levels > max_mip_levels {
-        return Err(ForwardPreparationError::InvalidTexture { source });
-    }
-    let Some(bytes) = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|texels| texels.checked_mul(u64::from(layers)))
-        .and_then(|texels| texels.checked_mul(4))
-        .and_then(|bytes| usize::try_from(bytes).ok())
-    else {
-        return Err(ForwardPreparationError::InvalidTexture { source });
-    };
-    if rgba8.len() != bytes {
-        return Err(ForwardPreparationError::InvalidTexture { source });
-    }
-    Ok(())
+    texture
+        .mip_payloads()
+        .is_some()
+        .then_some(())
+        .ok_or(ForwardPreparationError::InvalidTexture { source })
 }
 
 pub(super) fn validate_cpu_geometry(

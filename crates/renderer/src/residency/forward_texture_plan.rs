@@ -26,29 +26,44 @@ pub(super) fn plan_texture_uploads(
                 texture.mip_levels,
                 1,
                 TextureViewDimension::D2,
+                texture.mip_levels > 1,
             );
             append_texture_upload(bytes, uploads, index, 0, 0, copy)?;
             Ok(allocation)
         }
         ForwardResidentTextureInput::Array(texture) => {
-            let extent = texture.layers.first().ok_or(Error::InvalidRange)?.extent;
-            let layer_count =
-                u32::try_from(texture.layers.len()).map_err(|_| Error::InvalidRange)?;
-            for layer in &texture.layers {
-                if layer.extent != extent {
-                    return Err(Error::InvalidRange);
-                }
-                validate_rgba8_copy(layer)?;
+            let extent = texture.copies.first().ok_or(Error::InvalidRange)?.extent;
+            let layers = usize::try_from(texture.layers).map_err(|_| Error::InvalidRange)?;
+            let mips = usize::try_from(texture.mip_levels).map_err(|_| Error::InvalidRange)?;
+            if extent.contains(&0)
+                || layers == 0
+                || mips == 0
+                || texture.mip_levels > 1 + extent[0].max(extent[1]).ilog2()
+                || mips.checked_mul(layers) != Some(texture.copies.len())
+            {
+                return Err(Error::InvalidRange);
             }
-            for (layer_index, layer) in texture.layers.into_iter().enumerate() {
-                append_texture_upload(bytes, uploads, index, 0, layer_index as u32, layer)?;
+            for (mip, copies) in texture.copies.chunks_exact(layers).enumerate() {
+                let expected_extent = extent.map(|size| (size >> mip).max(1));
+                for copy in copies {
+                    if copy.extent != expected_extent {
+                        return Err(Error::InvalidRange);
+                    }
+                    validate_rgba8_copy(copy)?;
+                }
+            }
+            for (copy_index, copy) in texture.copies.into_iter().enumerate() {
+                let mip = (copy_index / layers) as u32;
+                let layer = (copy_index % layers) as u32;
+                append_texture_upload(bytes, uploads, index, mip, layer, copy)?;
             }
             Ok(rgba8_allocation(
                 extent,
                 texture.encoding,
-                1,
-                layer_count,
+                texture.mip_levels,
+                texture.layers,
                 TextureViewDimension::D2Array,
+                false,
             ))
         }
         ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
@@ -82,9 +97,10 @@ fn rgba8_allocation(
     mip_levels: u32,
     array_layers: u32,
     view_dimension: TextureViewDimension,
+    generate_mips: bool,
 ) -> ForwardTextureAllocation {
     let mut usage = TextureUsage::COPY_DST | TextureUsage::TEXTURE_BINDING;
-    if mip_levels > 1 {
+    if generate_mips {
         usage |= TextureUsage::COPY_SRC;
     }
     ForwardTextureAllocation {

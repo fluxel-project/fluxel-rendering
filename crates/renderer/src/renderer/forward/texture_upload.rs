@@ -55,46 +55,37 @@ fn stage_array(
     data: &ColorTextureArrayData,
     max_buffer_bytes: u64,
 ) -> Result<ForwardArrayTextureInput, Error> {
+    let mip_payloads = data.mip_payloads().ok_or(Error::InvalidRange)?;
     let layers = usize::try_from(data.layers).map_err(|_| Error::InvalidRange)?;
-    let layer_size = data
-        .extent
-        .into_iter()
-        .try_fold(4usize, |size, dimension| {
-            size.checked_mul(dimension as usize)
-                .ok_or(Error::InvalidRange)
-        })?;
-    if layers == 0
-        || layer_size == 0
-        || data.mip_levels != 1
-        || layer_size.checked_mul(layers) != Some(data.rgba8.len())
-    {
-        return Err(Error::InvalidRange);
-    }
-
-    let mut staged = Vec::new();
-    staged
-        .try_reserve_exact(layers)
+    let mips = usize::try_from(data.mip_levels).map_err(|_| Error::InvalidRange)?;
+    let image_count = mips.checked_mul(layers).ok_or(Error::InvalidRange)?;
+    let mut copies = Vec::new();
+    copies
+        .try_reserve_exact(image_count)
         .map_err(|_| Error::OutOfMemory)?;
     let mut remaining = max_buffer_bytes;
-    let mut sources = data.rgba8.chunks_exact(layer_size).peekable();
-    while let Some(source) = sources.next() {
-        let (bytes, bytes_per_row) = stage_rows(data.extent, 4, source, remaining)?;
-        let size = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
-        let span = if sources.peek().is_some() {
-            size.checked_add((512 - size % 512) % 512)
-                .ok_or(Error::InvalidRange)?
-        } else {
-            size
-        };
-        remaining = remaining.checked_sub(span).ok_or(Error::InvalidRange)?;
-        staged.push(ForwardTextureCopyInput {
-            bytes,
-            extent: data.extent,
-            bytes_per_row,
-        });
+    for (extent, payload) in mip_payloads {
+        for source in payload.chunks_exact(payload.len() / layers) {
+            let (bytes, bytes_per_row) = stage_rows(extent, 4, source, remaining)?;
+            let size = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
+            let span = if copies.len() + 1 < image_count {
+                size.checked_add((512 - size % 512) % 512)
+                    .ok_or(Error::InvalidRange)?
+            } else {
+                size
+            };
+            remaining = remaining.checked_sub(span).ok_or(Error::InvalidRange)?;
+            copies.push(ForwardTextureCopyInput {
+                bytes,
+                extent,
+                bytes_per_row,
+            });
+        }
     }
     Ok(ForwardArrayTextureInput {
-        layers: staged,
+        copies,
+        layers: data.layers,
+        mip_levels: data.mip_levels,
         encoding: data.encoding,
     })
 }

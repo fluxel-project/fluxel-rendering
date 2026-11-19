@@ -333,12 +333,13 @@ select texture sources and, when supplied, the sampler descriptor. Multiple
 resources can select the same alias. Preparation rejects missing, duplicate, or
 extra names and resolves exact asset generations in schema order. A layered
 material binding selects an exact `ColorTextureArrayAsset` snapshot. Its payload
-contains complete RGBA8 images in consecutive layer order. The current array
-source supports one mip level. Renderer allocates a D2 image with one array
-layer per payload image and creates a D2Array view spanning every layer, including
-when the array has one layer. The upload graph declares and copies each layer
-individually. Raster sampling declares the full view range because a material
-shader can select its layer dynamically. Submission rejects a
+contains complete RGBA8 images in mip order, with all layers consecutive
+within each mip. Each level uses the base width and height shifted by the
+level index and clamped to one. Renderer allocates a D2 image and creates a
+D2Array view spanning every supplied mip and layer, including when the array
+has one layer. The upload graph declares and copies each supplied mip and
+layer. Raster sampling declares the full view range because a material shader
+can select its layer and LOD dynamically. Submission rejects a
 capture source without its producer context. Capture resources share this model.
 The capture entry takes an explicit producer slot independently of the receiver
 resource names; multiple logical bindings may alias that one GPU product while
