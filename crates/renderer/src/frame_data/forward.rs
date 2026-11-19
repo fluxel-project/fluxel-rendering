@@ -58,7 +58,8 @@ fn world_handedness(world: [[f32; 4]; 4]) -> Result<f32> {
 
 const PBR_CAMERA_OFFSET: usize = 192;
 const PBR_LIGHT_OFFSET: usize = PBR_CAMERA_OFFSET + 16;
-const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_LIGHT_OFFSET + 32;
+const PBR_SURFACE_CAMERA_POSITION_OFFSET: usize = PBR_LIGHT_OFFSET + 32;
+const PBR_CLIP_FROM_WORLD_OFFSET: usize = PBR_SURFACE_CAMERA_POSITION_OFFSET + 16;
 pub(crate) const PBR_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64;
 pub(crate) const PBR_SCENE_REFRACTION_TRANSFORM_BYTES: u64 = PBR_CLIP_FROM_WORLD_OFFSET as u64 + 64;
 
@@ -188,6 +189,15 @@ pub(crate) fn pack_forward_uniforms(
             }
             for (component, value) in input.directional_light.uniform().into_iter().enumerate() {
                 let offset = start as usize + PBR_LIGHT_OFFSET + component * 4;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let surface_camera_position = input
+                .shading_camera
+                .and_then(crate::ShadingCamera::sorting_position)
+                .map(|[x, y, z]| [x, y, z, 1.0])
+                .unwrap_or([0.0; 4]);
+            for (component, value) in surface_camera_position.into_iter().enumerate() {
+                let offset = start as usize + PBR_SURFACE_CAMERA_POSITION_OFFSET + component * 4;
                 bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
             }
             if let Some(clip_from_world) = input.clip_from_world {

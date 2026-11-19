@@ -19,6 +19,8 @@ struct PbrSpecularVertexOutput {
     @location(2) bitangent_world: vec3<f32>,
     @location(3) normal_world: vec3<f32>,
     @location(4) uv0: vec2<f32>,
+    @location(5) geometric_world_normal: vec3<f32>,
+    @location(6) @interpolate(flat) camera_position: vec3<f32>,
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
@@ -31,6 +33,8 @@ struct PbrSpecularVertexOutput {
     output.tangent_world = basis[0];
     output.bitangent_world = basis[1];
     output.normal_world = basis[2];
+    output.geometric_world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
     return output;
 }
@@ -42,6 +46,7 @@ struct PbrSpecularVertexOutput {
     @location(0) world_position: vec3<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv0: vec2<f32>,
+    @location(3) @interpolate(flat) camera_position: vec3<f32>,
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
@@ -51,6 +56,7 @@ struct PbrSpecularVertexOutput {
     output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
     output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
     output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
     return output;
 }
@@ -60,6 +66,11 @@ struct PbrSpecularVertexOutput {
         "pbr_apply_normal_map(input.tangent_world, input.bitangent_world, input.normal_world, evaluate_normal_uv0(input.uv0))"
     } else {
         "input.world_normal"
+    };
+    let geometric_normal = if normal_map {
+        "pbr_normal(input.geometric_world_normal)"
+    } else {
+        "pbr_normal(input.world_normal)"
     };
     let base = "material.rgb";
     let dielectric_f0 = if transmission {
@@ -138,7 +149,7 @@ struct PbrSpecularVertexOutput {
     format!(
         r#"{input}
 fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
-    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position);
+    let material = evaluate_pbr_material_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position);
     let base = {base};
     let properties = evaluate_metallic_roughness_uv0(input.uv0);
     let normal = pbr_surface_normal({normal}, front_facing);

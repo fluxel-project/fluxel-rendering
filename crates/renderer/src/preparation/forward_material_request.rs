@@ -4,8 +4,8 @@ use fluxel_material::{MaterialDefinition, SurfaceOutput};
 use fluxel_shader::ShaderCompositionRequest;
 
 use super::{
-    ForwardDrawSource, ForwardPreparationError, GeometryLayout, RenderView, color_uv0_template,
-    forward_template,
+    color_uv0_template, forward_template, ForwardDrawSource, ForwardPreparationError,
+    GeometryLayout, RenderView,
 };
 
 pub(super) fn material_request(
@@ -17,6 +17,14 @@ pub(super) fn material_request(
     specular: bool,
     scene_color: Option<(&str, &str)>,
 ) -> Result<ShaderCompositionRequest, ForwardPreparationError> {
+    if material.requires_surface_camera_position()
+        && view
+            .shading_camera
+            .and_then(crate::ShadingCamera::sorting_position)
+            .is_none()
+    {
+        return Err(ForwardPreparationError::InvalidView);
+    }
     let has_effects = material.requires_surface_effects();
     let transmission = material.transmission_extensions().is_some();
     let request = match material.output() {

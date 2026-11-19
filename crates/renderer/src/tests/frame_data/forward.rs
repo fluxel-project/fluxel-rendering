@@ -86,11 +86,9 @@ fn mixed_color_and_normal_payloads_keep_exact_transform_ranges() {
         .collect();
     assert_eq!(
         world,
-        [
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
-        ]
+        [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
     );
-    assert!(packed.bytes[720..768].iter().all(|byte| *byte == 0));
+    assert!(packed.bytes[720..752].iter().all(|byte| *byte == 0));
     assert!(packed.bytes[64..256].iter().all(|byte| *byte == 0));
     assert!(matches!(
         pack_forward_uniforms(

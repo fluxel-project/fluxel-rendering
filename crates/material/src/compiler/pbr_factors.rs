@@ -1,12 +1,12 @@
 //! Opt-in Babylon-style PBR factor and packed-data lowering.
 
 use crate::{
-    MaterialError, MaterialParameter, MaterialResource, MaterialResourceKind,
-    MaterialTextureEncoding, MaterialTextureEncodingRequirement, MaterialType, PbrPackedChannel,
-    PbrSurfaceFactors, SurfaceOutput,
+    MaterialError, MaterialNodeInputSource, MaterialParameter, MaterialResource,
+    MaterialResourceKind, MaterialTextureEncoding, MaterialTextureEncodingRequirement,
+    MaterialType, PbrPackedChannel, PbrSurfaceFactors, SurfaceOutput,
 };
 
-use super::canonical::piece as canonical_piece;
+use super::{canonical::piece as canonical_piece, node_graph::PBR_CONTEXT_INPUTS};
 
 pub(super) fn validate(
     factors: Option<&PbrSurfaceFactors>,
@@ -154,70 +154,64 @@ pub(super) fn canonical(factors: Option<&PbrSurfaceFactors>, target: &mut String
 pub(super) fn append_uv0_evaluators(
     generated: &mut String,
     root: &str,
-    root_uses_world_position: bool,
+    root_pbr_inputs: &[MaterialNodeInputSource],
     properties: &str,
     factors: Option<&PbrSurfaceFactors>,
 ) {
-    let (name, position_parameter, position_argument) = if root_uses_world_position {
-        (
-            "evaluate_pbr_material_uv0",
-            ", pbr_world_position: vec3<f32>",
-            ", pbr_world_position",
-        )
+    let forbidden = factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
+    let uv = if factors.is_some() {
+        unique_local("pbr_uv", forbidden.iter().copied())
     } else {
-        ("evaluate_material_uv0", "", "")
+        unique_local("uv", forbidden.iter().copied())
     };
-    if let Some(factors) = factors {
-        generated.push_str(&uv0_base_evaluator(root, factors, root_uses_world_position));
-        generated.push_str(&uv0_properties_evaluator(properties, factors));
+    let mut parameters = format!("{uv}: vec2<f32>");
+    let mut arguments = uv.clone();
+    let mut context_parameters = String::new();
+    for (input, seed) in PBR_CONTEXT_INPUTS {
+        let name = unique_local(seed, forbidden.iter().copied());
+        let parameter = format!(", {name}: vec3<f32>");
+        context_parameters.push_str(&parameter);
+        if root_pbr_inputs.contains(&input) {
+            arguments.push_str(&format!(", {name}"));
+        }
+    }
+    let name = if root_pbr_inputs.is_empty() {
+        "evaluate_material_uv0"
     } else {
-        generated.push_str(&format!(
-            "fn {name}(uv: vec2<f32>{position_parameter}) -> vec4<f32> {{\n    return {root}(uv{position_argument});\n}}\n"
-        ));
+        parameters.push_str(&context_parameters);
+        "evaluate_pbr_material_uv0"
+    };
+    let value = format!("{root}({arguments})");
+    let value = if let Some(factors) = factors {
+        generated.push_str(&uv0_properties_evaluator(properties, factors));
+        let factor = factors
+            .base_factor_parameter
+            .as_deref()
+            .unwrap_or("vec4<f32>(1.0)");
+        let sample = factors.base_texture.as_ref().map_or_else(
+            || String::from("vec4<f32>(1.0)"),
+            |texture| {
+                format!(
+                    "textureSample({}, {}, {uv})",
+                    texture.texture, texture.sampler
+                )
+            },
+        );
+        format!("{value} * {factor} * {sample}")
+    } else {
         generated.push_str(&format!(
             "fn evaluate_metallic_roughness_uv0(uv: vec2<f32>) -> vec2<f32> {{\n    return {properties}(uv);\n}}\n"
         ));
-    }
-    if !root_uses_world_position {
-        generated.push_str("fn evaluate_pbr_material_uv0(uv: vec2<f32>, world_position: vec3<f32>) -> vec4<f32> {\n    return evaluate_material_uv0(uv);\n}\n");
-    }
-}
-
-fn uv0_base_evaluator(
-    root: &str,
-    factors: &PbrSurfaceFactors,
-    uses_world_position: bool,
-) -> String {
-    let uv = unique_local("pbr_uv", factor_symbols(factors, [root]));
-    let position = unique_local(
-        "pbr_world_position",
-        factor_symbols(factors, [root, uv.as_str()]),
-    );
-    let (name, position_parameter, position_argument) = if uses_world_position {
-        (
-            "evaluate_pbr_material_uv0",
-            format!(", {position}: vec3<f32>"),
-            format!(", {position}"),
-        )
-    } else {
-        ("evaluate_material_uv0", String::new(), String::new())
+        value
     };
-    let factor = factors
-        .base_factor_parameter
-        .as_deref()
-        .unwrap_or("vec4<f32>(1.0)");
-    let sample = factors.base_texture.as_ref().map_or_else(
-        || String::from("vec4<f32>(1.0)"),
-        |texture| {
-            format!(
-                "textureSample({}, {}, {uv})",
-                texture.texture, texture.sampler
-            )
-        },
-    );
-    format!(
-        "fn {name}({uv}: vec2<f32>{position_parameter}) -> vec4<f32> {{\n    return {root}({uv}{position_argument}) * {factor} * {sample};\n}}\n"
-    )
+    generated.push_str(&format!(
+        "fn {name}({parameters}) -> vec4<f32> {{\n    return {value};\n}}\n"
+    ));
+    if root_pbr_inputs.is_empty() {
+        generated.push_str(&format!(
+            "fn evaluate_pbr_material_uv0({parameters}{context_parameters}) -> vec4<f32> {{\n    return evaluate_material_uv0({uv});\n}}\n"
+        ));
+    }
 }
 
 pub(super) fn uv0_properties_evaluator(properties: &str, factors: &PbrSurfaceFactors) -> String {

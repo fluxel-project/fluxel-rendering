@@ -820,11 +820,14 @@ concrete two-feature consumer does not introduce an erased list or registry;
 it uses the existing frame and completion owners for all submitted resources.
 
 Perspective `ShadingCamera` already supplies its world eye. For parallel
-lighting, `ShadingCamera::orthographic_at` supplies an explicit sorting eye
-without changing the direction-only lighting uniform ABI. A parallel direction
-alone cannot establish Babylon's camera-distance order and is refused for a
-transparent draw. Invalid or projective world transforms and unavailable CPU
-position data are also refused before dependent backend operations.
+lighting, `ShadingCamera::orthographic_at` supplies an explicit sorting eye.
+PBR surface nodes that request camera position consume that actual eye through
+their own transform-uniform field; they never receive the parallel lighting
+direction as a substitute. A parallel direction alone is refused before shader
+composition when such a material requires an eye, and it also cannot establish
+Babylon's camera-distance order for a transparent draw. Invalid or projective
+world transforms and unavailable CPU position data are likewise refused before
+dependent backend operations.
 
 The sorted pipeline uses Babylon's actual `ALPHA_COMBINE` factors: RGB is
 `src.rgb * src.a + dst.rgb * (1 - src.a)`, while alpha uses `src.a + dst.a`.

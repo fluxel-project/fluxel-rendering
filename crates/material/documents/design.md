@@ -128,10 +128,13 @@ to compose a whole program:
 When a typed node topology is lowered, its generated wrappers are Material
 implementation details. The Color and legacy metallic-roughness contexts use
 zero-argument wrappers. UV0 contexts supply `MaterialNodeInputSource::Uv0`
-as a `vec2<f32>`. A UV0 metallic-roughness graph can also connect
-`MaterialNodeInputSource::WorldPosition` to a `vec3<f32>` port. The
-Renderer supplies interpolated XYZ in the existing Fluxel world space.
-Other surface contexts reject the world-position connection. Author source and
+as a `vec2<f32>`. A UV0 metallic-roughness graph can connect `WorldPosition`,
+`WorldNormal` and `CameraPosition` to `vec3<f32>` ports. Renderer supplies
+the interpolated position, normalized geometric mesh normal and actual eye
+in Fluxel world space. The geometric normal precedes normal mapping and
+sidedness. A graph that asks for the eye requires a view with an explicit
+position, including for a parallel lighting camera. Other surface contexts
+reject these connections. Author source and
 declared callable edges may not reference generated wrappers: every
 author-to-node edge must be represented by a typed port connection. This
 prevents hidden cross-graph recursion before a variant is published.
@@ -250,7 +253,8 @@ raster intent are carried separately by `SurfacePolicy`.
 
 `MetallicRoughnessUv0` supplies the PBR evaluator context. A direct root and
 the named property callable take one `vec2<f32>` UV0 argument. The Renderer
-calls `evaluate_pbr_material_uv0(uv, world_position)`; UV-only roots also
+calls `evaluate_pbr_material_uv0(uv, world_position, world_normal, camera_position)`.
+UV-only roots also
 expose `evaluate_material_uv0(uv)`. The property evaluator remains
 `evaluate_metallic_roughness_uv0(uv)`. Graph wrappers carry the UV0
 argument through typed node connections, so a Code Node can feed a real

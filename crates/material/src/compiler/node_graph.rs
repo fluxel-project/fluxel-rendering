@@ -19,14 +19,20 @@ pub(super) struct NormalizedNodeGraph {
     pub(super) callables: Vec<CallableDeclaration>,
     pub(super) generated_names: Vec<String>,
     pub(super) inputs: Vec<crate::FragmentInput>,
-    pub(super) uses_world_position: bool,
+    pub(super) pbr_inputs: Vec<MaterialNodeInputSource>,
 }
+
+pub(super) const PBR_CONTEXT_INPUTS: [(MaterialNodeInputSource, &str); 3] = [
+    (MaterialNodeInputSource::WorldPosition, "world_position"),
+    (MaterialNodeInputSource::WorldNormal, "world_normal"),
+    (MaterialNodeInputSource::CameraPosition, "camera_position"),
+];
 
 pub(super) fn normalize(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
     accepts_uv0: bool,
-    supplies_world_position: bool,
+    supplies_pbr_context: bool,
 ) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut nodes = BTreeMap::new();
     for node in &graph.nodes {
@@ -45,7 +51,7 @@ pub(super) fn normalize(
             &nodes,
             functions,
             accepts_uv0,
-            supplies_world_position,
+            supplies_pbr_context,
         )?;
     }
     // Every declared node is emitted into the generated source.  Validate all
@@ -55,13 +61,16 @@ pub(super) fn normalize(
         validate_cycles(node, &nodes)?;
     }
 
-    let uses_world_position = nodes.values().any(|node| {
-        node.inputs
-            .iter()
-            .any(|input| input.source == MaterialNodeInputSource::WorldPosition)
-    });
     let uv = context_name("uv", functions);
-    let world_position = context_name("world_position", functions);
+    let context = PBR_CONTEXT_INPUTS
+        .into_iter()
+        .filter(|(source, _)| {
+            nodes
+                .values()
+                .any(|node| node.inputs.iter().any(|input| input.source == *source))
+        })
+        .map(|(source, name)| (source, context_name(name, functions)))
+        .collect::<Vec<_>>();
     let mut inputs = Vec::new();
     if accepts_uv0 {
         inputs.push(crate::FragmentInput {
@@ -69,12 +78,10 @@ pub(super) fn normalize(
             ty: MaterialType::Vec2,
         });
     }
-    if uses_world_position {
-        inputs.push(crate::FragmentInput {
-            name: world_position.clone(),
-            ty: MaterialType::Vec3,
-        });
-    }
+    inputs.extend(context.iter().map(|(_, name)| crate::FragmentInput {
+        name: name.clone(),
+        ty: MaterialType::Vec3,
+    }));
     let parameters = inputs
         .iter()
         .map(|input| format!("{}: {}", input.name, input.ty.wgsl()))
@@ -112,8 +119,12 @@ pub(super) fn normalize(
                     source.push_str(&format!("{}({})", node_name(source_node), arguments));
                 }
                 MaterialNodeInputSource::Uv0 => source.push_str(&uv),
-                MaterialNodeInputSource::WorldPosition => {
-                    source.push_str(&world_position);
+                pbr_input => {
+                    let (_, name) = context
+                        .iter()
+                        .find(|(kind, _)| *kind == pbr_input)
+                        .expect("validated PBR context input");
+                    source.push_str(name);
                 }
             }
         }
@@ -137,7 +148,7 @@ pub(super) fn normalize(
             .collect(),
         callables,
         inputs,
-        uses_world_position,
+        pbr_inputs: context.into_iter().map(|(source, _)| source).collect(),
     })
 }
 
@@ -148,7 +159,7 @@ fn validate_node(
     nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
     functions: &BTreeMap<String, FunctionSignature>,
     accepts_uv0: bool,
-    supplies_world_position: bool,
+    supplies_pbr_context: bool,
 ) -> Result<(), MaterialError> {
     let signature = functions
         .get(callable)
@@ -192,8 +203,10 @@ fn validate_node(
                 }
                 MaterialType::Vec2
             }
-            MaterialNodeInputSource::WorldPosition => {
-                if !supplies_world_position {
+            MaterialNodeInputSource::WorldPosition
+            | MaterialNodeInputSource::WorldNormal
+            | MaterialNodeInputSource::CameraPosition => {
+                if !supplies_pbr_context {
                     return Err(MaterialError::NodeContextUnavailable {
                         node,
                         input: connection.input.clone(),

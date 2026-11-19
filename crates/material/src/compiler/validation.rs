@@ -54,7 +54,7 @@ impl NormalizedMaterialIr {
                     graph,
                     &functions,
                     super::surface::uses_uv0(definition.output()),
-                    super::surface::supplies_world_position(definition.output()),
+                    super::surface::supplies_pbr_context(definition.output()),
                 )
             })
             .transpose()?;
@@ -94,7 +94,7 @@ impl NormalizedMaterialIr {
             &root_fragment,
             node_graph
                 .as_ref()
-                .is_some_and(|graph| graph.uses_world_position),
+                .map_or(&[][..], |graph| graph.pbr_inputs.as_slice()),
             definition.parameters(),
             &resources,
         )?;
@@ -133,11 +133,11 @@ impl NormalizedMaterialIr {
         let mut canonical = String::new();
         canonical_piece(&mut canonical, "root", &self.root_fragment);
         super::surface::canonical(&self.output, &mut canonical);
-        if super::surface::supplies_world_position(&self.output) {
+        if super::surface::supplies_pbr_context(&self.output) {
             canonical_piece(
                 &mut canonical,
                 "surface-evaluator-abi",
-                "pbr-uv0-world-position",
+                "pbr-uv0-world-context",
             );
         }
         super::surface::canonical_extensions(
@@ -225,7 +225,7 @@ impl NormalizedMaterialIr {
             &self.root_fragment,
             self.node_graph
                 .as_ref()
-                .is_some_and(|graph| graph.uses_world_position),
+                .map_or(&[][..], |graph| graph.pbr_inputs.as_slice()),
             &self.output,
             &self.surface_extensions,
             self.emissive_configuration.as_ref(),

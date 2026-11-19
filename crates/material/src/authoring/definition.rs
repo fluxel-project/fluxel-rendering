@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 
 use super::{
-    MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialParameter, MaterialResource,
-    MaterialTextureEncoding, MaterialTextureEncodingRequirement, RefractionEnvironment,
-    StaticValue, SurfacePolicy, TransmissionExtensions,
+    MaterialCodeNode, MaterialFragment, MaterialNodeGraph, MaterialNodeInputSource,
+    MaterialParameter, MaterialResource, MaterialTextureEncoding,
+    MaterialTextureEncodingRequirement, RefractionEnvironment, StaticValue, SurfacePolicy,
+    TransmissionExtensions,
 };
 
 /// The selected surface output for the minimal material contribution.
@@ -397,6 +398,17 @@ impl MaterialDefinition {
     pub(crate) fn static_options(&self) -> &BTreeMap<String, StaticValue> {
         &self.static_options
     }
+    /// Whether the material graph requires an explicit world-space camera eye.
+    pub fn requires_surface_camera_position(&self) -> bool {
+        self.node_graph.as_ref().is_some_and(|graph| {
+            graph.nodes.iter().any(|node| {
+                node.inputs
+                    .iter()
+                    .any(|input| input.source == MaterialNodeInputSource::CameraPosition)
+            })
+        })
+    }
+
     pub(crate) fn node_graph(&self) -> Option<&MaterialNodeGraph> {
         self.node_graph.as_ref()
     }

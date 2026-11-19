@@ -13,6 +13,11 @@ pub enum MaterialNodeInputSource {
     Uv0,
     /// Interpolated XYZ in Fluxel world space, supplied by the UV0 PBR evaluator.
     WorldPosition,
+    /// Normalized, interpolated geometric mesh normal in Fluxel world space.
+    /// The UV0 PBR evaluator provides it before sidedness and normal mapping.
+    WorldNormal,
+    /// Actual camera eye position in Fluxel world space, supplied by the UV0 PBR evaluator.
+    CameraPosition,
 }
 
 /// One connection from an upstream value to one named callable input.

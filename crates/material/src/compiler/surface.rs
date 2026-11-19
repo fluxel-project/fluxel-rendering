@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::MaterialNodeInputSource;
+
 use super::{
     EmissiveConfiguration, MaterialDefinition, MaterialError, MaterialParameter, MaterialResource,
     MaterialResourceKind, MaterialType, PbrSurfaceFactors, SurfaceAlphaMode, SurfaceExtensions,
@@ -14,7 +16,7 @@ pub(super) fn validate_definition(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
-    root_uses_world_position: bool,
+    root_pbr_inputs: &[MaterialNodeInputSource],
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -26,7 +28,7 @@ pub(super) fn validate_definition(
         root,
         functions,
         root_name,
-        root_uses_world_position,
+        root_pbr_inputs,
         parameters,
         resources,
     )?;
@@ -47,7 +49,7 @@ pub(super) fn validate(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
-    root_uses_world_position: bool,
+    root_pbr_inputs: &[MaterialNodeInputSource],
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -67,11 +69,12 @@ pub(super) fn validate(
         });
     }
     let expects_uv0 = uses_uv0(output);
-    let valid_inputs = if root_uses_world_position {
-        matches!(root.inputs.as_slice(), [uv, position]
-            if uv.ty == MaterialType::Vec2 && position.ty == MaterialType::Vec3)
-    } else {
+    let valid_inputs = if root_pbr_inputs.is_empty() {
         has_evaluator_inputs(root, expects_uv0)
+    } else {
+        matches!(root.inputs.as_slice(), [uv, context @ ..]
+            if uv.ty == MaterialType::Vec2 && context.len() == root_pbr_inputs.len()
+            && context.iter().all(|input| input.ty == MaterialType::Vec3))
     };
     if !valid_inputs {
         return Err(MaterialError::RootInputsUnsupported {
@@ -279,7 +282,7 @@ pub(super) fn uses_uv0(output: &SurfaceOutput) -> bool {
     )
 }
 
-pub(super) fn supplies_world_position(output: &SurfaceOutput) -> bool {
+pub(super) fn supplies_pbr_context(output: &SurfaceOutput) -> bool {
     matches!(
         output,
         SurfaceOutput::MetallicRoughnessUv0 { .. }
@@ -315,7 +318,7 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
             String::from("evaluate_emissive_uv0"),
         ]),
     };
-    if supplies_world_position(output) {
+    if supplies_pbr_context(output) {
         names.insert(String::from("evaluate_pbr_material_uv0"));
     }
     names.extend([
@@ -452,7 +455,7 @@ pub(super) fn canonical(output: &SurfaceOutput, target: &mut String) {
 pub(super) fn append_evaluators(
     generated: &mut String,
     root_fragment: &str,
-    root_uses_world_position: bool,
+    root_pbr_inputs: &[MaterialNodeInputSource],
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
@@ -475,10 +478,10 @@ pub(super) fn append_evaluators(
             ));
         }
         SurfaceOutput::MetallicRoughnessUv0 { properties } => {
-            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_uses_world_position, properties, pbr_surface_factors);
+            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_pbr_inputs, properties, pbr_surface_factors);
         }
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
-            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_uses_world_position, properties, pbr_surface_factors);
+            super::pbr_factors::append_uv0_evaluators(generated, root_fragment, root_pbr_inputs, properties, pbr_surface_factors);
             generated.push_str(&format!("fn evaluate_normal_uv0(uv: vec2<f32>) -> vec3<f32> {{\n    return {normal}(uv);\n}}\n"));
             generated.push_str(&super::pbr_factors::uv0_occlusion_evaluator(
                 extensions.occlusion.as_deref(),
