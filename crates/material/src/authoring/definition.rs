@@ -235,12 +235,22 @@ pub struct MaterialDefinition {
     refraction_environment: Option<RefractionEnvironment>,
     node_graph: Option<MaterialNodeGraph>,
     vertex_uv0: Option<VertexUv0>,
+    vertex_varyings: Vec<MaterialVertexVarying>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum VertexUv0 {
     Callable(String),
     Graph(MaterialNodeGraph),
+}
+
+/// One graph result authored for vertex interpolation into the surface graph.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MaterialVertexVarying {
+    /// Stable material-local varying identifier.
+    pub id: u32,
+    /// Typed vertex-graph node result selected for this varying.
+    pub source: MaterialNodeInputSource,
 }
 
 impl MaterialDefinition {
@@ -271,6 +281,7 @@ impl MaterialDefinition {
             refraction_environment: None,
             node_graph: None,
             vertex_uv0: None,
+            vertex_varyings: Vec::new(),
         }
     }
 
@@ -299,6 +310,18 @@ impl MaterialDefinition {
     #[must_use]
     pub fn with_vertex_uv0_graph(mut self, graph: MaterialNodeGraph) -> Self {
         self.vertex_uv0 = Some(VertexUv0::Graph(graph));
+        self
+    }
+
+    /// Selects graph node results that the vertex stage interpolates to the
+    /// fragment surface graph.
+    ///
+    /// This replaces any previously selected vertex varyings. Every source
+    /// must be a node or named node output in the selected vertex graph from
+    /// [`Self::with_vertex_uv0_graph`].
+    #[must_use]
+    pub fn with_vertex_varyings(mut self, varyings: Vec<MaterialVertexVarying>) -> Self {
+        self.vertex_varyings = varyings;
         self
     }
 
@@ -468,6 +491,10 @@ impl MaterialDefinition {
 
     pub(crate) fn vertex_uv0(&self) -> Option<&VertexUv0> {
         self.vertex_uv0.as_ref()
+    }
+
+    pub(crate) fn vertex_varyings(&self) -> &[MaterialVertexVarying] {
+        &self.vertex_varyings
     }
 
     pub(crate) fn node_graph(&self) -> Option<&MaterialNodeGraph> {

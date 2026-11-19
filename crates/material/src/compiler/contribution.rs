@@ -44,6 +44,7 @@ pub struct MaterialShaderContribution {
     pub callables: Vec<CallableDeclaration>,
     /// Canonical static choices participating in composition identity.
     pub static_options: BTreeMap<String, StaticValue>,
+    vertex_varyings: Vec<(u32, MaterialType)>,
 }
 
 impl MaterialShaderContribution {
@@ -65,6 +66,7 @@ impl MaterialShaderContribution {
             parameter_bindings,
             callables,
             static_options,
+            vertex_varyings: Vec::new(),
         }
     }
 
@@ -108,6 +110,21 @@ impl MaterialShaderContribution {
     #[must_use]
     pub fn callable_declarations(&self) -> Vec<CallableDeclaration> {
         self.callables.clone()
+    }
+
+    /// Returns material-local vertex varying identifiers and their values'
+    /// Shader-visible types in interpolation declaration order.
+    #[must_use]
+    pub fn vertex_varyings(&self) -> &[(u32, MaterialType)] {
+        &self.vertex_varyings
+    }
+
+    pub(super) fn with_vertex_varyings(
+        mut self,
+        vertex_varyings: Vec<(u32, MaterialType)>,
+    ) -> Self {
+        self.vertex_varyings = vertex_varyings;
+        self
     }
 
     /// Converts resource metadata into Shader-owned binding declarations.

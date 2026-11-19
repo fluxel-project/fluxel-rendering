@@ -57,6 +57,7 @@ impl NormalizedMaterialIr {
                     &functions,
                     definition.output(),
                     vertex_uv0.is_some(),
+                    super::vertex_uv0::varying_types(vertex_uv0.as_ref()),
                 )
             })
             .transpose()?;
@@ -111,7 +112,8 @@ impl NormalizedMaterialIr {
             definition.parameters(),
             &resources,
         )?;
-        let texture_encoding_requirements = effective_texture_encoding_requirements(definition)?;
+        let texture_encoding_requirements =
+            super::texture_encoding::effective_requirements(definition)?;
         super::texture_encoding::validate(&texture_encoding_requirements, &resources)?;
         validate_top_level_names(
             &fragments,
@@ -228,6 +230,7 @@ impl NormalizedMaterialIr {
         if let Some(graph) = &self.node_graph {
             generated.push_str(&graph.source);
         }
+        let vertex_varyings = super::vertex_uv0::varying_types(self.vertex_uv0.as_ref());
         super::surface::append_evaluators(
             &mut generated,
             &self.root_fragment,
@@ -239,6 +242,7 @@ impl NormalizedMaterialIr {
             self.emissive_configuration.as_ref(),
             self.pbr_surface_factors.as_ref(),
             self.surface_policy,
+            vertex_varyings,
         );
         super::vertex_uv0::append_evaluator(&self.output, self.vertex_uv0.as_ref(), &mut generated);
         super::transmission::append_evaluators(
@@ -286,41 +290,8 @@ impl NormalizedMaterialIr {
             ),
             self.static_options.clone(),
         )
+        .with_vertex_varyings(vertex_varyings.to_vec())
     }
-}
-
-fn effective_texture_encoding_requirements(
-    definition: &MaterialDefinition,
-) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
-    let mut requirements = definition.texture_encoding_requirements().to_vec();
-    if let Some(texture) = definition
-        .emissive_configuration()
-        .and_then(|configuration| configuration.texture.as_ref())
-    {
-        match requirements
-            .iter()
-            .find(|requirement| requirement.resource == texture.texture)
-        {
-            Some(requirement) if requirement.encoding != texture.encoding => {
-                return Err(MaterialError::EmissiveTextureEncodingConflict {
-                    resource: texture.texture.clone(),
-                });
-            }
-            Some(_) => {}
-            None => requirements.push(MaterialTextureEncodingRequirement {
-                resource: texture.texture.clone(),
-                encoding: texture.encoding,
-            }),
-        }
-    }
-    let requirements = super::pbr_factors::effective_texture_encodings(
-        definition.pbr_surface_factors(),
-        requirements,
-    )?;
-    super::transmission::effective_texture_encodings(
-        definition.refraction_environment(),
-        requirements,
-    )
 }
 
 fn validate_code_node_sources(nodes: &[MaterialCodeNode]) -> Result<(), MaterialError> {

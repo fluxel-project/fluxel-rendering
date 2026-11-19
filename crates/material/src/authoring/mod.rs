@@ -12,9 +12,9 @@ pub use assets::{MaterialAsset, MaterialAssetId, MaterialAssetRef};
 pub use code_node::MaterialCodeNode;
 pub(crate) use definition::VertexUv0;
 pub use definition::{
-    EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition, PbrBaseTexture,
-    PbrPackedChannel, PbrPackedMetallicRoughness, PbrSurfaceFactors, SurfaceExtensions,
-    SurfaceOutput,
+    EmissiveConfiguration, EmissiveSrgbDecode, EmissiveTexture, MaterialDefinition,
+    MaterialVertexVarying, PbrBaseTexture, PbrPackedChannel, PbrPackedMetallicRoughness,
+    PbrSurfaceFactors, SurfaceExtensions, SurfaceOutput,
 };
 pub use nodes::*;
 pub use surface_policy::{

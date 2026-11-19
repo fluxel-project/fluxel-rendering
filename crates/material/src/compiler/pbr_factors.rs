@@ -154,9 +154,10 @@ pub(super) fn canonical(factors: Option<&PbrSurfaceFactors>, target: &mut String
 pub(super) fn append_uv0_evaluators(
     generated: &mut String,
     root: &str,
-    root_pbr_inputs: &[MaterialNodeInputSource],
+    root_pbr_inputs: &[(MaterialNodeInputSource, MaterialType)],
     properties: Option<&str>,
     factors: Option<&PbrSurfaceFactors>,
+    vertex_varyings: &[(u32, MaterialType)],
 ) {
     let forbidden = factors.map_or_else(|| vec![root], |factors| factor_symbols(factors, [root]));
     let uv = if factors.is_some() {
@@ -171,7 +172,16 @@ pub(super) fn append_uv0_evaluators(
         let name = unique_local(seed, forbidden.iter().copied());
         parameters.push_str(&format!(", {name}: {}", ty.wgsl()));
         full_arguments.push_str(&format!(", {name}"));
-        if root_pbr_inputs.contains(&input) {
+        if root_pbr_inputs.iter().any(|(source, _)| *source == input) {
+            arguments.push_str(&format!(", {name}"));
+        }
+    }
+    for &(id, ty) in vertex_varyings {
+        let source = MaterialNodeInputSource::VertexVarying(id);
+        let name = unique_local(&format!("varying_{id}"), forbidden.iter().copied());
+        parameters.push_str(&format!(", {name}: {}", ty.wgsl()));
+        full_arguments.push_str(&format!(", {name}"));
+        if root_pbr_inputs.iter().any(|(input, _)| *input == source) {
             arguments.push_str(&format!(", {name}"));
         }
     }

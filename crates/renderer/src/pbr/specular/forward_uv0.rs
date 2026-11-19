@@ -21,7 +21,7 @@ struct PbrSpecularVertexOutput {
     @location(4) uv0: vec2<f32>,
     @location(5) geometric_world_normal: vec3<f32>,
     @location(6) @interpolate(flat) camera_position: vec3<f32>,
-    @location(7) vertex_uv0: vec2<f32>,
+    @location(7) vertex_uv0: vec2<f32>, /* fluxel:vertex-varying-fields-8 */
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
@@ -37,7 +37,7 @@ struct PbrSpecularVertexOutput {
     output.geometric_world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
     output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
-    output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);
+    /* fluxel:vertex-varying-write-output */output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);
     return output;
 }
 "#
@@ -49,7 +49,7 @@ struct PbrSpecularVertexOutput {
     @location(1) world_normal: vec3<f32>,
     @location(2) uv0: vec2<f32>,
     @location(3) @interpolate(flat) camera_position: vec3<f32>,
-    @location(4) vertex_uv0: vec2<f32>,
+    @location(4) vertex_uv0: vec2<f32>, /* fluxel:vertex-varying-fields-5 */
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
@@ -61,7 +61,7 @@ struct PbrSpecularVertexOutput {
     output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
     output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
-    output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);
+    /* fluxel:vertex-varying-write-output */output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);
     return output;
 }
 "#
@@ -153,7 +153,7 @@ struct PbrSpecularVertexOutput {
     format!(
         r#"{input}
 fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{
-    let surface = evaluate_pbr_surface_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0);
+    let surface = evaluate_pbr_surface_uv0(input.uv0, input.world_position, {geometric_normal}, input.camera_position, input.vertex_uv0 /* fluxel:vertex-varying-arguments */);
     let material = surface.base;
     let base = {base};
     let properties = surface.properties;

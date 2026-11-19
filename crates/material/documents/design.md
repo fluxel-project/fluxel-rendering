@@ -144,6 +144,13 @@ before interpolation. The vertex graph has its own node identities, can
 consume mesh UV0, and returns a `vec2<f32>`. A fragment graph connects
 the interpolated result through `VertexUv0` and can still connect raw UV0
 independently.
+A material can additionally select node or node-output results with
+`with_vertex_varyings`. Material-local varying IDs are unique, values selected
+from the typed `with_vertex_uv0_graph` vertex graph that the vertex path
+evaluates and interpolates for fragment-graph
+`MaterialNodeInputSource::VertexVarying(id)` inputs. Their value type is
+preserved in the contribution for the consumer template; callable roots and
+non-graph sources are intentionally not accepted.
 A vertex UV callable may also read material uniforms. To apply a texture
 matrix with the Babylon.js UV convention, read a `mat4x4<f32>` parameter and
 return `(texture_transform * vec4<f32>(uv, 1.0, 0.0)).xy`. Keep texture
@@ -450,6 +457,7 @@ consumer still declares its actual use and validates current concrete bindings.
 - ordered source units and generated glue;
 - generic binding declarations and dynamic parameter-to-uniform associations;
 - callable declarations to compare with actual WGSL reflection;
+- typed material-local vertex varying identifiers for vertex/fragment templates;
 - canonical static choices needed by complete program composition.
 
 The consumer supplies the pass template, selected entry points, vertex/geometry

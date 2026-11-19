@@ -235,10 +235,10 @@ outside this input contract.
 
 ### Bounded Deferred scene batches
 
-Multiple visible records currently share the UV0-normal metallic/roughness
-lighting and packing family. Other established single-mesh routes remain
-available; an incompatible multi-record family is refused before allocation.
-The position-deformation entry retains its single-draw contract.
+Multiple visible records share the UV0-normal or graph-authored UV0
+metallic/roughness lighting and packing family. Preparation checks this
+family before allocation. The position-deformation entry retains its
+single-draw contract.
 
 One frame aggregates concrete resident streams and textures, deduplicating by
 exact asset identity, generation, and device. Every draw retains its own stream
@@ -306,6 +306,14 @@ Deferred uniform layouts use the reflected vertex and fragment visibility.
 Sampled textures and samplers are fragment bindings. Renderer preparation checks the
 instance against the exact asset-bound material variant and rejects invalid
 parameter values before it reserves GPU resources.
+
+UV0 PBR programs can carry typed Material varyings from a shared vertex graph
+to the fragment evaluator. Preparation assigns locations after the template's
+geometry varyings in stable material ID order. One vertex evaluation supplies
+UV0 and every selected port. Float values use perspective interpolation,
+integers use flat interpolation, and matrices use four interpolated columns.
+Each specialized entry is composed and validated with its actual shader
+interface.
 
 Scene and typed Feature preparation select instances by exact draw identity on
 the prepared frame. The built-in Forward and Deferred CPU pipelines accept that

@@ -6,10 +6,13 @@ use fluxel_shader::CallableDeclaration;
 
 use crate::{
     MaterialError, MaterialNodeGraph, MaterialNodeId, MaterialNodeInputSource, MaterialNodeOutput,
-    MaterialType, SurfaceOutput,
+    MaterialType, MaterialVertexVarying, SurfaceOutput,
 };
 
 use super::validation::FunctionSignature;
+
+#[path = "node_graph_varyings.rs"]
+mod varyings;
 
 /// Validated generated glue for a node-authored material graph.
 #[derive(Clone, Debug)]
@@ -20,7 +23,8 @@ pub(super) struct NormalizedNodeGraph {
     pub(super) callables: Vec<CallableDeclaration>,
     pub(super) generated_names: Vec<String>,
     pub(super) inputs: Vec<crate::FragmentInput>,
-    pub(super) pbr_inputs: Vec<MaterialNodeInputSource>,
+    pub(super) pbr_inputs: Vec<(MaterialNodeInputSource, MaterialType)>,
+    pub(super) vertex_varyings: Vec<(u32, MaterialType)>,
 }
 
 pub(super) const PBR_CONTEXT_INPUTS: [(MaterialNodeInputSource, &str, MaterialType); 4] = [
@@ -76,14 +80,23 @@ pub(super) fn normalize_surface(
     functions: &BTreeMap<String, FunctionSignature>,
     surface_output: &SurfaceOutput,
     has_vertex_uv0: bool,
+    vertex_varyings: &[(u32, MaterialType)],
 ) -> Result<NormalizedNodeGraph, MaterialError> {
-    let context = PBR_CONTEXT_INPUTS
+    let mut context = PBR_CONTEXT_INPUTS
         .into_iter()
         .filter(|(source, _, _)| {
             super::surface::supplies_pbr_context(surface_output)
                 && (*source != MaterialNodeInputSource::VertexUv0 || has_vertex_uv0)
         })
+        .map(|(source, name, ty)| (source, name.to_owned(), ty))
         .collect::<Vec<_>>();
+    context.extend(vertex_varyings.iter().map(|(id, ty)| {
+        (
+            MaterialNodeInputSource::VertexVarying(*id),
+            format!("varying_{id}"),
+            *ty,
+        )
+    }));
     let properties = match surface_output {
         SurfaceOutput::MetallicRoughnessUv0Graph {
             metallic,
@@ -106,14 +119,24 @@ pub(super) fn normalize_surface(
         super::surface::uses_uv0(surface_output),
         &context,
         properties,
+        &[],
     )
 }
 
 pub(super) fn normalize_vertex_uv0(
     graph: &MaterialNodeGraph,
     functions: &BTreeMap<String, FunctionSignature>,
+    vertex_varyings: &[MaterialVertexVarying],
 ) -> Result<NormalizedNodeGraph, MaterialError> {
-    normalize(graph, functions, NodeGraphStage::VertexUv0, true, &[], None)
+    normalize(
+        graph,
+        functions,
+        NodeGraphStage::VertexUv0,
+        true,
+        &[],
+        None,
+        vertex_varyings,
+    )
 }
 
 fn normalize(
@@ -121,8 +144,9 @@ fn normalize(
     functions: &BTreeMap<String, FunctionSignature>,
     stage: NodeGraphStage,
     accepts_uv0: bool,
-    available_context: &[(MaterialNodeInputSource, &str, MaterialType)],
+    available_context: &[(MaterialNodeInputSource, String, MaterialType)],
     properties: Option<PbrGraphRoots<MaterialNodeInputSource>>,
+    vertex_varyings: &[MaterialVertexVarying],
 ) -> Result<NormalizedNodeGraph, MaterialError> {
     let mut context_types = Vec::new();
     if accepts_uv0 {
@@ -175,18 +199,19 @@ fn normalize(
         output_roots.extend(roots.world_normal.map(|(node, _)| node));
         output_roots.extend(roots.occlusion.map(|(node, _)| node));
     }
+    let vertex_varyings = varyings::resolve(vertex_varyings, &nodes, functions)?;
+    output_roots.extend(vertex_varyings.iter().map(|varying| varying.root.0));
     let order = evaluation_order(output_roots, &nodes)?;
 
     let uv = context_name("uv", functions);
     let context = available_context
         .iter()
-        .copied()
         .filter(|(source, _, _)| {
             nodes
                 .values()
                 .any(|node| node.inputs.iter().any(|input| input.source == *source))
         })
-        .map(|(source, name, ty)| (source, context_name(name, functions), ty))
+        .map(|(source, name, ty)| (*source, context_name(name, functions), *ty))
         .collect::<Vec<_>>();
     let mut inputs = Vec::new();
     if accepts_uv0 {
@@ -219,6 +244,8 @@ fn normalize(
     let result_type = if properties.is_some() {
         source.push_str("struct FluxelPbrGraphValues { base: vec4<f32>, properties: vec2<f32>, world_normal: vec3<f32>, has_world_normal: bool, occlusion: f32 };\n");
         "FluxelPbrGraphValues"
+    } else if !vertex_varyings.is_empty() {
+        varyings::append_type(&mut source, &vertex_varyings)
     } else {
         output.wgsl()
     };
@@ -279,6 +306,8 @@ fn normalize(
         source.push_str(&format!(
             "    return FluxelPbrGraphValues({base}, vec2<f32>({metallic}, {roughness}), {normal}, {has_world_normal}, {occlusion});\n}}\n"
         ));
+    } else if !vertex_varyings.is_empty() {
+        varyings::append_result(&mut source, &vertex_varyings, base, &locals);
     } else {
         source.push_str(&format!("    return {base};\n}}\n"));
         callables.push(CallableDeclaration {
@@ -294,7 +323,14 @@ fn normalize(
         generated_names: nodes.keys().map(|id| stage.node_name(*id)).collect(),
         callables,
         inputs,
-        pbr_inputs: context.into_iter().map(|(source, _, _)| source).collect(),
+        pbr_inputs: context
+            .into_iter()
+            .map(|(source, _, ty)| (source, ty))
+            .collect(),
+        vertex_varyings: vertex_varyings
+            .into_iter()
+            .map(|varying| (varying.id, varying.ty))
+            .collect(),
     })
 }
 
@@ -310,8 +346,20 @@ fn property_root(
         MaterialNodeInputSource::NodeOutput { node, output } => (node, Some(output)),
         _ => return Err(MaterialError::PbrGraphPropertySource { property }),
     };
+    let actual = node_value_type((node, port), nodes, functions)?;
+    if actual != expected {
+        return Err(MaterialError::PbrGraphPropertyType { property, actual });
+    }
+    Ok((node, port))
+}
+
+fn node_value_type(
+    (node, port): PropertyRoot,
+    nodes: &BTreeMap<MaterialNodeId, &crate::MaterialNode>,
+    functions: &BTreeMap<String, FunctionSignature>,
+) -> Result<MaterialType, MaterialError> {
     let upstream = upstream_type(node, nodes, functions)?;
-    let actual = match port {
+    Ok(match port {
         Some(output) => output
             .ty(upstream)
             .ok_or(MaterialError::NodeOutputUnavailable {
@@ -320,11 +368,7 @@ fn property_root(
                 actual: upstream,
             })?,
         None => upstream,
-    };
-    if actual != expected {
-        return Err(MaterialError::PbrGraphPropertyType { property, actual });
-    }
-    Ok((node, port))
+    })
 }
 
 fn property_expression(

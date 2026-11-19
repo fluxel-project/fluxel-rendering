@@ -40,6 +40,7 @@ pub(crate) use forward::{
 pub use forward_sources::{ForwardDrawOrder, ForwardDrawSource};
 pub(crate) use geometry_key::{VertexLayoutKey, vertex_layout_key};
 mod material;
+mod vertex_varyings;
 pub use geometry::{
     GeometryAttribute, GeometryBufferOwner, GeometryDraw, GeometryError, GeometryLayout,
     GeometryStream, GeometryStreamBinding, PreparedGeometry, PreparedGeometryBindings,

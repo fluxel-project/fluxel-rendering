@@ -99,6 +99,18 @@ pub enum MaterialError {
         /// Declared result type of that node.
         actual: MaterialType,
     },
+    /// Material vertex varyings require a selected typed vertex graph.
+    VertexVaryingsRequireGraph,
+    /// More than one material vertex varying used the same identifier.
+    DuplicateVertexVarying {
+        /// Repeated varying identifier.
+        id: u32,
+    },
+    /// A material vertex varying selected something other than a node result.
+    InvalidVertexVaryingSource {
+        /// Varying identifier with the invalid source.
+        id: u32,
+    },
     /// A reachable node graph cycle cannot lower to WGSL wrappers.
     NodeCycle {
         /// Node encountered a second time on the active DFS path.

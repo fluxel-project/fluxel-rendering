@@ -2,19 +2,20 @@
 
 use super::super::pbr_factors;
 use crate::{
-    EmissiveConfiguration, MaterialNodeInputSource, PbrSurfaceFactors, SurfaceAlphaMode,
-    SurfaceExtensions, SurfaceOutput, SurfacePolicy,
+    EmissiveConfiguration, MaterialNodeInputSource, MaterialType, PbrSurfaceFactors,
+    SurfaceAlphaMode, SurfaceExtensions, SurfaceOutput, SurfacePolicy,
 };
 
 pub(in crate::compiler) fn append_evaluators(
     generated: &mut String,
     root_fragment: &str,
-    root_pbr_inputs: &[MaterialNodeInputSource],
+    root_pbr_inputs: &[(MaterialNodeInputSource, MaterialType)],
     output: &SurfaceOutput,
     extensions: &SurfaceExtensions,
     emissive_configuration: Option<&EmissiveConfiguration>,
     pbr_surface_factors: Option<&PbrSurfaceFactors>,
     policy: SurfacePolicy,
+    vertex_varyings: &[(u32, MaterialType)],
 ) {
     match output {
         SurfaceOutput::Color => generated.push_str(&format!(
@@ -37,6 +38,7 @@ pub(in crate::compiler) fn append_evaluators(
             root_pbr_inputs,
             Some(properties),
             pbr_surface_factors,
+            vertex_varyings,
         ),
         SurfaceOutput::MetallicRoughnessUv0Normal { properties, normal } => {
             pbr_factors::append_uv0_evaluators(
@@ -45,6 +47,7 @@ pub(in crate::compiler) fn append_evaluators(
                 root_pbr_inputs,
                 Some(properties),
                 pbr_surface_factors,
+                vertex_varyings,
             );
             append_normal_extensions(
                 generated,
@@ -61,6 +64,7 @@ pub(in crate::compiler) fn append_evaluators(
                 root_pbr_inputs,
                 None,
                 pbr_surface_factors,
+                vertex_varyings,
             );
             if let Some(normal) = normal {
                 append_normal_extensions(

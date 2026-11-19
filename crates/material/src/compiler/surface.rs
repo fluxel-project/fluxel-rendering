@@ -20,7 +20,7 @@ pub(super) fn validate_definition(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
-    root_pbr_inputs: &[MaterialNodeInputSource],
+    root_pbr_inputs: &[(MaterialNodeInputSource, MaterialType)],
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -53,7 +53,7 @@ pub(super) fn validate(
     root: &FunctionSignature,
     functions: &BTreeMap<String, FunctionSignature>,
     root_name: &str,
-    root_pbr_inputs: &[MaterialNodeInputSource],
+    root_pbr_inputs: &[(MaterialNodeInputSource, MaterialType)],
     parameters: &[MaterialParameter],
     resources: &[MaterialResource],
 ) -> Result<(), MaterialError> {
@@ -88,8 +88,8 @@ pub(super) fn validate(
     } else {
         matches!(root.inputs.as_slice(), [uv, context @ ..]
             if uv.ty == MaterialType::Vec2 && context.len() == root_pbr_inputs.len()
-            && context.iter().map(|input| input.ty).eq(super::node_graph::PBR_CONTEXT_INPUTS
-                .iter().filter(|(source, _, _)| root_pbr_inputs.contains(source)).map(|(_, _, ty)| *ty)))
+            && context.iter().map(|input| input.ty)
+                .eq(root_pbr_inputs.iter().map(|(_, ty)| *ty)))
     };
     if !valid_inputs {
         return Err(MaterialError::RootInputsUnsupported {
@@ -363,6 +363,8 @@ pub(super) fn reserved_names(output: &SurfaceOutput) -> BTreeSet<String> {
         names.insert(String::from("evaluate_pbr_material_uv0"));
         names.insert(String::from("evaluate_pbr_surface_uv0"));
         names.insert(String::from("FluxelPbrSurface"));
+        names.insert(String::from("FluxelVertexVaryings"));
+        names.insert(String::from("evaluate_pbr_vertex_varyings"));
         names.insert(String::from(super::vertex_uv0::EVALUATOR));
     }
     names.extend([

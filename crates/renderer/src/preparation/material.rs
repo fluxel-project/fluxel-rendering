@@ -113,6 +113,18 @@ pub enum MaterialPreparationError {
     InvalidEnvironmentRoute,
     /// Renderer-owned OIT metadata does not match the reflected texture ABI.
     InvalidOitFragmentRoute,
+    /// The selected renderer route cannot carry Material vertex varyings.
+    InvalidVertexVaryingRoute {
+        /// The selected material context, if the request supplied one.
+        context: Option<String>,
+    },
+    /// A PBR template did not expose exactly one marker for the selected varying role.
+    MissingVertexVaryingMarker {
+        /// The missing marker's role.
+        marker: &'static str,
+    },
+    /// Dynamic varyings would exceed the WGSL location address space.
+    VertexVaryingLocationOverflow,
 }
 
 impl fmt::Display for MaterialPreparationError {
@@ -138,6 +150,20 @@ impl fmt::Display for MaterialPreparationError {
             }
             Self::InvalidOitFragmentRoute => {
                 formatter.write_str("invalid renderer OIT fragment route")
+            }
+            Self::InvalidVertexVaryingRoute { context } => write!(
+                formatter,
+                "renderer material context cannot carry vertex varyings: {}",
+                context.as_deref().unwrap_or("missing"),
+            ),
+            Self::MissingVertexVaryingMarker { marker } => {
+                write!(
+                    formatter,
+                    "PBR template requires one vertex-varying {marker} marker"
+                )
+            }
+            Self::VertexVaryingLocationOverflow => {
+                formatter.write_str("vertex varying locations overflow u32")
             }
         }
     }
@@ -180,6 +206,7 @@ pub(super) fn prepare_compiled_material(
         super::forward_fragment::use_premultiplied_rgb(&mut request);
     }
     let contribution = material.contribution();
+    super::vertex_varyings::specialize(&mut request, contribution.vertex_varyings())?;
     for (name, value) in contribution.shader_static_options() {
         if let Some(existing) = request.static_options.get(&name) {
             if existing != &value {

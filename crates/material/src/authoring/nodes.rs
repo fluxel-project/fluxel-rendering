@@ -58,6 +58,8 @@ pub enum MaterialNodeInputSource {
     CameraPosition,
     /// Interpolated UV0 computed by the material's vertex-stage evaluator.
     VertexUv0,
+    /// One material-authored value interpolated from the vertex stage.
+    VertexVarying(u32),
 }
 
 /// One connection from an upstream value to one named callable input.

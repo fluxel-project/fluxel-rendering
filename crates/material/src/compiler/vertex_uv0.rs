@@ -13,6 +13,7 @@ use super::{
 };
 
 pub(super) const EVALUATOR: &str = "evaluate_pbr_vertex_uv0";
+pub(super) const VARYING_EVALUATOR: &str = "evaluate_pbr_vertex_varyings";
 
 #[derive(Clone, Debug)]
 pub(super) enum NormalizedVertexUv0 {
@@ -36,11 +37,22 @@ impl NormalizedVertexUv0 {
     }
 }
 
+pub(super) fn varying_types(vertex_uv0: Option<&NormalizedVertexUv0>) -> &[(u32, MaterialType)] {
+    vertex_uv0
+        .and_then(NormalizedVertexUv0::graph)
+        .map_or(&[], |graph| graph.vertex_varyings.as_slice())
+}
+
 pub(super) fn validate(
     definition: &MaterialDefinition,
     functions: &BTreeMap<String, FunctionSignature>,
 ) -> Result<Option<NormalizedVertexUv0>, MaterialError> {
-    let Some(vertex_uv0) = definition.vertex_uv0() else {
+    let selected = definition.vertex_uv0();
+    let varyings = definition.vertex_varyings();
+    if !varyings.is_empty() && !matches!(selected, Some(VertexUv0::Graph(_))) {
+        return Err(MaterialError::VertexVaryingsRequireGraph);
+    }
+    let Some(vertex_uv0) = selected else {
         return Ok(None);
     };
     if !supplies_pbr_context(definition.output()) {
@@ -66,7 +78,7 @@ pub(super) fn validate(
             NormalizedVertexUv0::Callable(callable.clone())
         }
         VertexUv0::Graph(graph) => {
-            let normalized = normalize_vertex_uv0(graph, functions)?;
+            let normalized = normalize_vertex_uv0(graph, functions, varyings)?;
             if normalized.output != MaterialType::Vec2 {
                 return Err(MaterialError::VertexUv0GraphOutput {
                     node: graph.output,
@@ -88,7 +100,7 @@ pub(super) fn canonical(
         piece(
             canonical,
             "surface-evaluator-abi",
-            "pbr-uv0-surface-value-v3",
+            "pbr-uv0-surface-value-v4",
         );
     }
     match vertex_uv0 {
@@ -117,7 +129,13 @@ pub(super) fn append_evaluator(
     } else {
         "uv"
     };
-    let value = callable.map_or_else(|| uv.into(), |callable| format!("{callable}({uv})"));
+    let mut value = callable.map_or_else(|| uv.into(), |callable| format!("{callable}({uv})"));
+    if !varying_types(vertex_uv0).is_empty() {
+        target.push_str(&format!(
+            "fn {VARYING_EVALUATOR}({uv}: vec2<f32>) -> FluxelVertexVaryings {{\n    return {value};\n}}\n"
+        ));
+        value = format!("{VARYING_EVALUATOR}({uv}).uv0");
+    }
     target.push_str(&format!(
         "fn {EVALUATOR}({uv}: vec2<f32>) -> vec2<f32> {{\n    return {value};\n}}\n"
     ));

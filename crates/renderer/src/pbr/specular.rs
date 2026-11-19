@@ -286,7 +286,7 @@ fn forward_specular_request_inner(
     // inspected or rewritten.
     request
         .source_units
-        .retain(|unit| !unit.id.0.starts_with("pbr-forward"));
+        .retain(|unit| !unit.id.0.starts_with("pbr-forward") && unit.id.0 != "pbr-uv0-vertex");
     request
         .source_units
         .push(SourceUnit::new("pbr-forward-specular", source));

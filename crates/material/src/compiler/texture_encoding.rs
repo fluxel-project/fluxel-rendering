@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    MaterialError, MaterialResource, MaterialResourceKind, MaterialTextureEncoding,
-    MaterialTextureEncodingRequirement,
+    MaterialDefinition, MaterialError, MaterialResource, MaterialResourceKind,
+    MaterialTextureEncoding, MaterialTextureEncodingRequirement,
 };
 
 use super::canonical::piece;
@@ -59,4 +59,38 @@ pub(super) fn canonical(requirements: &[MaterialTextureEncodingRequirement], tar
             },
         );
     }
+}
+
+pub(super) fn effective_requirements(
+    definition: &MaterialDefinition,
+) -> Result<Vec<MaterialTextureEncodingRequirement>, MaterialError> {
+    let mut requirements = definition.texture_encoding_requirements().to_vec();
+    if let Some(texture) = definition
+        .emissive_configuration()
+        .and_then(|configuration| configuration.texture.as_ref())
+    {
+        match requirements
+            .iter()
+            .find(|requirement| requirement.resource == texture.texture)
+        {
+            Some(requirement) if requirement.encoding != texture.encoding => {
+                return Err(MaterialError::EmissiveTextureEncodingConflict {
+                    resource: texture.texture.clone(),
+                });
+            }
+            Some(_) => {}
+            None => requirements.push(MaterialTextureEncodingRequirement {
+                resource: texture.texture.clone(),
+                encoding: texture.encoding,
+            }),
+        }
+    }
+    let requirements = super::pbr_factors::effective_texture_encodings(
+        definition.pbr_surface_factors(),
+        requirements,
+    )?;
+    super::transmission::effective_texture_encodings(
+        definition.refraction_environment(),
+        requirements,
+    )
 }
