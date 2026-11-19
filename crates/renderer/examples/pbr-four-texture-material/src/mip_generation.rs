@@ -116,7 +116,7 @@ pub fn input(case: Case) -> Result<Input, Box<dyn Error>> {
                 RESOURCE,
                 SceneAssetRef::from_snapshot(&texture),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [case.lod(), 1., 1., 1.],
         },
         transform: RenderTransform::identity(),

@@ -132,7 +132,7 @@ pub fn input(case: Case) -> Result<Input, Box<dyn Error>> {
                 geometry: SceneAssetRef::from_snapshot(&geometry),
                 material: SceneAssetRef::from_snapshot(&material),
                 textures,
-                sampler: None,
+                samplers: Vec::new(),
                 tint: TINTS[object],
             },
             transform: RenderTransform::from_columns(models[object])?,

@@ -28,7 +28,7 @@ fn deferred_multi_record_refuses_an_incompatible_lighting_family_before_allocati
                     "material_texture",
                     SceneAssetRef::from_snapshot(&assets.textures[0]),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.; 4],
             },
             transform: RenderTransform::identity(),

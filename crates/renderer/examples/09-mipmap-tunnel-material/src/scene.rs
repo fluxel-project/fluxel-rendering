@@ -84,7 +84,7 @@ pub fn input(
                 IMAGE,
                 SceneAssetRef::from_snapshot(&texture),
             )],
-            sampler: Some(ForwardSamplerBinding::new(SAMPLER, sampler.clone())),
+            samplers: vec![ForwardSamplerBinding::new(SAMPLER, sampler.clone())],
             tint: [0.0, 1.0, 1.0, 1.0],
         },
         transform: RenderTransform::identity(),

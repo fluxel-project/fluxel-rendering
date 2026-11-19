@@ -350,7 +350,7 @@ fn scene(
                 "effects_tex",
                 SceneAssetRef::from_snapshot(t),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [BASE[0] as f32, BASE[1] as f32, BASE[2] as f32, 1.],
         },
         transform: RenderTransform::identity(),

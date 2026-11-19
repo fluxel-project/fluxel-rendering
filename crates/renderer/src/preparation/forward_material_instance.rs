@@ -25,13 +25,9 @@ pub(super) fn resolve_resource_aliases<'a>(
         active
             .textures
             .retain(|binding| !schema.unused_textures.contains(&binding.resource));
-        if active
-            .sampler
-            .as_ref()
-            .is_some_and(|binding| schema.unused_samplers.contains(&binding.resource))
-        {
-            active.sampler = None;
-        }
+        active
+            .samplers
+            .retain(|binding| !schema.unused_samplers.contains(&binding.resource));
         return Ok(Cow::Owned(active));
     };
 
@@ -59,7 +55,7 @@ pub(super) fn resolve_resource_aliases<'a>(
         geometry: resources.geometry,
         material: resources.material,
         textures: Vec::with_capacity(schema.textures.len()),
-        sampler: resources.sampler.clone(),
+        samplers: Vec::with_capacity(schema.samplers.len()),
         tint: resources.tint,
     };
     for binding in &schema.textures {
@@ -80,29 +76,50 @@ pub(super) fn resolve_resource_aliases<'a>(
         mapped.textures.push(texture);
         used.insert(alias);
     }
-    if let Some(sampler) = &mut mapped.sampler {
-        let active = schema.sampler_name.as_deref();
-        let active_alias = active.and_then(|name| instance.resource(name));
-        if let Some(name) = active.filter(|_| active_alias == Some(sampler.resource.as_str())) {
-            sampler.resource = name.to_owned();
-        } else if schema
-            .unused_samplers
-            .iter()
-            .any(|name| instance.resource(name) == Some(sampler.resource.as_str()))
+    let mut provided_samplers = HashMap::with_capacity(resources.samplers.len());
+    for sampler in &resources.samplers {
+        if provided_samplers
+            .insert(sampler.resource.as_str(), sampler)
+            .is_some()
         {
-            mapped.sampler = None;
-        } else if let Some(name) = active {
-            return Err(ForwardPreparationError::SamplerResourceMismatch {
-                source,
-                expected: active_alias.unwrap_or(name).to_owned(),
-                actual: sampler.resource.clone(),
-            });
-        } else {
-            return Err(ForwardPreparationError::UnexpectedSamplerResource {
+            return Err(ForwardPreparationError::DuplicateSamplerResource {
                 source,
                 resource: sampler.resource.clone(),
             });
         }
+    }
+    let mut used_samplers = HashSet::new();
+    for binding in &schema.samplers {
+        let alias = instance.resource(&binding.name).unwrap_or(&binding.name);
+        let Some(sampler) = provided_samplers.get(alias) else {
+            continue;
+        };
+        let mut sampler = (*sampler).clone();
+        sampler.resource.clone_from(&binding.name);
+        mapped.samplers.push(sampler);
+        used_samplers.insert(alias);
+    }
+    if let Some(sampler) = resources.samplers.iter().find(|sampler| {
+        !used_samplers.contains(sampler.resource.as_str())
+            && !schema
+                .unused_samplers
+                .iter()
+                .any(|name| instance.resource(name) == Some(sampler.resource.as_str()))
+    }) {
+        if schema.samplers.len() == 1 {
+            let expected = instance
+                .resource(&schema.samplers[0].name)
+                .unwrap_or(&schema.samplers[0].name);
+            return Err(ForwardPreparationError::SamplerResourceMismatch {
+                source,
+                expected: expected.to_owned(),
+                actual: sampler.resource.clone(),
+            });
+        }
+        return Err(ForwardPreparationError::UnexpectedSamplerResource {
+            source,
+            resource: sampler.resource.clone(),
+        });
     }
     if let Some(texture) = resources
         .textures

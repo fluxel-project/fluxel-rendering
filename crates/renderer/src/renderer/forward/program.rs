@@ -123,19 +123,17 @@ where
             partially_bound: false,
             nonuniform_indexing: false,
         }));
-        if let Some(binding) = schema.sampler {
-            material_entries.push(BindGroupLayoutEntry {
-                binding,
-                visibility: vec![ShaderStage::Fragment],
-                ty: BindingType::Sampler {
-                    filtering: true,
-                    comparison: false,
-                },
-                count: BindingCount::One,
-                partially_bound: false,
-                nonuniform_indexing: false,
-            });
-        }
+        material_entries.extend(schema.samplers.iter().map(|sampler| BindGroupLayoutEntry {
+            binding: sampler.binding,
+            visibility: vec![ShaderStage::Fragment],
+            ty: BindingType::Sampler {
+                filtering: true,
+                comparison: false,
+            },
+            count: BindingCount::One,
+            partially_bound: false,
+            nonuniform_indexing: false,
+        }));
         material_entries.sort_by_key(|entry| entry.binding);
         let material_layout = self
             .device

@@ -150,7 +150,7 @@ fn assets_and_resources() -> (ForwardAssets, ForwardResources) {
             "material_texture",
             SceneAssetRef::from_snapshot(&texture),
         )],
-        sampler: None,
+        samplers: Vec::new(),
         tint: [1.0; 4],
     };
     (

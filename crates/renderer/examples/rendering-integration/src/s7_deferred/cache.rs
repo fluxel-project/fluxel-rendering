@@ -302,7 +302,7 @@ fn record(
                 "material_texture",
                 SceneAssetRef::from_snapshot(texture),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint,
         },
         transform: RenderTransform::identity(),

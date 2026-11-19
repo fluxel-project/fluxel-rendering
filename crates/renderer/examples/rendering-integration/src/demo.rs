@@ -370,7 +370,7 @@ impl Assets {
                     "material_texture",
                     SceneAssetRef::from_snapshot(&self.texture),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint,
             },
             transform,

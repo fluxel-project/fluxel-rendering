@@ -61,7 +61,7 @@ impl Assets {
                     "material_texture",
                     SceneAssetRef::from_snapshot(&self.mesh_t),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.0; 4],
             },
             transform: if out {

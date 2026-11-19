@@ -91,7 +91,7 @@ fn fixture(uv: bool) -> (ForwardCaptureResources, ForwardAssets) {
             "captured_image",
             "captured_image",
         )],
-        sampler: None,
+        samplers: Vec::new(),
         tint: [0.25, 0.5, 0.75, 1.0],
     };
     (
@@ -241,7 +241,10 @@ fn pbr_uv0_normal_capture_receiver_keeps_normal_transform_and_lighting_contract(
         .with_capture_lighting(&mut ShaderComposer::new(), false, false)
         .unwrap()
         .into_draw_input();
-    assert_eq!(draw.transform_uniform_bytes(), crate::frame_data::forward::PBR_TRANSFORM_BYTES);
+    assert_eq!(
+        draw.transform_uniform_bytes(),
+        crate::frame_data::forward::PBR_TRANSFORM_BYTES
+    );
     let diffuse = receiver
         .clone()
         .with_capture_lighting(&mut ShaderComposer::new(), true, false)

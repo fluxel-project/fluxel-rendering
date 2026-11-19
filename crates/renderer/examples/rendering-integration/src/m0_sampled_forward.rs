@@ -142,7 +142,7 @@ where
                 "material_texture",
                 SceneAssetRef::from_snapshot(&texture),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [1.0; 4],
         },
         transform: RenderTransform::identity(),

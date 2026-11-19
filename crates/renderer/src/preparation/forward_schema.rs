@@ -10,8 +10,7 @@ use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
 pub(crate) struct MaterialBindingSchema {
     pub(crate) uniforms: Vec<MaterialUniformBinding>,
     pub(crate) textures: Vec<MaterialTextureBinding>,
-    pub(crate) sampler: Option<u32>,
-    pub(crate) sampler_name: Option<String>,
+    pub(crate) samplers: Vec<MaterialSamplerBinding>,
     pub(crate) unused_textures: Vec<String>,
     pub(crate) unused_samplers: Vec<String>,
     pub(crate) legacy_tint_compatible: bool,
@@ -37,6 +36,13 @@ pub(crate) struct MaterialTextureBinding {
     pub(crate) encoding: Option<MaterialTextureEncoding>,
 }
 
+/// One material-declared ordinary sampler location, ordered by binding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MaterialSamplerBinding {
+    pub(crate) binding: u32,
+    pub(crate) name: String,
+}
+
 pub(crate) fn material_binding_schema(
     prepared: &PreparedMaterial,
     source: ForwardDrawSource,
@@ -47,8 +53,7 @@ pub(crate) fn material_binding_schema(
     let mut schema = MaterialBindingSchema {
         uniforms: Vec::new(),
         textures: Vec::new(),
-        sampler: None,
-        sampler_name: None,
+        samplers: Vec::new(),
         unused_textures: Vec::new(),
         unused_samplers: Vec::new(),
         legacy_tint_compatible: false,
@@ -141,11 +146,12 @@ pub(crate) fn material_binding_schema(
             }
             MaterialResourceKind::Sampler { comparison: false }
                 if matches!(actual.kind, BindingKind::Sampler)
-                    && actual.shape == Some(BindingShape::Sampler { comparison: false })
-                    && schema.sampler.is_none() =>
+                    && actual.shape == Some(BindingShape::Sampler { comparison: false }) =>
             {
-                schema.sampler = Some(location);
-                schema.sampler_name = Some(binding.name.clone());
+                schema.samplers.push(MaterialSamplerBinding {
+                    binding: location,
+                    name: binding.name.clone(),
+                });
             }
             kind if matches!(actual.kind, BindingKind::Uniform) => {
                 let ty = kind.uniform_material_type().ok_or_else(invalid)?;
@@ -188,6 +194,9 @@ pub(crate) fn material_binding_schema(
     schema
         .textures
         .sort_unstable_by_key(|texture| texture.binding);
+    schema
+        .samplers
+        .sort_unstable_by_key(|sampler| sampler.binding);
     if reflected
         .iter()
         .filter(|binding| binding.group == 0)

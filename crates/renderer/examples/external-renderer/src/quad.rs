@@ -138,7 +138,7 @@ impl RenderFeature for QuadFeature {
                         "quad_texture",
                         marker.assets.texture,
                     )],
-                    sampler: None,
+                    samplers: Vec::new(),
                     tint: marker.tint,
                 },
                 transform: quad_transform(marker.center, marker.half_extent),

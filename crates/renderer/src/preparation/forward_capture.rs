@@ -142,7 +142,7 @@ pub struct PreparedCaptureReceiver {
     pub(crate) geometry: AssetSnapshot<GeometryAsset, GeometryData>,
     pub(crate) material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     pub(crate) prepared: PreparedMaterial,
-    pub(crate) sampler: Option<fluxel_rhi::api::SamplerDesc>,
+    pub(crate) samplers: Vec<(u32, fluxel_rhi::api::SamplerDesc)>,
     pub(crate) textures: Vec<ResolvedForwardTexture>,
     pub(crate) tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
@@ -180,7 +180,7 @@ impl PreparedCaptureReceiver {
             material: self.material,
             textures: self.textures,
             prepared: self.prepared,
-            sampler: self.sampler,
+            samplers: self.samplers,
             tint: self.tint,
             uniform_values: self.uniform_values,
             mesh_side_orientation: self.mesh_side_orientation,
@@ -253,7 +253,7 @@ pub fn prepare_forward_capture_receiver(
     composer: &mut ShaderComposer,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     prepare_capture_receiver(
-        view, source, order, resources, transform, assets, composer, None, None,
+        view, source, order, resources, transform, assets, composer, None, None, None,
     )
 }
 
@@ -285,6 +285,40 @@ pub fn prepare_forward_scene_refraction_receiver(
         composer,
         Some(refraction_texture),
         None,
+        None,
+    )
+}
+
+/// Prepares a projected-refraction receiver with an explicit material sampler.
+///
+/// Use this entry point whenever the material declares more than one ordinary
+/// sampler; the legacy projected-refraction entry accepts exactly one. The
+/// texture and sampler arguments always name declared material resources; an
+/// optional instance only resolves their supplied aliases.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_forward_scene_refraction_receiver_with_sampler(
+    view: &RenderView,
+    source: ForwardDrawSource,
+    order: i64,
+    resources: &ForwardCaptureResources,
+    transform: RenderTransform,
+    assets: &ForwardAssets,
+    composer: &mut ShaderComposer,
+    refraction_texture: &str,
+    refraction_sampler: &str,
+    instance: Option<&MaterialInstance>,
+) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
+    prepare_capture_receiver(
+        view,
+        source,
+        order,
+        resources,
+        transform,
+        assets,
+        composer,
+        Some(refraction_texture),
+        Some(refraction_sampler),
+        instance,
     )
 }
 
@@ -314,6 +348,7 @@ pub fn prepare_forward_capture_receiver_with_instance(
         assets,
         composer,
         refraction_texture,
+        None,
         Some(instance),
     )
 }
@@ -328,6 +363,7 @@ fn prepare_capture_receiver(
     assets: &ForwardAssets,
     composer: &mut ShaderComposer,
     refraction_texture: Option<&str>,
+    refraction_sampler: Option<&str>,
     instance: Option<&MaterialInstance>,
 ) -> Result<PreparedCaptureReceiver, ForwardPreparationError> {
     if view.extent.contains(&0) || !finite_transform(view.transform) {
@@ -348,7 +384,16 @@ fn prepare_capture_receiver(
         .map_err(MaterialPreparationError::Material)
         .map_err(ForwardPreparationError::Material)?;
     let scene_refraction = refraction_texture
-        .map(|name| scene_refraction_binding(&compiled, resources, instance, name, source))
+        .map(|name| {
+            scene_refraction_binding(
+                &compiled,
+                resources,
+                instance,
+                name,
+                refraction_sampler,
+                source,
+            )
+        })
         .transpose()?;
     let request = material_request(
         material.value(),
@@ -369,8 +414,8 @@ fn prepare_capture_receiver(
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = ordered_texture_sources(&resources.textures, &schema.textures, source)?;
     let textures = resolve_capture_textures(textures, &schema.textures, assets, source)?;
-    let sampler = super::super::forward_sampler::resolve_sampler_binding(
-        resources.sampler.as_ref(),
+    let samplers = super::super::forward_sampler::resolve_sampler_bindings(
+        &resources.samplers,
         &schema,
         source,
     )?;
@@ -391,7 +436,7 @@ fn prepare_capture_receiver(
         geometry,
         material,
         prepared,
-        sampler,
+        samplers,
         textures,
         tint: resources.tint,
         uniform_values,
@@ -410,9 +455,10 @@ fn scene_refraction_binding(
     resources: &ForwardCaptureResources,
     instance: Option<&MaterialInstance>,
     texture: &str,
+    requested_sampler: Option<&str>,
     source: ForwardDrawSource,
 ) -> Result<SceneRefractionBinding, ForwardPreparationError> {
-    let invalid = ForwardPreparationError::InvalidSceneRefractionSource { source };
+    let invalid = || ForwardPreparationError::InvalidSceneRefractionSource { source };
     let bindings = &material.contribution().bindings;
     let texture_alias = instance
         .and_then(|instance| instance.resource(texture))
@@ -426,12 +472,23 @@ fn scene_refraction_binding(
                 && matches!(binding.source, ForwardTextureSource::CaptureSlot(_))
         })
     {
-        return Err(invalid);
+        return Err(invalid());
     }
-    let sampler = bindings
+    let mut samplers = bindings
         .iter()
-        .find(|binding| binding.kind == MaterialResourceKind::Sampler { comparison: false })
-        .ok_or(invalid)?;
+        .filter(|binding| binding.kind == MaterialResourceKind::Sampler { comparison: false });
+    let sampler = match requested_sampler {
+        Some(name) => samplers
+            .find(|binding| binding.name == name)
+            .ok_or_else(invalid)?,
+        None => {
+            let sampler = samplers.next().ok_or_else(invalid)?;
+            if samplers.next().is_some() {
+                return Err(invalid());
+            }
+            sampler
+        }
+    };
     Ok(SceneRefractionBinding {
         texture: texture.to_owned(),
         sampler: sampler.name.clone(),

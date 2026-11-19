@@ -56,7 +56,7 @@ impl Assets {
                     "material_texture",
                     SceneAssetRef::from_snapshot(&self.texture),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),

@@ -19,6 +19,7 @@ pub(super) fn draws<B: ResourceBackend>(
     mappings: &[Vec<usize>],
     textures: &[Vec<usize>],
     capture_textures: &[Vec<bool>],
+    capture_mip_levels: Option<u32>,
     pbr: bool,
 ) -> Result<Vec<DeferredDraw<B>>, Error> {
     let count = inputs.len();
@@ -97,8 +98,12 @@ pub(super) fn draws<B: ResourceBackend>(
                 resource: BindingResource::TextureView(&texture.view),
             });
         }
-        if let Some(binding) = schema.sampler {
-            let expected = crate::renderer::forward::material_sampler_for_input(&inputs[index])?;
+        for binding in &schema.samplers {
+            let expected = crate::renderer::forward::material_sampler_for_input(
+                &inputs[index],
+                binding.binding,
+                capture_mip_levels,
+            )?;
             let sampler = resident
                 .samplers
                 .iter()
@@ -109,7 +114,7 @@ pub(super) fn draws<B: ResourceBackend>(
                 .ok_or(Error::InvalidState)?;
             crate::renderer::forward::validate_material_sampler(&sampler.desc)?;
             entries.push(BindGroupEntry {
-                binding,
+                binding: binding.binding,
                 resource: BindingResource::Sampler(&sampler.sampler),
             });
         }

@@ -282,7 +282,7 @@ fn scene(texture: &TextureInput, options: SceneOptions) -> Result<Scene, Box<dyn
                 "material_texture",
                 SceneAssetRef::from_snapshot(&image),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [1.; 4],
         },
         transform: RenderTransform::identity(),

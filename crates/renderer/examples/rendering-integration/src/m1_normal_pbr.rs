@@ -74,7 +74,7 @@ where
                     "normal_tex",
                     SceneAssetRef::from_snapshot(&tex),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.; 4],
             },
             transform: transform(mirrored)?,

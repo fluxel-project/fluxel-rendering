@@ -7,7 +7,7 @@ use crate::{
 pub(crate) fn material_requires_ordinary_sampler(prepared: &PreparedMaterial) -> bool {
     prepared
         .binding_schema()
-        .is_some_and(|schema| schema.sampler.is_some())
+        .is_some_and(|schema| !schema.samplers.is_empty())
 }
 pub(crate) fn default_material_sampler() -> SamplerDesc {
     SamplerDesc {
@@ -39,22 +39,14 @@ pub(crate) fn material_sampler(mip_levels: u32) -> std::result::Result<SamplerDe
     Ok(desc)
 }
 
-/// Builds the exact sampler for one material draw. Immutable image ownership
-/// stays separate: an explicit sampling policy is a draw binding, while the
-/// default derives only the LOD range needed by that draw's image chain.
+/// Resolves an explicit policy by binding. For omitted policies the default
+/// LOD range still covers the draw's image chains, including scene capture.
 pub(crate) fn material_sampler_for_input(
     input: &crate::ForwardDrawInput,
-) -> std::result::Result<SamplerDesc, Error> {
-    material_sampler_for_input_with_capture(input, None)
-}
-
-/// Builds the exact sampler for one material draw, accounting for the actual
-/// capture chain selected by an opt-in projected-refraction receiver.
-pub(crate) fn material_sampler_for_input_with_capture(
-    input: &crate::ForwardDrawInput,
+    binding: u32,
     capture_mip_levels: Option<u32>,
 ) -> std::result::Result<SamplerDesc, Error> {
-    if let Some(desc) = input.sampler_descriptor() {
+    if let Some(desc) = input.sampler_descriptor(binding) {
         validate_material_sampler(desc)?;
         return Ok(desc.clone());
     }
@@ -84,16 +76,18 @@ pub(crate) fn material_sampler_descriptors(
     capture_mip_levels: Option<u32>,
 ) -> std::result::Result<Vec<SamplerDesc>, Error> {
     let mut descriptors = Vec::new();
-    for input in inputs
-        .iter()
-        .filter(|input| material_requires_ordinary_sampler(input.prepared()))
-    {
-        let descriptor = material_sampler_for_input_with_capture(input, capture_mip_levels)?;
-        if !descriptors
-            .iter()
-            .any(|existing| same_material_sampler(existing, &descriptor))
-        {
-            descriptors.push(descriptor);
+    for input in inputs {
+        let Some(schema) = input.prepared().binding_schema() else {
+            continue;
+        };
+        for sampler in &schema.samplers {
+            let desc = material_sampler_for_input(input, sampler.binding, capture_mip_levels)?;
+            if !descriptors
+                .iter()
+                .any(|existing| same_material_sampler(existing, &desc))
+            {
+                descriptors.push(desc);
+            }
         }
     }
     Ok(descriptors)

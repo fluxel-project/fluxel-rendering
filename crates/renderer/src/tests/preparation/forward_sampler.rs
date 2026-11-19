@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::FeatureIssuer;
+use crate::preparation::forward_schema::MaterialSamplerBinding;
 use crate::preparation::{MaterialBindingSchema, MaterialTextureBinding};
 use fluxel_rhi::api::{AddressMode, FilterMode, SamplerDesc};
 
-fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
+fn schema(samplers: &[(&str, u32)]) -> MaterialBindingSchema {
     MaterialBindingSchema {
         uniforms: Vec::new(),
         textures: vec![MaterialTextureBinding {
@@ -14,8 +15,13 @@ fn schema(sampler: Option<&str>) -> MaterialBindingSchema {
             dimension: fluxel_rhi::api::TextureViewDimension::D2,
             encoding: None,
         }],
-        sampler: sampler.map(|_| 2),
-        sampler_name: sampler.map(str::to_owned),
+        samplers: samplers
+            .iter()
+            .map(|(name, binding)| MaterialSamplerBinding {
+                binding: *binding,
+                name: (*name).into(),
+            })
+            .collect(),
         unused_textures: Vec::new(),
         unused_samplers: Vec::new(),
         legacy_tint_compatible: true,
@@ -50,28 +56,25 @@ fn source() -> ForwardDrawSource {
 #[test]
 fn named_sampler_policy_is_retained_separately_from_image_schema() {
     let binding = ForwardSamplerBinding::new("image_sampler", descriptor());
-    let actual = super::super::forward_sampler::resolve_sampler_binding(
-        Some(&binding),
-        &schema(Some("image_sampler")),
+    let actual = super::super::forward_sampler::resolve_sampler_bindings(
+        std::slice::from_ref(&binding),
+        &schema(&[("image_sampler", 2)]),
         source(),
     )
     .expect("valid named sampler policy");
-    assert_eq!(
-        actual.expect("explicit policy").address,
-        binding.descriptor.address
-    );
+    assert_eq!(actual[0].1.address, binding.descriptor.address);
 }
 
 #[test]
 fn omitted_policy_preserves_legacy_renderer_default_selection() {
     assert!(
-        super::super::forward_sampler::resolve_sampler_binding(
-            None,
-            &schema(Some("image_sampler")),
+        super::super::forward_sampler::resolve_sampler_bindings(
+            &[],
+            &schema(&[("image_sampler", 2)]),
             source(),
         )
         .unwrap()
-        .is_none()
+        .is_empty()
     );
 }
 
@@ -80,18 +83,18 @@ fn sampler_name_and_descriptor_fail_before_runtime_admission() {
     let source = source();
     let wrong_name = ForwardSamplerBinding::new("other", descriptor());
     assert!(matches!(
-        super::super::forward_sampler::resolve_sampler_binding(
-            Some(&wrong_name),
-            &schema(Some("image_sampler")),
+        super::super::forward_sampler::resolve_sampler_bindings(
+            std::slice::from_ref(&wrong_name),
+            &schema(&[("image_sampler", 2)]),
             source,
         ),
         Err(ForwardPreparationError::SamplerResourceMismatch { .. })
     ));
     let unexpected = ForwardSamplerBinding::new("image_sampler", descriptor());
     assert!(matches!(
-        super::super::forward_sampler::resolve_sampler_binding(
-            Some(&unexpected),
-            &schema(None),
+        super::super::forward_sampler::resolve_sampler_bindings(
+            std::slice::from_ref(&unexpected),
+            &schema(&[]),
             source,
         ),
         Err(ForwardPreparationError::UnexpectedSamplerResource { .. })
@@ -101,9 +104,9 @@ fn sampler_name_and_descriptor_fail_before_runtime_admission() {
     invalid.mip_filter = FilterMode::Nearest;
     let invalid = ForwardSamplerBinding::new("image_sampler", invalid);
     assert!(matches!(
-        super::super::forward_sampler::resolve_sampler_binding(
-            Some(&invalid),
-            &schema(Some("image_sampler")),
+        super::super::forward_sampler::resolve_sampler_bindings(
+            std::slice::from_ref(&invalid),
+            &schema(&[("image_sampler", 2)]),
             source,
         ),
         Err(ForwardPreparationError::InvalidSamplerDescriptor { .. })

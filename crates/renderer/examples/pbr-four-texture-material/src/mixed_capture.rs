@@ -117,7 +117,7 @@ pub fn input_with_receiver(
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
         textures: receiver_textures,
-        sampler: None,
+        samplers: Vec::new(),
         tint: [0.72, 0.82, 0.92, 1.0],
     };
     let receiver_scene = RenderScene::<ForwardCaptureResources>::new()?;

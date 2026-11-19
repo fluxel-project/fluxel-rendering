@@ -45,7 +45,7 @@ pub(super) fn scene(
                     "material_texture",
                     SceneAssetRef::from_snapshot(&texture[index]),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.0; 4],
             },
             transform: RenderTransform::identity(),

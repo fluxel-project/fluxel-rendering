@@ -299,7 +299,7 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
-and up to one ordinary sampler in material group zero.
+and independently named ordinary samplers in material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
@@ -984,22 +984,27 @@ sample and combining scene color.
 
 ### Per-draw ordinary sampler policy
 
-`ForwardResources::sampler` optionally supplies one `ForwardSamplerBinding` by
-its material-declared resource name and a backend-neutral RHI `SamplerDesc`.
-CPU preparation rejects unexpected names, comparison/border policies, nonfinite
-or reversed LOD ranges, zero anisotropy, and incompatible anisotropic filters.
-It does not guess a device's anisotropy limit: the selected RHI admits the exact
-descriptor at sampler creation. Omission retains automatic sampler selection
-from that draw's requested image mips. Generic Material preparation is broader
-than this consumer's current one-sampler schema.
+`ForwardResources::samplers` supplies zero or more named
+`ForwardSamplerBinding` values. Preparation resolves their names and optional
+Material instance aliases against the actual reflected sampler bindings.
+A sampler and a sampled image may be bound independently, as in Babylon.js
+WebGPU. A shader may use several sampler policies with the same image.
+
+CPU preparation rejects duplicate or unexpected names, comparison and border
+policies, nonfinite or reversed LOD ranges, zero anisotropy, and incompatible
+anisotropic filters. The selected RHI admits the exact descriptor at creation.
+Each omitted policy retains the default derived from the draw's image mip
+counts.
 
 Sampling state belongs to a draw binding, independently of immutable image
 bytes, encoding and generation. Equal image references share their texture/view
 owner across different policies. Each frame retains native samplers deduplicated
 by all semantic descriptor fields; debug labels do not affect equality. Both
-pipelines bind each draw's exact descriptor and device, including on warm image
-reuse. Capture preparation preserves the explicit policy through lighting
-recomposition and checks the sampler resource name in the complete schema.
+pipelines bind an exact descriptor and device for each reflected location,
+including on warm image reuse. Capture preparation preserves the explicit
+policies through lighting recomposition. A projected-refraction receiver with
+several declared ordinary samplers selects its exact texture and sampler names
+through `prepare_forward_scene_refraction_receiver_with_sampler`.
 
 Samplers have no Graph memory footprint. The resident frame retains them through
 covering completion alongside their bind groups; they do not become image-cache

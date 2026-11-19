@@ -42,7 +42,7 @@ fn read_only_texture_queries_remain_valid_without_a_sampler() {
                 "image",
                 SceneAssetRef::from_snapshot(&assets.textures[0]),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [0.25; 4],
         },
         transform: RenderTransform::identity(),

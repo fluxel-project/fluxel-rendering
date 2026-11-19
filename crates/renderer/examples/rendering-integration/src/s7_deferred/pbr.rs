@@ -397,7 +397,7 @@ impl Assets {
                     "material_texture",
                     SceneAssetRef::from_snapshot(self.texture(case.texture)),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.0, 1.0, 1.0, case.roughness as f32],
             },
             transform: RenderTransform::from_columns(

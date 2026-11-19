@@ -318,6 +318,7 @@ where
             &mappings,
             &draw_textures,
             &draw_capture_textures,
+            capture.map(|texture| texture.desc.mip_levels),
             pbr,
         )
         .map_err(|error| self.observe_rhi_error(error))?;

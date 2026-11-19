@@ -456,7 +456,7 @@ where
                     "material_texture",
                     fluxel_renderer::SceneAssetRef::from_snapshot(&a.mesh_t),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: [1.; 4],
             },
             transform: fluxel_renderer::RenderTransform::identity(),

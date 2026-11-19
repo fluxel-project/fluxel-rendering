@@ -93,7 +93,7 @@ pub fn input(control: Control) -> Result<Input, Box<dyn Error>> {
                 "material_texture",
                 SceneAssetRef::from_snapshot(&texture),
             )],
-            sampler: None,
+            samplers: Vec::new(),
             tint: [1.0, 1.0, 1.0, control.roughness],
         },
         transform: RenderTransform::identity(),

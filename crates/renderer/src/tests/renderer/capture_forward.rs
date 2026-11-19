@@ -66,7 +66,7 @@ fn receiver_at(locations: [u32; 3]) -> (crate::PreparedCaptureReceiver, ForwardA
         textures: vec![crate::ForwardTextureBinding::capture(
             "captured", "captured",
         )],
-        sampler: None,
+        samplers: Vec::new(),
         tint: [1.0; 4],
     };
     let prepared = crate::prepare_forward_capture_receiver(

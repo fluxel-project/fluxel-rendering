@@ -425,7 +425,7 @@ fn original_resources(
             "material_texture",
             SceneAssetRef::from_snapshot(texture),
         )],
-        sampler: None,
+        samplers: Vec::new(),
         tint: [1.0; 4],
     })
 }

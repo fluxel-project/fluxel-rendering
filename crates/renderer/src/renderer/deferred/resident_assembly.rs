@@ -207,21 +207,11 @@ where
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or(Error::InvalidState)?;
-        let mut sampler_descs = Vec::new();
-        for (input, material) in inputs.iter().zip(prepared) {
-            if !crate::renderer::forward::material_requires_ordinary_sampler(material) {
-                continue;
-            }
-            let desc = crate::renderer::forward::material_sampler_for_input(input)
-                .map_err(|error| self.observe_rhi_error(error))?;
-            if !sampler_descs
-                .iter()
-                .any(|present| crate::renderer::forward::same_material_sampler(present, &desc))
-            {
-                sampler_descs.push(desc);
-            }
-        }
-        for desc in sampler_descs {
+        let capture_mip_levels = capture.map(|capture| capture.desc.mip_levels);
+        for desc in
+            crate::renderer::forward::material_sampler_descriptors(inputs, capture_mip_levels)
+                .map_err(|error| self.observe_rhi_error(error))?
+        {
             let sampler = self
                 .device
                 .create_sampler(&desc)

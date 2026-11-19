@@ -374,7 +374,7 @@ impl Fixture {
                     "material_texture",
                     SceneAssetRef::from_snapshot(&t[n % t.len()]),
                 )],
-                sampler: None,
+                samplers: Vec::new(),
                 tint: tint(n),
             },
             transform: tile_transform(n, self.draws),

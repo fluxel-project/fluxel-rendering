@@ -117,6 +117,7 @@ pub use forward_capture::{
     ForwardCaptureResources, ForwardTextureSource, PreparedCaptureReceiver,
     prepare_forward_capture_receiver, prepare_forward_capture_receiver_with_instance,
     prepare_forward_scene_refraction_receiver,
+    prepare_forward_scene_refraction_receiver_with_sampler,
 };
 use forward_material_instance::{resolve_resource_aliases, resolve_uniform_values};
 use forward_material_request::material_request;
@@ -131,12 +132,12 @@ pub struct ForwardResources {
     /// Named material texture sources. Names must exactly match the material
     /// contribution's texture resource names.
     pub textures: Vec<ForwardTextureBinding>,
-    /// Optional named ordinary sampler state for this draw's material binding.
+    /// Named ordinary sampler states for this draw's material bindings.
     ///
     /// Image assets deliberately do not own sampler state: one immutable image
     /// generation may be sampled by different draws with different policies.
     /// When omitted, the built-in consumer retains its existing default policy.
-    pub sampler: Option<ForwardSamplerBinding>,
+    pub samplers: Vec<ForwardSamplerBinding>,
     /// Per-record vec4 value uploaded to the schema's material uniform binding.
     pub tint: [f32; 4],
 }
@@ -302,7 +303,7 @@ pub struct ForwardDrawInput {
     material: AssetSnapshot<MaterialAsset, MaterialDefinition>,
     textures: Vec<ResolvedForwardTexture>,
     prepared: PreparedMaterial,
-    sampler: Option<fluxel_rhi::api::SamplerDesc>,
+    samplers: Vec<(u32, fluxel_rhi::api::SamplerDesc)>,
     tint: [f32; 4],
     uniform_values: Vec<DynamicValue>,
     mesh_side_orientation: SurfaceSideOrientation,
@@ -381,12 +382,15 @@ impl ForwardDrawInput {
         &self.prepared
     }
 
-    /// Returns this draw's validated explicit ordinary-sampler descriptor.
+    /// Returns the validated explicit ordinary-sampler descriptor for `binding`.
     ///
     /// `None` names the legacy renderer default rather than an absent material
     /// sampler binding.
-    pub(crate) fn sampler_descriptor(&self) -> Option<&fluxel_rhi::api::SamplerDesc> {
-        self.sampler.as_ref()
+    pub(crate) fn sampler_descriptor(&self, binding: u32) -> Option<&fluxel_rhi::api::SamplerDesc> {
+        self.samplers
+            .iter()
+            .find(|(actual, _)| *actual == binding)
+            .map(|(_, descriptor)| descriptor)
     }
 
     /// Returns the validated dynamic tint.
@@ -518,11 +522,8 @@ fn prepare_draw(
         resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
     let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
     let textures = resolve_asset_textures(&resources, &schema, assets, source)?;
-    let sampler = super::forward_sampler::resolve_sampler_binding(
-        resources.sampler.as_ref(),
-        &schema,
-        source,
-    )?;
+    let samplers =
+        super::forward_sampler::resolve_sampler_bindings(&resources.samplers, &schema, source)?;
     let prepared = prepared.with_binding_schema(schema);
     validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
     let normal_from_local = normal_from_local(geometry.value(), &prepared, transform, source)?;
@@ -541,7 +542,7 @@ fn prepare_draw(
         material,
         textures,
         prepared,
-        sampler,
+        samplers,
         tint: resources.tint,
         uniform_values,
         mesh_side_orientation,

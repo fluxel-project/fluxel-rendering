@@ -412,9 +412,12 @@ where
                 texture.dimension,
             )
         }));
-        if let Some(binding) = schema.sampler {
-            entries.push(ordinary_sampler(binding));
-        }
+        entries.extend(
+            schema
+                .samplers
+                .iter()
+                .map(|sampler| ordinary_sampler(sampler.binding)),
+        );
         entries.sort_by_key(|entry| entry.binding);
         self.device
             .create_bind_group_layout(&BindGroupLayoutDesc {

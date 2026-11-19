@@ -131,10 +131,10 @@ fn named_inputs(
                     "material_texture",
                     SceneAssetRef::from_snapshot(&assets.textures[0]),
                 )],
-                sampler: Some(ForwardSamplerBinding {
+                samplers: vec![ForwardSamplerBinding {
                     resource: name.into(),
                     descriptor: descriptor.clone(),
-                }),
+                }],
                 tint: [1.; 4],
             },
             transform: RenderTransform::identity(),
@@ -436,14 +436,14 @@ fn material_sampler_capture_receiver_keeps_explicit_named_policy_after_reprepara
             "captured",
             "producer_scene",
         )],
-        sampler: Some(ForwardSamplerBinding::new(
+        samplers: vec![ForwardSamplerBinding::new(
             "capture_sampler",
             SamplerDesc {
                 mag_filter: FilterMode::Nearest,
                 min_filter: FilterMode::Nearest,
                 ..policy(AddressMode::Repeat)
             },
-        )),
+        )],
         tint: [1.0; 4],
     };
     assets.geometry.extend(receiver_assets.geometry);

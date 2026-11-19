@@ -222,6 +222,13 @@ pub enum ForwardPreparationError {
         /// Unexpected sampler resource name.
         resource: String,
     },
+    /// A draw supplied more than one override for the same sampler resource.
+    DuplicateSamplerResource {
+        /// Draw requesting the binding.
+        source: ForwardDrawSource,
+        /// Repeated sampler resource name.
+        resource: String,
+    },
     /// A draw named a different sampler resource than the material declares.
     SamplerResourceMismatch {
         /// Draw requesting the binding.

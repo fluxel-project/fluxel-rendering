@@ -210,6 +210,7 @@ where
             &mappings,
             &draw_textures,
             &draw_capture_textures,
+            None,
             pbr,
         )
         .map_err(|error| self.observe_rhi_error(error))?;

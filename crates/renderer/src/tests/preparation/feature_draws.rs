@@ -49,7 +49,7 @@ fn resources() -> ForwardResources {
         geometry: SceneAssetRef::from_snapshot(&geometry),
         material: SceneAssetRef::from_snapshot(&material),
         textures: Vec::new(),
-        sampler: None,
+        samplers: Vec::new(),
         tint: [1.0; 4],
     }
 }

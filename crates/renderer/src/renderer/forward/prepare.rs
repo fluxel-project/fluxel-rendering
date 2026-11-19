@@ -428,8 +428,9 @@ where
                     resource: BindingResource::TextureView(&resident.textures[slot].view),
                 });
             }
-            if let Some(binding) = schema.sampler {
-                let expected = material_sampler_for_input_with_capture(input, capture_mip_levels)?;
+            for binding in &schema.samplers {
+                let expected =
+                    material_sampler_for_input(input, binding.binding, capture_mip_levels)?;
                 let sampler = resident
                     .samplers
                     .iter()
@@ -440,7 +441,7 @@ where
                     .ok_or(Error::InvalidState)?;
                 validate_material_sampler(&sampler.desc)?;
                 material_entries.push(BindGroupEntry {
-                    binding,
+                    binding: binding.binding,
                     resource: BindingResource::Sampler(&sampler.sampler),
                 });
             }
