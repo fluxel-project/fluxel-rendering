@@ -173,6 +173,14 @@ consumers must check filtering against the actual sampler and texture facts.
 Logical validation rejects a declared comparison mode that disagrees with the
 program; it does not establish device support.
 
+Sampled float textures distinguish `texture_2d<f32>`
+(`BindingShape::Texture2dF32`) from `texture_2d_array<f32>`
+(`BindingShape::Texture2dArrayF32`) exactly. The latter is one layered image
+addressed by a shader layer coordinate; it is not a descriptor array and does
+not introduce descriptor-array or non-uniform-indexing requirements. Cube, 3D,
+depth, storage, multisampled, and integer sampled textures remain outside this
+logical contract until an executing consumer requires each exact shape.
+
 The [Material direction](../../material/documents/design.md#babylon-aligned-material-direction-planned)
 requires one node-authored definition to feed Forward and Deferred, including
 transparent and refractive products. Shader continues to consume generic ordered

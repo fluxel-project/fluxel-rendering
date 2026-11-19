@@ -199,6 +199,12 @@ pub enum BindingShape {
     Uniform(ValueType),
     /// Non-arrayed, non-multisampled float 2D texture.
     Texture2dF32,
+    /// Arrayed, non-multisampled float 2D texture.
+    ///
+    /// This is one `texture_2d_array<f32>` resource addressed with a layer
+    /// coordinate. It is not a bind-group descriptor array and therefore does
+    /// not imply descriptor-array or non-uniform-indexing capabilities.
+    Texture2dArrayF32,
     /// Sampler comparison mode declared by WGSL.
     ///
     /// WGSL distinguishes ordinary and comparison samplers, but does not
