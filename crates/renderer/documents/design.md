@@ -298,8 +298,10 @@ named image bindings per material.
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
 2D float textures, and up to one ordinary sampler in material group zero.
-Contribution metadata and actual fragment reflection must agree on binding
-location, value shape, and read/query access. Renderer preparation checks the
+Contribution metadata and reflection from the selected shader entries must
+agree on binding location, value shape, and read/query access. Forward and
+Deferred uniform layouts use the reflected vertex and fragment visibility.
+Sampled textures and samplers are fragment bindings. Renderer preparation checks the
 instance against the exact asset-bound material variant and rejects invalid
 parameter values before it reserves GPU resources.
 

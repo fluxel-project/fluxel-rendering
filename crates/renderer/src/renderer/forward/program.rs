@@ -94,9 +94,9 @@ where
             .shader(descriptor)
             .await
             .map_err(|error| self.observe_forward_error("shader creation", error))?;
-        let uniform_entry = |binding, size, visibility| BindGroupLayoutEntry {
+        let uniform_entry = |binding, size, visibility: Vec<ShaderStage>| BindGroupLayoutEntry {
             binding,
-            visibility: vec![visibility],
+            visibility,
             ty: BindingType::UniformBuffer {
                 dynamic_offset: true,
                 min_size: size,
@@ -109,7 +109,7 @@ where
         let mut material_entries: Vec<_> = schema
             .uniforms
             .iter()
-            .map(|uniform| uniform_entry(uniform.binding, uniform.size, ShaderStage::Fragment))
+            .map(|uniform| uniform_entry(uniform.binding, uniform.size, uniform.visibility.clone()))
             .collect();
         material_entries.extend(schema.textures.iter().map(|texture| BindGroupLayoutEntry {
             binding: texture.binding,

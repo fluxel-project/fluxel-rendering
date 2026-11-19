@@ -1,6 +1,7 @@
 //! Consumer-owned binding facts derived from one prepared material.
 
 use fluxel_material::{MaterialResourceKind, MaterialTextureEncoding, MaterialType};
+use fluxel_rhi::api::ShaderStage as RhiShaderStage;
 use fluxel_shader::{BindingKind, BindingShape, ShaderStage};
 
 use super::{ForwardDrawSource, ForwardPreparationError, PreparedMaterial};
@@ -22,6 +23,7 @@ pub(crate) struct MaterialUniformBinding {
     pub(crate) parameter: String,
     pub(crate) ty: MaterialType,
     pub(crate) size: u64,
+    pub(crate) visibility: Vec<RhiShaderStage>,
 }
 
 /// One material-declared texture location, ordered by its actual binding.
@@ -87,10 +89,11 @@ pub(crate) fn material_binding_schema(
             continue;
         };
         active_count += 1;
-        if !(actual.read || actual.query)
-            || actual.write
-            || actual.visibility.len() != 1
-            || !actual.visibility.contains(&ShaderStage::Fragment)
+        if !(actual.read || actual.query) || actual.write || actual.visibility.is_empty() {
+            return Err(invalid());
+        }
+        if binding.kind.uniform_material_type().is_none()
+            && (actual.visibility.len() != 1 || !actual.visibility.contains(&ShaderStage::Fragment))
         {
             return Err(invalid());
         }
@@ -134,11 +137,21 @@ pub(crate) fn material_binding_schema(
                             && parameter.ty == ty
                     })
                     .ok_or_else(invalid)?;
+                let visibility = actual
+                    .visibility
+                    .iter()
+                    .map(|stage| match stage {
+                        ShaderStage::Vertex => Ok(RhiShaderStage::Vertex),
+                        ShaderStage::Fragment => Ok(RhiShaderStage::Fragment),
+                        _ => Err(invalid()),
+                    })
+                    .collect::<Result<_, _>>()?;
                 schema.uniforms.push(MaterialUniformBinding {
                     binding: location,
                     parameter: parameter.parameter.clone(),
                     ty,
                     size,
+                    visibility,
                 });
             }
             _ => return Err(invalid()),

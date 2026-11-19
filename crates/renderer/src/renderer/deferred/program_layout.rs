@@ -5,14 +5,14 @@ use fluxel_rhi::api::{
     TextureViewDimension,
 };
 
-pub(super) fn uniform(
+pub(super) fn material_uniform(
     binding: u32,
     min_size: u64,
-    visibility: ShaderStage,
+    visibility: Vec<ShaderStage>,
 ) -> BindGroupLayoutEntry {
     BindGroupLayoutEntry {
         binding,
-        visibility: vec![visibility],
+        visibility,
         ty: BindingType::UniformBuffer {
             dynamic_offset: true,
             min_size,

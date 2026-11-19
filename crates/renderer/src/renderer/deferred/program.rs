@@ -29,7 +29,7 @@ use program_fixed::{
     surface_triangles,
 };
 
-use program_layout::{ordinary_sampler, sampled_texture, uniform as uniform_entry};
+use program_layout::{material_uniform, ordinary_sampler, sampled_texture};
 
 pub(crate) use program_cache::DeferredProgramCache;
 
@@ -399,7 +399,9 @@ where
         let mut entries: Vec<_> = schema
             .uniforms
             .iter()
-            .map(|binding| uniform_entry(binding.binding, binding.size, ShaderStage::Fragment))
+            .map(|binding| {
+                material_uniform(binding.binding, binding.size, binding.visibility.clone())
+            })
             .collect();
         entries.extend(
             schema
