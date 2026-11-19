@@ -7,8 +7,8 @@ use fluxel_shader::ShaderCompositionRequest;
 use crate::{RenderTransform, SceneAssetRef};
 
 use super::{
-    ColorTextureArrayData, ColorTextureData, ForwardDrawSource, ForwardPreparationError,
-    GeometryData, GeometryLayout, PreparedMaterial,
+    ColorTextureArrayData, ColorTextureData, ColorTextureVolumeData, ForwardDrawSource,
+    ForwardPreparationError, GeometryData, GeometryLayout, PreparedMaterial,
 };
 use crate::preparation::forward_templates;
 
@@ -51,6 +51,17 @@ pub(super) fn validate_texture(
 
 pub(super) fn validate_texture_array(
     texture: &ColorTextureArrayData,
+    source: ForwardDrawSource,
+) -> Result<(), ForwardPreparationError> {
+    texture
+        .mip_payloads()
+        .is_some()
+        .then_some(())
+        .ok_or(ForwardPreparationError::InvalidTexture { source })
+}
+
+pub(super) fn validate_texture_volume(
+    texture: &ColorTextureVolumeData,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     texture

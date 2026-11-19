@@ -33,8 +33,11 @@ mod forward_oit;
 mod forward_pbr;
 #[path = "forward_transmission.rs"]
 mod forward_transmission;
+#[path = "forward_volume.rs"]
+mod forward_volume;
 pub use forward_array::{ColorTextureArrayAsset, ColorTextureArrayData};
 pub(crate) use forward_oit::{OitDrawPartition, partition_oit_draws, prepare_oit_material};
+pub use forward_volume::{ColorTextureVolumeAsset, ColorTextureVolumeData};
 #[path = "forward_validation.rs"]
 mod forward_validation;
 use forward_pbr::normal_from_local;
@@ -203,6 +206,18 @@ impl ForwardTextureBinding {
         Self {
             resource: resource.into(),
             source: ForwardTextureSource::ArrayAssetWithGeneratedMips { asset, mip_levels },
+        }
+    }
+
+    /// Binds one immutable authored 3D color-texture asset to `resource`.
+    #[must_use]
+    pub fn volume_asset(
+        resource: impl Into<String>,
+        asset: AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>,
+    ) -> Self {
+        Self {
+            resource: resource.into(),
+            source: ForwardTextureSource::VolumeAsset(asset),
         }
     }
 

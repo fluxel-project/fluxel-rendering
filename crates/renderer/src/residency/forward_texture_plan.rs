@@ -12,7 +12,7 @@ pub(super) fn plan_texture_uploads(
         ForwardResidentTextureInput::Generated(texture) => {
             let copy = ForwardTextureCopyInput {
                 bytes: texture.bytes,
-                extent: texture.extent,
+                extent: [texture.extent[0], texture.extent[1], 1],
                 bytes_per_row: texture.bytes_per_row,
             };
             validate_rgba8_copy(&copy)?;
@@ -37,6 +37,7 @@ pub(super) fn plan_texture_uploads(
             let mips = usize::try_from(texture.mip_levels).map_err(|_| Error::InvalidRange)?;
             let uploaded_mips = if texture.generate_mips { 1 } else { mips };
             if extent.contains(&0)
+                || extent[2] != 1
                 || layers == 0
                 || mips == 0
                 || (texture.view == LayeredTextureView::Cube
@@ -70,6 +71,32 @@ pub(super) fn plan_texture_uploads(
                 texture.generate_mips,
             ))
         }
+        ForwardResidentTextureInput::Volume { mips, encoding } => {
+            let extent = mips.first().ok_or(Error::InvalidRange)?.extent;
+            let mip_levels = u32::try_from(mips.len()).map_err(|_| Error::InvalidRange)?;
+            if extent.contains(&0)
+                || mip_levels > 1 + extent[0].max(extent[1]).max(extent[2]).ilog2()
+            {
+                return Err(Error::InvalidRange);
+            }
+            for (level, copy) in mips.iter().enumerate() {
+                if copy.extent != extent.map(|axis| (axis >> level).max(1)) {
+                    return Err(Error::InvalidRange);
+                }
+                validate_rgba8_copy(copy)?;
+            }
+            for (level, copy) in mips.into_iter().enumerate() {
+                append_texture_upload(bytes, uploads, index, level as u32, 0, copy)?;
+            }
+            Ok(rgba8_allocation(
+                extent,
+                encoding,
+                mip_levels,
+                1,
+                TextureViewDimension::D3,
+                false,
+            ))
+        }
         ForwardResidentTextureInput::AuthoredRgba16Float(texture) => {
             validate_authored_rgba16float_texture(&texture)?;
             let base_extent = texture.mips[0].extent;
@@ -81,7 +108,7 @@ pub(super) fn plan_texture_uploads(
                 desc: TextureDesc {
                     label: Some("fluxel forward authored radiance texture".into()),
                     dimension: TextureDimension::D2,
-                    extent: [base_extent[0], base_extent[1], 1],
+                    extent: base_extent,
                     array_layers: 1,
                     format: TextureFormat::Rgba16Float,
                     mip_levels,
@@ -96,7 +123,7 @@ pub(super) fn plan_texture_uploads(
 }
 
 fn rgba8_allocation(
-    extent: [u32; 2],
+    extent: [u32; 3],
     encoding: crate::preparation::TextureEncoding,
     mip_levels: u32,
     array_layers: u32,
@@ -110,8 +137,12 @@ fn rgba8_allocation(
     ForwardTextureAllocation {
         desc: TextureDesc {
             label: Some("fluxel forward material texture".into()),
-            dimension: TextureDimension::D2,
-            extent: [extent[0], extent[1], 1],
+            dimension: if view_dimension == TextureViewDimension::D3 {
+                TextureDimension::D3
+            } else {
+                TextureDimension::D2
+            },
+            extent,
             array_layers,
             format: encoding.rgba8_format(),
             mip_levels,
@@ -140,7 +171,7 @@ fn validate_authored_rgba16float_texture(
     let Some(first) = texture.mips.first() else {
         return Err(Error::InvalidRange);
     };
-    if first.extent.contains(&0) {
+    if first.extent.contains(&0) || first.extent[2] != 1 {
         return Err(Error::InvalidRange);
     }
     let complete_mips = 1 + first.extent[0].max(first.extent[1]).ilog2();
@@ -157,14 +188,15 @@ fn validate_authored_rgba16float_texture(
             return Err(Error::InvalidRange);
         }
         validate_texture_copy_bytes(mip.bytes_per_row, expected, &mip.bytes)?;
-        expected = [(expected[0] / 2).max(1), (expected[1] / 2).max(1)];
+        expected = expected.map(|axis| (axis / 2).max(1));
     }
     Ok(())
 }
 
-fn validate_texture_copy_bytes(bytes_per_row: u32, extent: [u32; 2], bytes: &[u8]) -> Result<()> {
+fn validate_texture_copy_bytes(bytes_per_row: u32, extent: [u32; 3], bytes: &[u8]) -> Result<()> {
     let texture_bytes = u64::from(bytes_per_row)
         .checked_mul(u64::from(extent[1]))
+        .and_then(|plane| plane.checked_mul(u64::from(extent[2])))
         .ok_or(Error::InvalidRange)?;
     if u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)? != texture_bytes {
         return Err(Error::InvalidRange);
@@ -193,7 +225,7 @@ fn append_texture_upload(
         source_offset,
         bytes_per_row: source.bytes_per_row,
         rows_per_image: source.extent[1],
-        extent: [source.extent[0], source.extent[1], 1],
+        extent: source.extent,
     });
     Ok(())
 }

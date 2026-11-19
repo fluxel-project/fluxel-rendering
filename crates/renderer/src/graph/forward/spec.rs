@@ -150,6 +150,7 @@ pub(crate) struct ForwardGraphTextureUpload {
     pub(crate) source_offset: u64,
     pub(crate) bytes_per_row: u32,
     pub(crate) rows_per_image: u32,
+    pub(crate) extent: [u32; 3],
 }
 
 #[derive(Clone)]
@@ -302,6 +303,7 @@ impl ForwardGraphSpec {
                     source_offset: upload.source_offset,
                     bytes_per_row: upload.bytes_per_row,
                     rows_per_image: upload.rows_per_image,
+                    extent: upload.extent,
                 })
                 .collect(),
             uniform_upload: ForwardGraphUniformUpload {
@@ -318,6 +320,7 @@ impl ForwardGraphSpec {
                     source_offset: 0,
                     bytes_per_row: owner.bytes_per_row,
                     rows_per_image: owner.desc.extent[1],
+                    extent: owner.desc.extent,
                 }),
             specular: frame
                 .specular

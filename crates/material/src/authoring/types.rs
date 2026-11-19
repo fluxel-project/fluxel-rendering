@@ -160,6 +160,8 @@ pub enum MaterialResourceKind {
     Texture2dArrayF32,
     /// A read-only `texture_cube<f32>` binding with a direction coordinate.
     TextureCubeF32,
+    /// A read-only `texture_3d<f32>` binding with a three-dimensional coordinate.
+    Texture3dF32,
 }
 
 /// Transfer encoding required by an explicitly typed material texture binding.
@@ -204,6 +206,7 @@ impl MaterialResourceKind {
             Self::Texture2dF32 => "texture_2d<f32>",
             Self::Texture2dArrayF32 => "texture_2d_array<f32>",
             Self::TextureCubeF32 => "texture_cube<f32>",
+            Self::Texture3dF32 => "texture_3d<f32>",
             Self::Sampler { comparison: false } => "sampler",
             Self::Sampler { comparison: true } => "sampler_comparison",
             _ => unreachable!(),
@@ -224,6 +227,7 @@ impl MaterialResourceKind {
             Self::Texture2dF32
             | Self::Texture2dArrayF32
             | Self::TextureCubeF32
+            | Self::Texture3dF32
             | Self::Sampler { .. } => None,
         }
     }

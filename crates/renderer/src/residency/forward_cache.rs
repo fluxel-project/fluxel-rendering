@@ -17,8 +17,9 @@ use fluxel_rhi::{
 
 use crate::preparation::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
-    ForwardAssets, ForwardDrawInput, GeometryAsset, GeometryData, RefractionRadianceAsset,
-    RefractionRadianceData, ResolvedForwardTexture,
+    ColorTextureVolumeAsset, ColorTextureVolumeData, ForwardAssets, ForwardDrawInput,
+    GeometryAsset, GeometryData, RefractionRadianceAsset, RefractionRadianceData,
+    ResolvedForwardTexture,
 };
 
 use super::{ForwardTexture, ForwardVertexStream, LayeredTextureView};
@@ -62,6 +63,11 @@ pub(crate) enum ForwardTextureCacheKey {
         generated_mips: Option<u32>,
         view: LayeredTextureView,
     },
+    ColorVolume {
+        asset: AssetId<ColorTextureVolumeAsset>,
+        generation: u64,
+        device: DeviceId,
+    },
     RefractionRadiance {
         asset: AssetId<RefractionRadianceAsset>,
         generation: u64,
@@ -98,6 +104,7 @@ impl ForwardTextureCacheKey {
         match self {
             Self::Color { device, .. }
             | Self::ColorArray { device, .. }
+            | Self::ColorVolume { device, .. }
             | Self::RefractionRadiance { device, .. } => device,
         }
     }
@@ -116,6 +123,7 @@ pub(crate) struct ForwardResidentCache<B: ResourceBackend> {
     /// retains the exact immutable CPU generation.
     refraction_radiance: HashMap<ForwardTextureCacheKey, Weak<RefractionRadianceData>>,
     color_arrays: HashMap<ForwardTextureCacheKey, Weak<ColorTextureArrayData>>,
+    color_volumes: HashMap<ForwardTextureCacheKey, Weak<ColorTextureVolumeData>>,
 }
 
 impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
@@ -125,6 +133,7 @@ impl<B: ResourceBackend> Default for ForwardResidentCache<B> {
             textures: HashMap::new(),
             refraction_radiance: HashMap::new(),
             color_arrays: HashMap::new(),
+            color_volumes: HashMap::new(),
         }
     }
 }
@@ -180,6 +189,16 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
                 *generated_mips,
                 LayeredTextureView::Cube,
             )),
+            ResolvedForwardTexture::VolumeAsset(texture) => {
+                let key = ForwardTextureCacheKey::ColorVolume {
+                    asset: texture.id(),
+                    generation: texture.generation().get(),
+                    device,
+                };
+                self.color_volumes
+                    .insert(key, Arc::downgrade(&texture.value_arc()));
+                Some(key)
+            }
             ResolvedForwardTexture::RefractionRadiance(texture) => {
                 let key =
                     ForwardTextureCacheKey::from_refraction_radiance_snapshot(texture, device);
@@ -310,11 +329,14 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
             .retain(|_, source| source.strong_count() != 0);
         self.color_arrays
             .retain(|_, source| source.strong_count() != 0);
+        self.color_volumes
+            .retain(|_, source| source.strong_count() != 0);
         self.textures.retain(|key, _| match key {
             ForwardTextureCacheKey::Color {
                 asset, generation, ..
             } => textures.contains(&(*asset, *generation)),
             ForwardTextureCacheKey::ColorArray { .. } => self.color_arrays.contains_key(key),
+            ForwardTextureCacheKey::ColorVolume { .. } => self.color_volumes.contains_key(key),
             ForwardTextureCacheKey::RefractionRadiance { .. } => {
                 self.refraction_radiance.contains_key(key)
             }
@@ -328,6 +350,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.refraction_radiance
             .retain(|key, _| key.device() != device);
         self.color_arrays.retain(|key, _| key.device() != device);
+        self.color_volumes.retain(|key, _| key.device() != device);
     }
 
     /// Removes every completed reusable product.
@@ -336,6 +359,7 @@ impl<B: ResourceBackend> ForwardResidentCache<B> {
         self.textures.clear();
         self.refraction_radiance.clear();
         self.color_arrays.clear();
+        self.color_volumes.clear();
     }
 }
 

@@ -34,6 +34,7 @@ pub(super) fn validate(
             MaterialResourceKind::Texture2dF32
                 | MaterialResourceKind::Texture2dArrayF32
                 | MaterialResourceKind::TextureCubeF32
+                | MaterialResourceKind::Texture3dF32
         ) {
             return Err(MaterialError::TextureEncodingResourceTypeMismatch {
                 resource: requirement.resource.clone(),

@@ -34,6 +34,7 @@ pub(super) fn texture_copy_end(copy: &crate::residency::ForwardTextureUpload) ->
         .checked_add(
             u64::from(copy.bytes_per_row)
                 .checked_mul(u64::from(copy.rows_per_image))
+                .and_then(|bytes| bytes.checked_mul(u64::from(copy.extent[2])))
                 .ok_or(Error::InvalidRange)?,
         )
         .ok_or(Error::InvalidRange)
@@ -43,6 +44,7 @@ pub(super) fn graph_texture_copy_end(copy: &ForwardGraphTextureUpload) -> Result
         .checked_add(
             u64::from(copy.bytes_per_row)
                 .checked_mul(u64::from(copy.rows_per_image))
+                .and_then(|bytes| bytes.checked_mul(u64::from(copy.extent[2])))
                 .ok_or(Error::InvalidRange)?,
         )
         .ok_or(Error::InvalidRange)

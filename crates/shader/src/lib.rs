@@ -210,6 +210,8 @@ pub enum BindingShape {
     /// This is one `texture_cube<f32>` binding. It is not a cube array and
     /// does not imply descriptor-array capabilities.
     TextureCubeF32,
+    /// Non-arrayed, non-multisampled float 3D texture.
+    Texture3dF32,
     /// Sampler comparison mode declared by WGSL.
     ///
     /// WGSL distinguishes ordinary and comparison samplers, but does not

@@ -35,6 +35,8 @@ pub enum ForwardTextureSource {
         /// Total mip count including the authored base level.
         mip_levels: u32,
     },
+    /// One independently selected immutable sampled 3D color-texture generation.
+    VolumeAsset(AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>),
     /// One cube image encoded in the six physical array layers
     /// `+X, -X, +Y, -Y, +Z, -Z`.
     CubeAsset {
@@ -62,6 +64,10 @@ impl std::fmt::Debug for ForwardTextureSource {
                 .debug_struct("ArrayAssetWithGeneratedMips")
                 .field("asset", &SceneAssetRef::from_snapshot(asset))
                 .field("mip_levels", mip_levels)
+                .finish(),
+            Self::VolumeAsset(asset) => f
+                .debug_tuple("VolumeAsset")
+                .field(&SceneAssetRef::from_snapshot(asset))
                 .finish(),
             Self::CubeAsset {
                 asset,
@@ -104,6 +110,7 @@ pub(crate) enum ResolvedForwardTexture {
         asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
         mip_levels: u32,
     },
+    VolumeAsset(AssetSnapshot<ColorTextureVolumeAsset, ColorTextureVolumeData>),
     CubeAsset {
         asset: AssetSnapshot<ColorTextureArrayAsset, ColorTextureArrayData>,
         generated_mips: Option<u32>,

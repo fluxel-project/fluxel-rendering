@@ -88,8 +88,8 @@ use super::{
         TextureAccessContract, TextureRange,
     },
     execution::{
-        binding_error, BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution,
-        FrameBindings,
+        BoundBuffer, BoundSurfaceTexture, BoundTexture, CompiledExecution, FrameBindings,
+        binding_error,
     },
 };
 
@@ -392,6 +392,7 @@ fn texture_copy_end(copy: &ForwardTextureUpload) -> Result<u64> {
         .checked_add(
             u64::from(copy.bytes_per_row)
                 .checked_mul(u64::from(copy.rows_per_image))
+                .and_then(|bytes| bytes.checked_mul(u64::from(copy.extent[2])))
                 .ok_or(Error::InvalidRange)?,
         )
         .ok_or(Error::InvalidRange)

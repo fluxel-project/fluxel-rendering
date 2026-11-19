@@ -34,9 +34,9 @@ pub use pipeline::{
 };
 pub use preparation::{
     ColorTextureArrayAsset, ColorTextureArrayData, ColorTextureAsset, ColorTextureData,
-    EnvironmentIrradianceAsset, EnvironmentIrradianceData,
-    EnvironmentSpecularIblAsset, EnvironmentSpecularIblData, ForwardAssets,
-    ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
+    ColorTextureVolumeAsset, ColorTextureVolumeData, EnvironmentIrradianceAsset,
+    EnvironmentIrradianceData, EnvironmentSpecularIblAsset, EnvironmentSpecularIblData,
+    ForwardAssets, ForwardCaptureResources, ForwardDrawInput, ForwardDrawOrder, ForwardDrawRequest,
     ForwardDrawSource, ForwardPreparationError, ForwardResources, ForwardSamplerBinding,
     ForwardTextureBinding, ForwardTextureSource, GeometryAsset, GeometryAttribute,
     GeometryBufferOwner, GeometryData, GeometryDraw, GeometryError, GeometryLayout, GeometryStream,

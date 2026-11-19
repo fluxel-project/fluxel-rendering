@@ -18,10 +18,10 @@ pub(crate) struct ForwardTextureInput {
     pub(crate) mip_levels: u32,
 }
 
-/// Copy-aligned bytes for one 2D image in a texture upload.
+/// Copy-aligned bytes for one layered image or one complete volume mip.
 pub(crate) struct ForwardTextureCopyInput {
     pub(crate) bytes: Vec<u8>,
-    pub(crate) extent: [u32; 2],
+    pub(crate) extent: [u32; 3],
     pub(crate) bytes_per_row: u32,
 }
 
@@ -68,6 +68,10 @@ pub(crate) struct ForwardTextureAllocation {
 pub(crate) enum ForwardResidentTextureInput {
     Generated(ForwardTextureInput),
     Array(ForwardArrayTextureInput),
+    Volume {
+        mips: Vec<ForwardTextureCopyInput>,
+        encoding: crate::preparation::TextureEncoding,
+    },
     AuthoredRgba16Float(ForwardAuthoredRgba16FloatTextureInput),
 }
 

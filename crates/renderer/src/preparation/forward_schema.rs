@@ -108,6 +108,7 @@ pub(crate) fn material_binding_schema(
             MaterialResourceKind::Texture2dF32
             | MaterialResourceKind::Texture2dArrayF32
             | MaterialResourceKind::TextureCubeF32
+            | MaterialResourceKind::Texture3dF32
                 if actual.kind == BindingKind::Texture =>
             {
                 let dimension = match (binding.kind, actual.shape) {
@@ -120,6 +121,9 @@ pub(crate) fn material_binding_schema(
                     ) => TextureViewDimension::D2Array,
                     (MaterialResourceKind::TextureCubeF32, Some(BindingShape::TextureCubeF32)) => {
                         TextureViewDimension::Cube
+                    }
+                    (MaterialResourceKind::Texture3dF32, Some(BindingShape::Texture3dF32)) => {
+                        TextureViewDimension::D3
                     }
                     _ => return Err(invalid()),
                 };

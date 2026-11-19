@@ -332,8 +332,13 @@ fn validate_texture_uploads<B: ResourceBackend>(
             .textures
             .get(upload.texture)
             .ok_or(Error::InvalidRange)?;
-        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
-            || texture.desc.extent[2] != 1
+        if !matches!(
+            texture.desc.dimension,
+            fluxel_rhi::api::TextureDimension::D2 | fluxel_rhi::api::TextureDimension::D3
+        ) || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && texture.desc.extent[2] != 1)
+            || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3
+                && texture.desc.array_layers != 1)
             || texture.desc.array_layers == 0
         {
             return Err(Error::InvalidRange);
@@ -346,7 +351,11 @@ fn validate_texture_uploads<B: ResourceBackend>(
         let expected = [
             (texture.desc.extent[0] >> upload.mip_level).max(1),
             (texture.desc.extent[1] >> upload.mip_level).max(1),
-            1,
+            if texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3 {
+                (texture.desc.extent[2] >> upload.mip_level).max(1)
+            } else {
+                1
+            },
         ];
         let bytes_per_texel = texture_bytes_per_texel(texture.desc.format)?;
         if std::mem::replace(layer_uploaded, true)
@@ -363,14 +372,21 @@ fn validate_texture_uploads<B: ResourceBackend>(
         }
     }
     for (texture, mips) in resident.textures.iter().zip(uploaded) {
-        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
-            || texture.desc.extent[2] != 1
+        if !matches!(
+            texture.desc.dimension,
+            fluxel_rhi::api::TextureDimension::D2 | fluxel_rhi::api::TextureDimension::D3
+        ) || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && texture.desc.extent[2] != 1)
+            || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3
+                && texture.desc.array_layers != 1)
             || texture.desc.array_layers == 0
         {
             return Err(Error::InvalidRange);
         }
         let any_uploaded = mips.iter().flatten().any(|uploaded| *uploaded);
-        if texture.desc.usage.contains(TextureUsage::COPY_SRC) {
+        if texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && texture.desc.usage.contains(TextureUsage::COPY_SRC)
+        {
             // COPY_SRC selects Graph mip production: every array layer seeds
             // mip zero, and no authored higher-mip copy may race that chain.
             if any_uploaded
@@ -382,7 +398,8 @@ fn validate_texture_uploads<B: ResourceBackend>(
                 return Err(Error::InvalidRange);
             }
         } else if any_uploaded && mips.iter().flatten().any(|uploaded| !uploaded) {
-            // Without COPY_SRC every physical subresource is authored.
+            // Only D2 COPY_SRC selects Graph mip production; every other
+            // material texture supplies each physical subresource.
             return Err(Error::InvalidRange);
         }
     }

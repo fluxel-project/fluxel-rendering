@@ -18,7 +18,12 @@ pub(in crate::renderer) fn stage(
     match texture {
         ResolvedForwardTexture::Asset(texture) => {
             let data = texture.value();
-            let (bytes, bytes_per_row) = stage_rows(data.extent, 4, &data.rgba8, max_buffer_bytes)?;
+            let (bytes, bytes_per_row) = stage_rows(
+                [data.extent[0], data.extent[1], 1],
+                4,
+                &data.rgba8,
+                max_buffer_bytes,
+            )?;
             Ok(ForwardResidentTextureInput::Generated(
                 ForwardTextureInput {
                     bytes,
@@ -53,15 +58,37 @@ pub(in crate::renderer) fn stage(
             max_buffer_bytes,
         )
         .map(ForwardResidentTextureInput::Array),
+        ResolvedForwardTexture::VolumeAsset(texture) => {
+            let data = texture.value();
+            let payloads = data.mip_payloads().ok_or(Error::InvalidRange)?;
+            let mip_count = data.mip_levels as usize;
+            let mut mips = Vec::with_capacity(mip_count);
+            let mut remaining = max_buffer_bytes;
+            for (extent, source) in payloads {
+                let (bytes, bytes_per_row) = stage_rows(extent, 4, source, remaining)?;
+                remaining =
+                    remaining_after_copy(remaining, bytes.len(), mips.len() + 1 < mip_count)?;
+                mips.push(ForwardTextureCopyInput {
+                    bytes,
+                    extent,
+                    bytes_per_row,
+                });
+            }
+            Ok(ForwardResidentTextureInput::Volume {
+                mips,
+                encoding: data.encoding,
+            })
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mut remaining = max_buffer_bytes;
             let mut mips = Vec::with_capacity(texture.value().mips().len());
             for mip in texture.value().mips() {
-                let (bytes, bytes_per_row) = stage_rows(mip.extent, 8, &mip.rgba16f_le, remaining)?;
+                let extent = [mip.extent[0], mip.extent[1], 1];
+                let (bytes, bytes_per_row) = stage_rows(extent, 8, &mip.rgba16f_le, remaining)?;
                 remaining -= bytes.len() as u64;
                 mips.push(ForwardTextureCopyInput {
                     bytes,
-                    extent: mip.extent,
+                    extent,
                     bytes_per_row,
                 });
             }
@@ -91,17 +118,12 @@ fn stage_array(
         .try_reserve_exact(image_count)
         .map_err(|_| Error::OutOfMemory)?;
     let mut remaining = max_buffer_bytes;
-    for (extent, payload) in mip_payloads {
+    for ([width, height], payload) in mip_payloads {
+        let extent = [width, height, 1];
         for source in payload.chunks_exact(payload.len() / layers) {
             let (bytes, bytes_per_row) = stage_rows(extent, 4, source, remaining)?;
-            let size = u64::try_from(bytes.len()).map_err(|_| Error::InvalidRange)?;
-            let span = if copies.len() + 1 < image_count {
-                size.checked_add((512 - size % 512) % 512)
-                    .ok_or(Error::InvalidRange)?
-            } else {
-                size
-            };
-            remaining = remaining.checked_sub(span).ok_or(Error::InvalidRange)?;
+            remaining =
+                remaining_after_copy(remaining, bytes.len(), copies.len() + 1 < image_count)?;
             copies.push(ForwardTextureCopyInput {
                 bytes,
                 extent,
@@ -119,8 +141,20 @@ fn stage_array(
     })
 }
 
+// Residency aligns each copy start to 512 bytes within the staging buffer.
+fn remaining_after_copy(remaining: u64, size: usize, has_next: bool) -> Result<u64, Error> {
+    let size = u64::try_from(size).map_err(|_| Error::InvalidRange)?;
+    let span = if has_next {
+        size.checked_add((512 - size % 512) % 512)
+            .ok_or(Error::InvalidRange)?
+    } else {
+        size
+    };
+    remaining.checked_sub(span).ok_or(Error::InvalidRange)
+}
+
 fn stage_rows(
-    extent: [u32; 2],
+    extent: [u32; 3],
     bytes_per_texel: u64,
     source: &[u8],
     max_buffer_bytes: u64,
@@ -128,16 +162,15 @@ fn stage_rows(
     let row = u64::from(extent[0])
         .checked_mul(bytes_per_texel)
         .ok_or(Error::InvalidRange)?;
-    let tight_size = row
-        .checked_mul(u64::from(extent[1]))
-        .ok_or(Error::InvalidRange)?;
+    let rows = u64::from(extent[1]) * u64::from(extent[2]);
+    let tight_size = row.checked_mul(rows).ok_or(Error::InvalidRange)?;
     if tight_size == 0 || tight_size != source.len() as u64 {
         return Err(Error::InvalidRange);
     }
     let pitch = row.checked_add(255).ok_or(Error::InvalidRange)? / 256 * 256;
     let pitch = u32::try_from(pitch).map_err(|_| Error::InvalidRange)?;
     let size = u64::from(pitch)
-        .checked_mul(u64::from(extent[1]))
+        .checked_mul(rows)
         .ok_or(Error::InvalidRange)?;
     if size > max_buffer_bytes {
         return Err(Error::InvalidRange);

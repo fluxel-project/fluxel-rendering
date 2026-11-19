@@ -154,7 +154,7 @@ pub(crate) fn validate_ordinary_sampler(desc: &SamplerDesc) -> std::result::Resu
 }
 // Image facts come from the immutable CPU payload admitted during preparation.
 struct MaterialTextureProperties {
-    extent: Option<[u32; 2]>,
+    extent: Option<[u32; 3]>,
     format: TextureFormat,
     layers: u32,
     mip_levels: u32,
@@ -169,12 +169,20 @@ impl MaterialTextureProperties {
         view: LayeredTextureView,
     ) -> Self {
         Self {
-            extent: Some(data.extent),
+            extent: Some([data.extent[0], data.extent[1], 1]),
             format: data.encoding.rgba8_format(),
             layers: data.layers,
             mip_levels: generated_mips.unwrap_or(data.mip_levels),
             generate_mips: generated_mips.is_some(),
             view_dimension: view.dimension(),
+        }
+    }
+
+    fn dimension(&self) -> TextureDimension {
+        if self.view_dimension == TextureViewDimension::D3 {
+            TextureDimension::D3
+        } else {
+            TextureDimension::D2
         }
     }
 
@@ -197,7 +205,7 @@ fn material_texture_properties(
         ResolvedForwardTexture::Asset(texture) => {
             let data = texture.value();
             MaterialTextureProperties {
-                extent: Some(data.extent),
+                extent: Some([data.extent[0], data.extent[1], 1]),
                 mip_levels: data.mip_levels,
                 generate_mips: data.mip_levels > 1,
                 ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
@@ -221,10 +229,19 @@ fn material_texture_properties(
             *generated_mips,
             LayeredTextureView::Cube,
         ),
+        ResolvedForwardTexture::VolumeAsset(texture) => {
+            let data = texture.value();
+            MaterialTextureProperties {
+                extent: Some(data.extent),
+                mip_levels: data.mip_levels,
+                view_dimension: TextureViewDimension::D3,
+                ..MaterialTextureProperties::d2(data.encoding.rgba8_format())
+            }
+        }
         ResolvedForwardTexture::RefractionRadiance(texture) => {
             let mips = texture.value().mips();
             MaterialTextureProperties {
-                extent: Some(mips[0].extent),
+                extent: Some([mips[0].extent[0], mips[0].extent[1], 1]),
                 mip_levels: mips.len() as u32,
                 ..MaterialTextureProperties::d2(TextureFormat::Rgba16Float)
             }
@@ -244,7 +261,7 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
     if extent.contains(&0) || mip_levels == 0 || properties.layers == 0 {
         return Err(Error::InvalidRange);
     }
-    let max_mip_levels = 1 + extent[0].max(extent[1]).ilog2();
+    let max_mip_levels = 1 + extent[0].max(extent[1]).max(extent[2]).ilog2();
     if mip_levels > max_mip_levels {
         return Err(Error::InvalidRange);
     }
@@ -254,8 +271,8 @@ pub(crate) fn require_filterable_material_texture<B: ResourceBackend>(
     }
     let desc = TextureDesc {
         label: Some("Fluxel Forward sampled material texture".into()),
-        dimension: TextureDimension::D2,
-        extent: [extent[0], extent[1], 1],
+        dimension: properties.dimension(),
+        extent,
         array_layers: properties.layers,
         format: properties.format,
         mip_levels,
@@ -302,14 +319,13 @@ fn validate_sampled_texture_owner_with_properties<B: ResourceBackend>(
         || owner.device != selected_device
         || owner.texture.device() != selected_device
         || owner.view.device() != selected_device
-        || owner.desc.dimension != TextureDimension::D2
+        || owner.desc.dimension != expected.dimension()
         || owner.desc.format != expected.format
-        || owner.desc.extent[0] == 0
-        || owner.desc.extent[1] == 0
-        || owner.desc.extent[2] != 1
+        || owner.desc.extent.contains(&0)
+        || (owner.desc.dimension == TextureDimension::D2 && owner.desc.extent[2] != 1)
         || expected
             .extent
-            .is_some_and(|[width, height]| owner.desc.extent != [width, height, 1])
+            .is_some_and(|extent| owner.desc.extent != extent)
         || owner.desc.array_layers != expected.layers
         || owner.desc.mip_levels != expected.mip_levels
         || owner.view_dimension != expected.view_dimension

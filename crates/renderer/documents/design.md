@@ -298,14 +298,19 @@ named image bindings per material.
 ### Material binding locations
 
 The material schema resolves named f32, i32, u32, float vector and matrix parameters,
-2D float textures, 2D float texture arrays, float cubemaps, and up to one ordinary
-sampler in material group zero.
+2D float textures, 2D float texture arrays, float cubemaps, float 3D textures,
+and up to one ordinary sampler in material group zero.
 Contribution metadata and reflection from the selected shader entries must
 agree on binding location, value shape, and read/query access. Forward and
 Deferred uniform layouts use the reflected vertex and fragment visibility.
 Sampled textures and samplers are fragment bindings. Renderer preparation checks the
 instance against the exact asset-bound material variant and rejects invalid
 parameter values before it reserves GPU resources.
+A 3D color asset supplies explicit RGBA8 levels in mip order, with ascending Z
+slices and row-major texels within each slice. All three dimensions shrink with
+the mip level. The upload declares one Graph subresource per mip and copies its
+full volume from the staging buffer. The sampled view covers all supplied levels
+and uses a three-component texture coordinate.
 
 UV0 PBR programs can carry typed Material varyings from a shared vertex graph
 to the fragment evaluator. Preparation assigns locations after the template's

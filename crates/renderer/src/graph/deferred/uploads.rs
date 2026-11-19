@@ -46,8 +46,13 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
             .textures
             .get(copy.texture)
             .ok_or(Error::InvalidRange)?;
-        if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
-            || texture.desc.extent[2] != 1
+        if !matches!(
+            texture.desc.dimension,
+            fluxel_rhi::api::TextureDimension::D2 | fluxel_rhi::api::TextureDimension::D3
+        ) || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+            && texture.desc.extent[2] != 1)
+            || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3
+                && texture.desc.array_layers != 1)
             || texture.desc.array_layers == 0
         {
             return Err(Error::InvalidRange);
@@ -60,7 +65,11 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
         let expected = [
             (texture.desc.extent[0] >> copy.mip_level).max(1),
             (texture.desc.extent[1] >> copy.mip_level).max(1),
-            1,
+            if texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3 {
+                (texture.desc.extent[2] >> copy.mip_level).max(1)
+            } else {
+                1
+            },
         ];
         let bytes_per_texel = texture_bytes_per_texel(texture.desc.format)?;
         if std::mem::replace(uploaded, true)
@@ -81,20 +90,27 @@ pub(super) fn validate_resident_uploads<B: ResourceBackend>(
         .iter()
         .zip(&resident.textures)
         .all(|(uploaded, texture)| {
-            if texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
-                || texture.desc.extent[2] != 1
+            if !matches!(
+                texture.desc.dimension,
+                fluxel_rhi::api::TextureDimension::D2 | fluxel_rhi::api::TextureDimension::D3
+            ) || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+                && texture.desc.extent[2] != 1)
+                || (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D3
+                    && texture.desc.array_layers != 1)
                 || texture.desc.array_layers == 0
             {
                 return false;
             }
             // Mip generation uses the D2 descriptor family: layered textures
             // seed every base layer and let the Graph fill the rest.
-            (texture.desc.usage.contains(TextureUsage::COPY_SRC)
+            (texture.desc.dimension == fluxel_rhi::api::TextureDimension::D2
+                && texture.desc.usage.contains(TextureUsage::COPY_SRC)
                 && uploaded
                     .first()
                     .is_some_and(|layers| layers.iter().all(|layer| *layer))
                 && uploaded.iter().skip(1).flatten().all(|uploaded| !uploaded))
-                || (!texture.desc.usage.contains(TextureUsage::COPY_SRC)
+                || ((texture.desc.dimension != fluxel_rhi::api::TextureDimension::D2
+                    || !texture.desc.usage.contains(TextureUsage::COPY_SRC))
                     && uploaded.iter().flatten().all(|uploaded| *uploaded))
                 || (texture.incoming
                     == TextureUses {
