@@ -43,6 +43,9 @@ pub(crate) struct DeferredDraw<B: ResourceBackend> {
     /// Parallel logical binding facts: true selects the same-Graph capture product.
     pub(crate) capture_textures: Vec<bool>,
     pub(crate) vertices: Range<u32>,
+    /// Physical instance range supplied to the raster draw and geometry
+    /// footprint calculation.
+    pub(crate) instances: Range<u32>,
     /// Dynamic material uniform ranges in binding order.
     pub(crate) material_uniform_ranges: Vec<Range<u64>>,
     /// Exact byte footprint for each dynamic material binding.

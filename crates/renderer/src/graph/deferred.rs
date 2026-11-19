@@ -412,6 +412,7 @@ fn draw_accesses_parts<B: ResourceBackend>(
         || draw.vertex_layouts.len() != draw.vertex_ranges.len()
         || draw.vertex_layouts.len() != draw.vertex_streams.len()
         || draw.vertices.start >= draw.vertices.end
+        || draw.instances.start >= draw.instances.end
     {
         return Err(Error::InvalidRange);
     }
@@ -454,7 +455,7 @@ fn draw_accesses_parts<B: ResourceBackend>(
         &bindings,
         GeometryDraw {
             vertices: draw.vertices.clone(),
-            instances: 0..1,
+            instances: draw.instances.clone(),
         },
     )
     .map(|prepared| prepared.accessed_ranges().to_vec())

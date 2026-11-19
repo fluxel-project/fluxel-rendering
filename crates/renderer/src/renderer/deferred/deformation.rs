@@ -57,6 +57,12 @@ where
         spec: &PositionDeformation,
     ) -> std::result::Result<PreparedDeformation, RendererError> {
         self.ensure_open()?;
+        if input.has_instance_transforms() {
+            return Err(Error::Unsupported(
+                "Deferred deformation cannot preserve per-instance transform streams",
+            )
+            .into());
+        }
         if !spec.parameters.into_iter().all(|value| value.is_finite()) {
             return Err(Error::InvalidRange.into());
         }

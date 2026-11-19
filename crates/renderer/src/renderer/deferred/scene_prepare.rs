@@ -94,6 +94,12 @@ pub(super) fn materials(
         } else {
             request
         };
+        let request = if input.has_instance_transforms() {
+            crate::preparation::with_instance_transform(request, input.source())
+                .map_err(RendererError::ForwardPreparation)?
+        } else {
+            request
+        };
         let material = prepare_material(
             input.material(),
             layout,

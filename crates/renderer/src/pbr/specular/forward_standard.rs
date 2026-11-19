@@ -38,12 +38,13 @@ struct PbrSpecularVertexOutput {{
 }};
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
+    @location(1) normal: vec3<f32> /* instance_parameters */,
 ) -> PbrSpecularVertexOutput {{
+    /* instance_setup */
     var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.position = pbr_transforms.clip_from_local /* instance_matrix */ * vec4<f32>(position, 1.0);
+    output.world_position = (pbr_transforms.world_from_local /* instance_matrix */ * vec4<f32>(position, 1.0)).xyz;
+    output.world_normal = (pbr_transforms.normal_from_local /* instance_normal_matrix */ * vec4<f32>(normal, 0.0)).xyz;
     return output;
 }}
 fn renderer_forward_shade(input: PbrSpecularVertexOutput, front_facing: bool) -> vec4<f32> {{

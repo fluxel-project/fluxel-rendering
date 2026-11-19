@@ -135,6 +135,7 @@ pub(super) fn validate_generated_cube_texture_array(
 pub(super) fn validate_cpu_geometry(
     geometry: &GeometryData,
     prepared: &crate::PreparedGeometry,
+    instances: Option<u32>,
     source: ForwardDrawSource,
 ) -> Result<(), ForwardPreparationError> {
     if geometry.vertices.start > geometry.vertices.end {
@@ -153,12 +154,15 @@ pub(super) fn validate_cpu_geometry(
     for (stream_index, (layout, bytes)) in
         prepared.streams.iter().zip(&geometry.streams).enumerate()
     {
-        if !matches!(layout.step_mode, VertexStepMode::Vertex) {
-            return Err(ForwardPreparationError::InstanceStreamUnsupported {
-                source,
-                stream: stream_index,
-            });
-        }
+        let elements = match layout.step_mode {
+            VertexStepMode::Vertex => geometry.vertices.end,
+            VertexStepMode::Instance => {
+                instances.ok_or(ForwardPreparationError::InstanceStreamUnsupported {
+                    source,
+                    stream: stream_index,
+                })?
+            }
+        };
         let attribute_end = layout
             .attributes
             .iter()
@@ -171,7 +175,7 @@ pub(super) fn validate_cpu_geometry(
         let Some(attribute_end) = attribute_end else {
             continue;
         };
-        let required_end = u64::from(geometry.vertices.end - 1)
+        let required_end = u64::from(elements - 1)
             .checked_mul(layout.stride)
             .and_then(|offset| offset.checked_add(attribute_end))
             .and_then(|end| usize::try_from(end).ok())

@@ -498,7 +498,7 @@ where
                 vertex_layouts: input.prepared().geometry().streams.clone(),
                 vertex_ranges,
                 vertices: input.geometry().value().vertices.clone(),
-                instances: 0..1,
+                instances: input.instance_range(),
                 bind_groups: {
                     let mut groups = vec![
                         ForwardBindGroup {

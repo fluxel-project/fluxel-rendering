@@ -320,6 +320,7 @@ pub struct ForwardDrawInput {
     view: RenderView,
     clip_from_local: [[f32; 4]; 4],
     normal_from_local: Option<[[f32; 4]; 4]>,
+    instance_transforms: Option<super::forward_instances::InstanceTransforms>,
     // The selected material resources that implement projected scene-color
     // transmission. This stays with the retained draw so stage-specific OIT
     // material recompilation cannot silently fall back to environment-only
@@ -328,6 +329,22 @@ pub struct ForwardDrawInput {
 }
 
 impl ForwardDrawInput {
+    /// Returns the concrete instance indices consumed by this draw.
+    pub fn instance_range(&self) -> Range<u32> {
+        0..self
+            .instance_transforms
+            .map_or(1, |instances| instances.count)
+    }
+
+    pub(crate) fn has_instance_transforms(&self) -> bool {
+        self.instance_transforms.is_some()
+    }
+
+    pub(crate) fn instance_reverses_winding(&self) -> bool {
+        self.instance_transforms
+            .is_some_and(|instances| instances.reverses_winding)
+    }
+
     /// Returns the source that requested this draw.
     pub const fn source(&self) -> ForwardDrawSource {
         self.source
@@ -426,12 +443,10 @@ impl ForwardDrawInput {
     }
 
     pub(crate) fn effective_alpha_mode(&self) -> SurfaceAlphaMode {
-        let mode = self.prepared.material().surface_policy().alpha_mode;
-        match (mode, self.mesh_visibility.get() < 1.0) {
-            (SurfaceAlphaMode::Opaque, true) => SurfaceAlphaMode::Blend,
-            (SurfaceAlphaMode::Mask, true) => SurfaceAlphaMode::MaskBlend,
-            _ => mode,
-        }
+        effective_alpha_mode(
+            self.prepared.material().surface_policy().alpha_mode,
+            self.mesh_visibility,
+        )
     }
 
     /// Returns the validated scene view retained from the same snapshot.
@@ -477,6 +492,17 @@ impl ForwardDrawInput {
     }
 }
 
+pub(super) fn effective_alpha_mode(
+    mode: SurfaceAlphaMode,
+    visibility: MeshVisibility,
+) -> SurfaceAlphaMode {
+    match (mode, visibility.get() < 1.0) {
+        (SurfaceAlphaMode::Opaque, true) => SurfaceAlphaMode::Blend,
+        (SurfaceAlphaMode::Mask, true) => SurfaceAlphaMode::MaskBlend,
+        _ => mode,
+    }
+}
+
 #[path = "forward_errors.rs"]
 mod forward_errors;
 pub use forward_errors::ForwardPreparationError;
@@ -488,80 +514,9 @@ pub(crate) use lighting::prepare_feature_draws;
 pub use lighting::prepare_forward;
 pub(crate) use lighting::{prepare_feature_draws_with_lighting, prepare_forward_with_lighting};
 
-fn prepare_draw(
-    view: &RenderView,
-    source: ForwardDrawSource,
-    order: i64,
-    resources: &ForwardResources,
-    instance: Option<&MaterialInstance>,
-    mesh_side_orientation: SurfaceSideOrientation,
-    mesh_visibility: MeshVisibility,
-    transform: RenderTransform,
-    assets: &ForwardAssets,
-    composer: &mut ShaderComposer,
-    environment: bool,
-    specular: bool,
-) -> Result<ForwardDrawInput, ForwardPreparationError> {
-    if !finite_transform(transform) {
-        return Err(ForwardPreparationError::InvalidTransform { source });
-    }
-    if view.emissive_enabled
-        && instance.is_none()
-        && !resources.tint.iter().all(|value| value.is_finite())
-    {
-        return Err(ForwardPreparationError::InvalidTint { source });
-    }
-    let geometry = resolve_asset(&assets.geometry, resources.geometry, "geometry", source)?;
-    let material = resolve_asset(&assets.materials, resources.material, "material", source)?;
-    let request = material_request(
-        material.value(),
-        &geometry.value().layout,
-        view,
-        source,
-        environment,
-        specular,
-        None,
-    )?;
-    let prepared = prepare_material(&material, &geometry.value().layout, composer, request)
-        .map_err(ForwardPreparationError::Material)?;
-    forward_transmission::validate_transform(material.value(), transform, source)?;
-    let schema = validate_material_schema(&prepared, source)?;
-    let resources =
-        resolve_resource_aliases(resources, instance, prepared.material(), &schema, source)?;
-    let uniform_values = resolve_uniform_values(instance, &schema, resources.tint, source)?;
-    let textures = resolve_asset_textures(&resources, &schema, assets, source)?;
-    let samplers =
-        super::forward_sampler::resolve_sampler_bindings(&resources.samplers, &schema, source)?;
-    let prepared = prepared.with_binding_schema(schema);
-    validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
-    let normal_from_local = normal_from_local(geometry.value(), &prepared, transform, source)?;
-    let clip_from_local = multiply_columns(view.transform, transform);
-    if !clip_from_local
-        .iter()
-        .flatten()
-        .all(|value| value.is_finite())
-    {
-        return Err(ForwardPreparationError::InvalidTransform { source });
-    }
-    Ok(ForwardDrawInput {
-        source,
-        order,
-        geometry,
-        material,
-        textures,
-        prepared,
-        samplers,
-        tint: resources.tint,
-        uniform_values,
-        mesh_side_orientation,
-        mesh_visibility,
-        transform,
-        view: view.clone(),
-        clip_from_local,
-        normal_from_local,
-        scene_refraction: None,
-    })
-}
+#[path = "forward_draw.rs"]
+mod forward_draw;
+use forward_draw::prepare_draw;
 
 #[path = "forward_textures.rs"]
 mod forward_textures;

@@ -116,8 +116,8 @@ impl RasterSurfaceState {
 /// Selects the actual front-face and cull state for one resolved draw.
 ///
 /// Like Babylon Mesh::_getDrawSideOrientation, the material
-/// override takes precedence over the mesh winding. The world determinant
-/// then reverses that choice for a negative determinant.
+/// override takes precedence over the mesh winding. Negative determinants of
+/// the record and its homogeneous instance stream each reverse that choice.
 /// The zero case remains the canonical orientation: it has no inverse for PBR
 /// normal transforms and is already rejected by the PBR preparation boundary.
 pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceState {
@@ -126,7 +126,8 @@ pub(crate) fn raster_surface_state(input: &ForwardDrawInput) -> RasterSurfaceSta
         .side_orientation
         .unwrap_or(input.mesh_side_orientation());
     let clockwise = (orientation == SurfaceSideOrientation::Clockwise)
-        ^ (linear_determinant(input.transform()) < 0.0);
+        ^ (linear_determinant(input.transform()) < 0.0)
+        ^ input.instance_reverses_winding();
     RasterSurfaceState {
         front_face: if clockwise {
             FrontFaceState::Clockwise

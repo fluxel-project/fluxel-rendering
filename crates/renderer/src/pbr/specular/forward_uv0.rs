@@ -25,16 +25,17 @@ struct PbrSpecularVertexOutput {
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32>,
+    @location(2) uv0: vec2<f32>, @location(3) tangent: vec4<f32> /* instance_parameters */,
 ) -> PbrSpecularVertexOutput {
+    /* instance_setup */
     var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    let basis = pbr_vertex_tangent_basis(normal, tangent);
+    output.position = pbr_transforms.clip_from_local /* instance_matrix */ * vec4<f32>(position, 1.0);
+    output.world_position = (pbr_transforms.world_from_local /* instance_matrix */ * vec4<f32>(position, 1.0)).xyz;
+    let basis = pbr_vertex_tangent_basis(normal, tangent /* instance_basis_argument */);
     output.tangent_world = basis[0];
     output.bitangent_world = basis[1];
     output.normal_world = basis[2];
-    output.geometric_world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.geometric_world_normal = (pbr_transforms.normal_from_local /* instance_normal_matrix */ * vec4<f32>(normal, 0.0)).xyz;
     output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
     /* fluxel:vertex-varying-write-output */output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);
@@ -53,12 +54,13 @@ struct PbrSpecularVertexOutput {
 };
 @vertex fn forward_vs(
     @location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) uv0: vec2<f32>,
+    @location(2) uv0: vec2<f32> /* instance_parameters */,
 ) -> PbrSpecularVertexOutput {
+    /* instance_setup */
     var output: PbrSpecularVertexOutput;
-    output.position = pbr_transforms.clip_from_local * vec4<f32>(position, 1.0);
-    output.world_position = (pbr_transforms.world_from_local * vec4<f32>(position, 1.0)).xyz;
-    output.world_normal = (pbr_transforms.normal_from_local * vec4<f32>(normal, 0.0)).xyz;
+    output.position = pbr_transforms.clip_from_local /* instance_matrix */ * vec4<f32>(position, 1.0);
+    output.world_position = (pbr_transforms.world_from_local /* instance_matrix */ * vec4<f32>(position, 1.0)).xyz;
+    output.world_normal = (pbr_transforms.normal_from_local /* instance_normal_matrix */ * vec4<f32>(normal, 0.0)).xyz;
     output.camera_position = pbr_transforms.surface_camera_position.xyz;
     output.uv0 = uv0;
     /* fluxel:vertex-varying-write-output */output.vertex_uv0 = evaluate_pbr_vertex_uv0(uv0);

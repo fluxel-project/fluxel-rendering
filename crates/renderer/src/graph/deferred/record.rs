@@ -336,7 +336,7 @@ impl<B: ResourceBackend> DeferredPlan<B> {
                         )?;
                     }
                 }
-                raster.draw(draw.vertices.clone(), 0..1)?;
+                raster.draw(draw.vertices.clone(), draw.instances.clone())?;
             }
         }
         raster.finish()

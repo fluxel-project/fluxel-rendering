@@ -24,11 +24,9 @@ fn position_only_template_declares_mrt_geometry_and_derivative_normal() {
     assert!(source.contains("@location(0) albedo"));
     assert!(source.contains("@location(1) normal"));
     assert!(source.contains("cross(dpdx(input.local_position), dpdy(input.local_position))"));
-    assert!(
-        request
-            .static_options
-            .contains_key("deferred.vertex_inputs")
-    );
+    assert!(request
+        .static_options
+        .contains_key("deferred.vertex_inputs"));
 }
 
 #[test]

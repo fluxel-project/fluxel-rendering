@@ -162,6 +162,7 @@ pub(super) fn draws<B: ResourceBackend>(
             vertices: inputs[index].geometry().value().vertices.clone(),
             material_uniform_ranges: material_uniform_ranges.clone(),
             material_uniform_sizes: schema.uniforms.iter().map(|uniform| uniform.size).collect(),
+            instances: inputs[index].instance_range(),
             transform_range: values.transforms[index].clone(),
             transform_bytes,
         });

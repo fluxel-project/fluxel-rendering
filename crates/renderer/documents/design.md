@@ -147,6 +147,24 @@ An optional capability is not a partial promise: creation, binding, recording,
 and the selected backend lowering must all support the complete portable
 contract before Renderer advertises or consumes it.
 
+### Geometry-local GPU instances
+
+`GeometryData::with_instance_transforms` adds an instance-rate stream with
+four matrix-column semantics. The draw record owns the parent transform and
+bounds enclosing the entire group. A draw submits the actual instance range.
+The Graph covers the physical vertex-rate and instance-rate fetch ranges
+independently.
+
+The vertex shaders compute the parent transform times the instance transform,
+following Babylon.js thin instances. Normals use the composed inverse
+transpose, and the two transform determinants jointly determine raster
+winding in the existing RHI convention. An immutable stream must contain a
+nonempty set of valid affine matrices with consistent winding.
+
+The built-in opaque and alpha-mask geometry paths use the instance stream.
+Transparent sorting, transmission, capture receivers, and the existing
+deformation override require individual or separately owned geometry inputs.
+
 ### Diffuse irradiance input
 
 UV0 normal materials can supply scalar occlusion and linear emissive

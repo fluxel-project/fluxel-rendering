@@ -204,6 +204,7 @@ impl PreparedCaptureReceiver {
             view: self.view,
             clip_from_local: self.clip_from_local,
             normal_from_local: self.normal_from_local,
+            instance_transforms: None,
             scene_refraction: self.scene_refraction,
         }
     }
@@ -239,7 +240,12 @@ impl PreparedCaptureReceiver {
                 source: self.source,
             });
         }
-        validate_cpu_geometry(self.geometry.value(), prepared.geometry(), self.source)?;
+        validate_cpu_geometry(
+            self.geometry.value(),
+            prepared.geometry(),
+            None,
+            self.source,
+        )?;
         super::forward_transmission::validate_transform(
             self.material.value(),
             self.transform,
@@ -435,7 +441,7 @@ fn prepare_capture_receiver(
         source,
     )?;
     let prepared = prepared.with_binding_schema(schema);
-    validate_cpu_geometry(geometry.value(), prepared.geometry(), source)?;
+    validate_cpu_geometry(geometry.value(), prepared.geometry(), None, source)?;
     let normal_from_local = normal_from_local(geometry.value(), &prepared, transform, source)?;
     let clip_from_local = multiply_columns(view.transform, transform);
     if !clip_from_local

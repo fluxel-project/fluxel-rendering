@@ -11,6 +11,8 @@ pub use specular_environment::{
 };
 mod forward;
 pub(crate) mod forward_fragment;
+mod forward_instances;
+pub(crate) use forward_instances::with_instance_transform;
 mod forward_sampler;
 mod forward_schema;
 pub(crate) mod forward_templates;

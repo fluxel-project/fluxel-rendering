@@ -157,10 +157,8 @@ fn forward_effect_requests_preserve_direct_light_and_route_ao_only_through_irrad
         .iter()
         .map(|unit| unit.source.clone())
         .collect::<String>();
-    assert!(
-        plain_source
-            .contains("pbr_direct_light(base, properties, normal) + max(evaluate_emissive_uv0")
-    );
+    assert!(plain_source
+        .contains("pbr_direct_light(base, properties, normal) + max(evaluate_emissive_uv0"));
     assert!(environment_source.contains("pbr_diffuse_irradiance(base, properties.x, normal"));
     assert!(environment_source.contains("* clamp(evaluate_occlusion_uv0(input.uv0), 0.0, 1.0)"));
     let evaluators = SourceUnit::new(

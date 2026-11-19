@@ -60,6 +60,14 @@ pub(crate) fn prepare_oit_material(
     precision: OitDepthPrecision,
     composer: &mut ShaderComposer,
 ) -> Result<PreparedMaterial, ForwardPreparationError> {
+    // OIT recompiles a distinct fragment entry and has no per-instance
+    // ordering policy. Ordinary preparation refuses transparent instanced
+    // surfaces; retain that boundary if a retained input is ever routed here.
+    if input.has_instance_transforms() {
+        return Err(ForwardPreparationError::InstanceMaterialUnsupported {
+            source: input.source(),
+        });
+    }
     let scene_refraction = input.scene_refraction_names();
     if input.prepared().uses_scene_refraction() != scene_refraction.is_some() {
         return Err(ForwardPreparationError::MaterialBindingSchema {

@@ -144,10 +144,11 @@ struct GbufferOutput {
 };
 
 @vertex
-fn deferred_gbuffer_vs(@location(0) position: vec3<f32>) -> DeferredVertexOutput {
+fn deferred_gbuffer_vs(@location(0) position: vec3<f32> /* instance_parameters */) -> DeferredVertexOutput {
+    /* instance_setup */
     var output: DeferredVertexOutput;
-    output.position = deferred_clip_from_local * vec4<f32>(position, 1.0);
-    output.local_position = position;
+    output.position = deferred_clip_from_local /* instance_matrix */ * vec4<f32>(position, 1.0);
+    output.local_position = /* instance_position_prefix */position/* instance_position_suffix */;
     return output;
 }
 
@@ -180,11 +181,12 @@ struct GbufferOutput {
 @vertex
 fn deferred_gbuffer_vs(
     @location(0) position: vec3<f32>,
-    @location(1) uv0: vec2<f32>,
+    @location(1) uv0: vec2<f32> /* instance_parameters */,
 ) -> DeferredUv0VertexOutput {
+    /* instance_setup */
     var output: DeferredUv0VertexOutput;
-    output.position = deferred_clip_from_local * vec4<f32>(position, 1.0);
-    output.local_position = position;
+    output.position = deferred_clip_from_local /* instance_matrix */ * vec4<f32>(position, 1.0);
+    output.local_position = /* instance_position_prefix */position/* instance_position_suffix */;
     output.uv0 = uv0;
     return output;
 }

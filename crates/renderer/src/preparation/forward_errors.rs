@@ -71,12 +71,34 @@ pub enum ForwardPreparationError {
         /// Draw requesting the geometry.
         source: ForwardDrawSource,
     },
-    /// The initial Forward path does not yet consume instanced streams.
+    /// The instance stream does not match the selected affine-column layout.
     InstanceStreamUnsupported {
         /// Draw requesting the geometry.
         source: ForwardDrawSource,
         /// Stream index.
         stream: usize,
+    },
+    /// The declared instance stream does not supply all four transform columns.
+    MissingInstanceTransformColumns {
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
+    },
+    /// An instance transform has an invalid affine matrix or normal transform.
+    InvalidInstanceTransform {
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
+        /// The failed instance's index in the draw.
+        index: u32,
+    },
+    /// The draw cannot use one front-face state for both instance orientations.
+    MixedInstanceOrientation {
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
+    },
+    /// The selected material cannot share the geometry instance draw.
+    InstanceMaterialUnsupported {
+        /// Draw requesting the geometry.
+        source: ForwardDrawSource,
     },
     /// A CPU stream cannot satisfy its selected draw's physical attribute footprint.
     GeometryPayloadTooShort {
